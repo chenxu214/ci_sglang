@@ -83,11 +83,12 @@ python3 -m sglang.launch_server \
         --attention-backend ascend \
         --device npu \
         --tp-size 16 --nnodes 1 --node-rank 0 \
-        --chunked-prefill-size 16384 --max-prefill-tokens 280000 \
+        --chunked-prefill-size 4096 --max-prefill-tokens 280000 \
         --trust-remote-code \
         --host 127.0.0.1 \
         --mem-fraction-static 0.7 \
         --port 8000 \
+        --disable-radix-cache \
         --cuda-graph-bs 16 \
         --quantization modelslim \
         --enable-multimodal \
