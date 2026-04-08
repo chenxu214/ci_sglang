@@ -32,6 +32,7 @@ _is_hip = is_hip()
 _is_npu = is_npu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_fp8_fnuz = is_fp8_fnuz()
+_use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_gfx95_supported = is_gfx95_supported()
 if _is_cuda:
     try:
@@ -53,6 +54,7 @@ from sglang.srt.distributed import (
 from sglang.srt.distributed.parallel_state import get_pp_group
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.attention.nsa.utils import (
+    cp_all_gather_rerange_output,
     is_nsa_enable_prefill_cp,
     is_nsa_prefill_cp_in_seq_split,
 )
@@ -1463,10 +1465,22 @@ class Indexer(MultiPlatformOp):
                     forward_batch.attn_cp_metadata.actual_seq_q_prev_tensor,
                     forward_batch.attn_cp_metadata.actual_seq_q_next_tensor,
                 )
-                forward_batch.attn_backend.forward_metadata.actual_seq_lengths_kv = (
-                    forward_batch.attn_cp_metadata.kv_len_prev_tensor,
-                    forward_batch.attn_cp_metadata.kv_len_next_tensor,
-                )
+
+                if sum(forward_batch.extend_prefix_lens_cpu) > 0:
+                    total_kv_len_prev_tensor = (forward_batch.attn_cp_metadata.kv_len_prev_tensor +
+                        forward_batch.extend_prefix_lens.squeeze())
+                    total_kv_len_next_tensor = (forward_batch.attn_cp_metadata.kv_len_next_tensor +
+                        forward_batch.extend_prefix_lens.squeeze())
+                    forward_batch.attn_backend.forward_metadata.actual_seq_lengths_kv = (
+                        total_kv_len_prev_tensor,
+                        total_kv_len_next_tensor,
+                    )
+                else:
+                    forward_batch.attn_backend.forward_metadata.actual_seq_lengths_kv = (
+                        forward_batch.attn_cp_metadata.kv_len_prev_tensor,
+                        forward_batch.attn_cp_metadata.kv_len_next_tensor,
+                    )
+
                 actual_seq_lengths_q = (
                     forward_batch.attn_backend.forward_metadata.actual_seq_lengths_q
                 )
