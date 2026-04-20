@@ -3744,6 +3744,10 @@ def run_scheduler_process(
     dp_rank: Optional[int],
     pipe_writer,
 ):
+    if _is_npu:
+        # init zbal if is set
+        from sglang.srt.hardware_backend.npu.utils import init_zbal
+        init_zbal(server_args.tp_size, gpu_id, tp_rank)
     dp_rank = configure_scheduler_process(
         server_args,
         gpu_id,

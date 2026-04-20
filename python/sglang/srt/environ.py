@@ -186,7 +186,9 @@ class Envs:
     SGLANG_GRAMMAR_POLL_INTERVAL = EnvFloat(0.005)
     SGLANG_GRAMMAR_MAX_POLL_ITERATIONS = EnvInt(10000)
     SGLANG_DISABLE_OUTLINES_DISK_CACHE = EnvBool(False)
-
+    # ZBAL, zero buffer accelerate library, currently worked only in npu
+    SGLANG_ZBAL_LOCAL_MEM_SIZE = EnvInt(0)
+    SGLANG_ZBAL_BOOTSTRAP_URL = EnvStr("")
 
     # Test & Debug
     SGLANG_DETECT_SLOW_RANK = EnvBool(False)
