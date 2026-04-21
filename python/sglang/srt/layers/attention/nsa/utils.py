@@ -21,7 +21,6 @@ from sglang.srt.layers.dp_attention import (
     is_allocation_symmetric,
 )
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.utils import is_npu
 from sglang.srt.utils.common import ceil_align, ceil_div
 
 if TYPE_CHECKING:
@@ -145,16 +144,15 @@ class NSAContextParallelMetadata:
     per_rank_actual_token: List[int] = None
     reverse_split_len: List[int] = None
     cp_reverse_index: List[int] = None
-    kv_len_prev: List[int] = None
-    kv_len_next: List[int] = None
-    actual_seq_q_prev: List[int] = None
-    actual_seq_q_next: List[int] = None
+    kv_len_prev: int = -1
+    kv_len_next: int = -1
+    actual_seq_q_prev: int = -1
+    actual_seq_q_next: int = -1
     kv_len_prev_tensor: torch.Tensor = None
     kv_len_next_tensor: torch.Tensor = None
     actual_seq_q_prev_tensor: torch.Tensor = None
     actual_seq_q_next_tensor: torch.Tensor = None
     total_seq_lens: torch.Tensor = None
-    batch_size: int = 1
 
 
 def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
@@ -164,15 +162,17 @@ def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
             seq_len % cp_size == 0
         ), f"seq_len {seq_len} is not divisible by cp_size {cp_size} when nsa_prefill_cp_mode is round-robin-split"
     else:
-        min_extend_seq_len = min(forward_batch.extend_seq_lens_cpu)
-        cur_cp_seq_len = min_extend_seq_len // (cp_size * 2)
+        # TODO current just support prefill batch=1 and len(input_ids) > self.cp_size * 2
+        # Note: (self.cp_size * 2) To achieve load balancing for seq computation,
+        # the seq data needs to be divided and recombined at twice the size of cp_size.
+        cur_cp_seq_len = seq_len // (cp_size * 2)
     if (
         cur_cp_seq_len != 0
         and cp_size > 1
         and use_nsa
         and forward_batch.forward_mode.is_context_parallel_extend()
         and is_nsa_enable_prefill_cp()
-        and all(s >= cp_size for s in forward_batch.extend_seq_lens_cpu)
+        and sum(forward_batch.extend_seq_lens_cpu) >= cp_size
     ):
         return True
     else:
@@ -305,10 +305,7 @@ def cp_attn_tp_all_gather_reorganazied_into_tensor(
     Step 3, removing the padding and reassembling the data according to the actual tokens.
     """
     # step1
-    if forward_batch.nsa_cp_metadata is not None and forward_batch.nsa_cp_metadata.max_rank_len:
-        max_len = max(forward_batch.nsa_cp_metadata.max_rank_len)
-    else:
-        max_len = (total_len + attn_tp_size - 1) // attn_tp_size
+    max_len = (total_len + attn_tp_size - 1) // attn_tp_size
     pad_size = max_len - input_.shape[0]
     if pad_size > 0:
         input_ = F.pad(input_, (0, 0, 0, pad_size), mode="constant", value=0)
@@ -455,172 +452,128 @@ def calculate_cp_seq_idx(cp_chunks_len, seqs_len):
     return tuple_len
 
 
-def _prepare_single_seq_zigzag_split(
-    extend_len: int,
-    prefix_len: int,
-    cp_rank: int,
-    cp_size: int,
-):
-    """Prepare zigzag split metadata for a single sequence.
-
-    Returns:
-        split_list: list of chunk sizes after splitting into cp_size*2 chunks
-        kv_len_prev: prefix_len + cumulative length up to cp_rank chunk
-        kv_len_next: prefix_len + cumulative length up to (cp_size*2 - cp_rank - 1) chunk
-        actual_seq_q_prev: query length of the prev chunk for this rank
-        actual_seq_q_next: query length of the next chunk for this rank
-    """
-    kv_len = torch.tensor(extend_len)
-    cp_segment_num = cp_size * 2
-    seq_per_batch = kv_len // cp_segment_num
-    split_list = seq_per_batch.repeat_interleave(cp_segment_num).int().tolist()
-    remainder = kv_len % cp_segment_num
-    if remainder > 0:
-        split_list[:remainder] = [x + 1 for x in split_list[:remainder]]
-
-    prefix_sum_list = list(accumulate(split_list))
-    kv_len_prev = prefix_len + prefix_sum_list[cp_rank]
-    kv_len_next = prefix_len + prefix_sum_list[cp_size * 2 - cp_rank - 1]
-    actual_seq_q_prev = split_list[cp_rank]
-    actual_seq_q_next = split_list[cp_size * 2 - cp_rank - 1]
-    return split_list, kv_len_prev, kv_len_next, actual_seq_q_prev, actual_seq_q_next
-
-
 def prepare_input_dp_with_cp_dsa(
     kv_len,
     cp_rank,
     cp_size,
     seqs_len,
-    extend_seq_lens=None,
-    extend_prefix_lens=None,
 ):
     if is_nsa_prefill_cp_round_robin_split():
         return True
-    """prepare_input_dp_with_cp_dsa-zigzag index (multi-batch support)
-
-    For multi-batch, each sequence is independently split into cp_size*2 chunks
-    using zigzag rearrangement. The chunks from all sequences are then concatenated
-    to form the per-rank data.
-
-    Example (CP_SIZE == 4, batch_size == 2):
-    Sequence 0: split into 8 chunks -> zigzag rearrange -> rank gets (chunk0, chunk7)
-    Sequence 1: split into 8 chunks -> zigzag rearrange -> rank gets (chunk0, chunk7)
-    Per-rank data: [seq0_chunk0, seq0_chunk7, seq1_chunk0, seq1_chunk7]
+    """prepare_input_dp_with_cp_dsa-zigzag index
+    Example (DP_ATTENT_TP == CP_SIZE == 4):
+    Description:
+    1. Start with a full-length request.
+    2. Split the request into multiple blocks (block0 to block7).
+    3. Rearrange these blocks to balance computational
+        load across different DP ranks.
+    4. Assign the rearranged blocks to different DP attention
+        time points (dp_atten_tp0 to dp_atten_tp3).
+    +---------------------------------+
+    |        cp_split_tokens         |
+    +---------------------------------+
+    |                                 |
+    |   request_with_full_length     |
+    |             | split (cp_size * 2) |
+    |   +-------------------------+  |
+    |   | block0 | block1 | block2 | block3 | block4 | block5 | block6 | block7 |
+    |   +-------------------------+  |
+    |             | rerange          |
+    |   +---------------------------------+
+    |   | block0 | block7 | block1 | block6 | block2 | block5 | block3 | block4 |
+    |   +---------------------------------+
+    |             |
+    |   +-------------------------+
+    |   | dp_atten_tp0: block0, block7 |
+    |   | dp_atten_tp1: block1, block6 |
+    |   | dp_atten_tp2: block2, block5 |
+    |   | dp_atten_tp3: block3, block4 |
+    |   +-------------------------+
 
     Why zigzag rearrange?
     - Attention calculations must follow causal attention principles.
     - Simply slicing by rank order can lead to computational load imbalance:
         * First rank may focus on fewer historical key-value tokens (less computation)
         * Last rank may focus on more tokens (more computation)
-    - To mitigate uneven load, the input hidden states needs to be sliced by cp_size*2 and rearranged.
+    - To mitigate uneven load, the input hissenstate needs to be sliced by cp_size*2 and rearranged.
     """
-    if extend_seq_lens is None:
-        extend_seq_lens = [kv_len]
-    if extend_prefix_lens is None:
-        extend_prefix_lens = [0] * len(extend_seq_lens)
-
-    batch_size = len(extend_seq_lens)
-    device_str = "npu" if is_npu() else "cuda"
-
-    all_split_list = []
-    all_kv_len_prev = []
-    all_kv_len_next = []
-    all_actual_seq_q_prev = []
-    all_actual_seq_q_next = []
-
-    for i in range(batch_size):
-        prefix_len = extend_prefix_lens[i] if i < len(extend_prefix_lens) else 0
-        split_list, kv_len_prev, kv_len_next, actual_seq_q_prev, actual_seq_q_next = (
-            _prepare_single_seq_zigzag_split(
-                extend_seq_lens[i], prefix_len, cp_rank, cp_size
-            )
-        )
-        all_split_list.extend(split_list)
-        all_kv_len_prev.append(kv_len_prev)
-        all_kv_len_next.append(kv_len_next)
-        all_actual_seq_q_prev.append(actual_seq_q_prev)
-        all_actual_seq_q_next.append(actual_seq_q_next)
-
-    kv_len_origin = torch.tensor(sum(extend_seq_lens))
-
+    # just support batch = 1
+    kv_len = torch.tensor(kv_len)
+    bs_per_cp_group = 1
+    kv_len_origin = kv_len
+    # get zigzag index
     cp_segment_num = cp_size * 2
-    bs_per_cp_group = batch_size
+    seq_per_batch = kv_len // cp_segment_num  # seq_len for each batch and segment
+    split_list = seq_per_batch.repeat_interleave(cp_segment_num).int().tolist()
+    remainder = kv_len % (cp_segment_num)
+    if remainder > 0:
+        split_list[:remainder] = [x + 1 for x in split_list[:remainder]]
 
-    per_rank_actual_token = []
-    for i in range(cp_size):
-        per_rank_seq_token = 0
-        for batch_id in range(batch_size):
-            base = batch_id * cp_segment_num
-            per_rank_seq_token += all_split_list[base + i] + all_split_list[
-                base + cp_segment_num - i - 1
-            ]
-        per_rank_actual_token.append(per_rank_seq_token)
-
-    max_per_rank = max(per_rank_actual_token)
-    max_rank_len = [max_per_rank] * cp_size
-
-    zigzag_index = []
-    for batch_id in range(bs_per_cp_group):
-        zigzag_index.extend(
-            list(
-                range(
-                    batch_id * cp_segment_num + cp_rank,
-                    batch_id * cp_segment_num + cp_rank + 1,
-                    1,
-                )
-            )
-            + list(
-                range(
-                    batch_id * cp_segment_num + cp_segment_num - cp_rank - 1,
-                    batch_id * cp_segment_num + cp_segment_num - cp_rank,
-                    1,
-                )
-            )
+    seq_max_rank_len = (kv_len + cp_size - 1) // cp_size
+    max_rank_len = seq_max_rank_len.repeat_interleave(cp_size).int().tolist()
+    zigzag_index = list(
+        range(cp_rank, cp_rank + bs_per_cp_group * cp_segment_num, cp_segment_num)
+    ) + list(
+        range(
+            cp_segment_num - cp_rank - 1,
+            bs_per_cp_group * cp_segment_num,
+            cp_segment_num,
         )
+    )
 
-    reverse_split_len = []
-    for i in range(cp_size):
-        for batch_id in range(batch_size):
-            base = batch_id * cp_segment_num
-            reverse_split_len.append(all_split_list[base + i])
-            reverse_split_len.append(all_split_list[base + cp_segment_num - i - 1])
-
+    per_rank_actual_token = list(
+        split_list[i] + split_list[cp_size * 2 - i - 1] for i in range(cp_size)
+    )
+    reverse_split_len = [
+        element
+        for i in range(cp_size)
+        for element in (split_list[i], split_list[cp_size * 2 - i - 1])
+    ]
+    # get zigzag reverse index
     cp_reverse_index = []
     for batch_id in range(bs_per_cp_group):
-        for rank_i in range(cp_size):
-            cp_reverse_index.append(rank_i * batch_size * 2 + batch_id * 2)
-        for rank_i in range(cp_size - 1, -1, -1):
-            cp_reverse_index.append(rank_i * batch_size * 2 + batch_id * 2 + 1)
+        cp_reverse_index.extend(
+            list(range(batch_id, cp_segment_num * bs_per_cp_group, 2 * bs_per_cp_group))
+            + list(
+                range(
+                    (cp_segment_num - 1) * bs_per_cp_group + batch_id,
+                    0,
+                    -2 * bs_per_cp_group,
+                )
+            )
+        )
+    prefix_sum_list = list(accumulate(split_list))
 
-    kv_len_prev_tensor = torch.tensor(all_kv_len_prev).to(
-        device=device_str, dtype=torch.int32
+    # TODO Support multi-batch-cp-split, multi-batch-cp support has accuracy issues
+    # cp_seq_index = calculate_cp_seq_idx(split_list[:], seqs_len[:])
+    kv_len_prev = prefix_sum_list[cp_rank]
+    kv_len_next = prefix_sum_list[cp_size * 2 - cp_rank - 1]
+    actual_seq_q_prev = split_list[cp_rank]
+    actual_seq_q_next = split_list[cp_size * 2 - cp_rank - 1]
+    kv_len_prev_tensor = torch.tensor(kv_len_prev).to(device="cuda", dtype=torch.int32)
+    kv_len_next_tensor = torch.tensor(kv_len_next).to(device="cuda", dtype=torch.int32)
+    actual_seq_q_prev_tensor = torch.tensor(actual_seq_q_prev).to(
+        device="cuda", dtype=torch.int32
     )
-    kv_len_next_tensor = torch.tensor(all_kv_len_next).to(
-        device=device_str, dtype=torch.int32
-    )
-    actual_seq_q_prev_tensor = torch.tensor(all_actual_seq_q_prev).to(
-        device=device_str, dtype=torch.int32
-    )
-    actual_seq_q_next_tensor = torch.tensor(all_actual_seq_q_next).to(
-        device=device_str, dtype=torch.int32
+    actual_seq_q_next_tensor = torch.tensor(actual_seq_q_next).to(
+        device="cuda", dtype=torch.int32
     )
 
     nsa_cp_metadata = NSAContextParallelMetadata(
-        split_list=all_split_list,
+        split_list=split_list,
         max_rank_len=max_rank_len,
         zigzag_index=zigzag_index,
         per_rank_actual_token=per_rank_actual_token,
         reverse_split_len=reverse_split_len,
         cp_reverse_index=cp_reverse_index,
-        kv_len_prev=all_kv_len_prev,
-        kv_len_next=all_kv_len_next,
-        actual_seq_q_prev=all_actual_seq_q_prev,
-        actual_seq_q_next=all_actual_seq_q_next,
+        kv_len_prev=kv_len_prev,
+        kv_len_next=kv_len_next,
+        actual_seq_q_prev=actual_seq_q_prev,
+        actual_seq_q_next=actual_seq_q_next,
         kv_len_prev_tensor=kv_len_prev_tensor,
         kv_len_next_tensor=kv_len_next_tensor,
         actual_seq_q_prev_tensor=actual_seq_q_prev_tensor,
         actual_seq_q_next_tensor=actual_seq_q_next_tensor,
         total_seq_lens=kv_len_origin,
-        batch_size=batch_size,
     )
     return nsa_cp_metadata

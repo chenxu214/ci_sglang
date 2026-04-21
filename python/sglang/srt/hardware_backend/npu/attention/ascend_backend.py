@@ -674,30 +674,18 @@ class AscendAttnBackend(AttentionBackend):
         actual_seq_qlen,
         actual_seq_lengths_kv,
     ):
+        seq_len = q_nope.shape[0]
+        split_len = (seq_len + 1) // 2
+        q_nope_prev, q_nope_next = torch.split(q_nope, split_len, dim=0)
+        q_rope_prev, q_rope_next = torch.split(q_pe, split_len, dim=0)
+        q_nope_prev = q_nope_prev.contiguous()
+        q_nope_next = q_nope_next.contiguous()
+        q_rope_prev = q_rope_prev.contiguous()
+        q_rope_next = q_rope_next.contiguous()
+        topk_indices_prev, topk_indices_next = topk_indices
+
         actual_seq_qlen_prev, actual_seq_qlen_next = actual_seq_qlen
         actual_seq_lengths_kv_prev, actual_seq_lengths_kv_next = actual_seq_lengths_kv
-
-        batch_size = len(actual_seq_qlen_prev)
-        q_nope_prev_list = []
-        q_nope_next_list = []
-        q_rope_prev_list = []
-        q_rope_next_list = []
-
-        offset = 0
-        for i in range(batch_size):
-            prev_len = actual_seq_qlen_prev[i].item() if isinstance(actual_seq_qlen_prev, torch.Tensor) else actual_seq_qlen_prev[i]
-            next_len = actual_seq_qlen_next[i].item() if isinstance(actual_seq_qlen_next, torch.Tensor) else actual_seq_qlen_next[i]
-            q_nope_prev_list.append(q_nope[offset:offset + prev_len])
-            q_rope_prev_list.append(q_pe[offset:offset + prev_len])
-            q_nope_next_list.append(q_nope[offset + prev_len:offset + prev_len + next_len])
-            q_rope_next_list.append(q_pe[offset + prev_len:offset + prev_len + next_len])
-            offset += prev_len + next_len
-
-        q_nope_prev = torch.cat(q_nope_prev_list, dim=0).contiguous()
-        q_nope_next = torch.cat(q_nope_next_list, dim=0).contiguous()
-        q_rope_prev = torch.cat(q_rope_prev_list, dim=0).contiguous()
-        q_rope_next = torch.cat(q_rope_next_list, dim=0).contiguous()
-        topk_indices_prev, topk_indices_next = topk_indices
 
         attn_out_prev, _, _ = torch_npu.npu_sparse_flash_attention(
             query=q_nope_prev,
@@ -743,24 +731,7 @@ class AscendAttnBackend(AttentionBackend):
             attention_mode=2,
             return_softmax_lse=False,
         )
-
-        attn_out_prev_list = []
-        attn_out_next_list = []
-        prev_offset = 0
-        next_offset = 0
-        for i in range(batch_size):
-            prev_len = actual_seq_qlen_prev[i].item() if isinstance(actual_seq_qlen_prev, torch.Tensor) else actual_seq_qlen_prev[i]
-            next_len = actual_seq_qlen_next[i].item() if isinstance(actual_seq_qlen_next, torch.Tensor) else actual_seq_qlen_next[i]
-            attn_out_prev_list.append(attn_out_prev[prev_offset:prev_offset + prev_len])
-            attn_out_next_list.append(attn_out_next[next_offset:next_offset + next_len])
-            prev_offset += prev_len
-            next_offset += next_len
-
-        result = []
-        for i in range(batch_size):
-            result.append(attn_out_prev_list[i])
-            result.append(attn_out_next_list[i])
-        return torch.cat(result, dim=0)
+        return torch.cat([attn_out_prev, attn_out_next], dim=0)
 
     def forward_sparse(
         self,

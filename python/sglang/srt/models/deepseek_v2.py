@@ -2294,8 +2294,6 @@ class DeepseekV2ForCausalLM(nn.Module, DeepseekV2WeightLoaderMixin):
                     self.cp_rank,
                     self.cp_size,
                     forward_batch.seq_lens_cpu.tolist(),
-                    extend_seq_lens=forward_batch.extend_seq_lens_cpu,
-                    extend_prefix_lens=forward_batch.extend_prefix_lens_cpu,
                 )
 
         with get_attn_tp_context().maybe_input_scattered(forward_batch):
