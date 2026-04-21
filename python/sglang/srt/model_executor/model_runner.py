@@ -739,7 +739,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 pass  # will lazy init zbal till MTP weights loaded
             elif use_npu_zero_buffer and not self.is_draft_worker:
                 from sglang.srt.hardware_backend.npu.utils import lazy_init_zbal_gva_mem
-                lazy_init_zbal_gva_mem(self.device, self.gpu_id, self.tp_rank, self.tp_size,
+                # lazy_init_zbal_gva_mem(self.device, self.gpu_id, self.tp_rank, self.tp_size,
+                #                        get_world_group().cpu_group)
+                from sglang.srt.distributed.parallel_state import get_world_size, get_world_rank
+                lazy_init_zbal_gva_mem(self.device, self.gpu_id, get_world_rank(), get_world_size(),
                                        get_world_group().cpu_group)
             self.init_device_graphs()
 
