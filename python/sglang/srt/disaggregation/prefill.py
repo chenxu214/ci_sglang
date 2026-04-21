@@ -54,6 +54,8 @@ from sglang.srt.mem_cache.memory_pool import HybridLinearKVPool, NSATokenToKVPoo
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.observability.req_time_stats import set_schedule_time_batch
 
+from sglang.srt.hardware_backend.npu.memory_pool_npu import NPUMLATokenToKVPool
+
 if TYPE_CHECKING:
     from torch.distributed import ProcessGroup
 
@@ -190,7 +192,7 @@ class PrefillBootstrapQueue:
                     kv_args.state_dim_per_tensor = (
                         self.token_to_kv_pool.get_state_dim_per_tensor()
                     )
-            elif isinstance(self.token_to_kv_pool, NSATokenToKVPool):
+            elif isinstance(self.token_to_kv_pool, (NPUMLATokenToKVPool, NSATokenToKVPool)):
                 kv_args.state_type = "nsa"
             else:
                 kv_args.state_type = "none"
