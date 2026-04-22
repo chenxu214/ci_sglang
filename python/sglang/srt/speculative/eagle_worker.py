@@ -315,62 +315,52 @@ class EAGLEWorker(TpModelWorker):
                 can_run_cuda_graph=can_run_cuda_graph,
             )
         else:
-            if is_pipeline_last_stage():
-                set_time_batch(batch.reqs, "set_spec_draft_start_time", trace_only=True)
+            set_time_batch(batch.reqs, "set_spec_draft_start_time", trace_only=True)
 
-                with self.draft_tp_context(
-                    self.draft_model_runner.tp_group
-                ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-                    spec_info = self.draft(batch)
+            with self.draft_tp_context(
+                self.draft_model_runner.tp_group
+            ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
+                spec_info = self.draft(batch)
 
-                set_time_batch(batch.reqs, "set_spec_draft_end_time", trace_only=True)
-                set_time_batch(batch.reqs, "set_spec_verify_start_time", trace_only=True)
+            set_time_batch(batch.reqs, "set_spec_draft_end_time", trace_only=True)
+            set_time_batch(batch.reqs, "set_spec_verify_start_time", trace_only=True)
 
-                logits_output, verify_output, model_worker_batch, can_run_cuda_graph = (
-                    self.verify(batch, spec_info)
-                )
+            logits_output, verify_output, model_worker_batch, can_run_cuda_graph = (
+                self.verify(batch, spec_info)
+            )
 
-                if get_global_tracing_enabled():
-                    for idx, req in enumerate(batch.reqs):
-                        accepted = verify_output.accept_length_per_req_cpu[idx]
-                        req.time_stats.set_spec_verify_end_time(accepted_tokens=accepted)
+            if get_global_tracing_enabled():
+                for idx, req in enumerate(batch.reqs):
+                    accepted = verify_output.accept_length_per_req_cpu[idx]
+                    req.time_stats.set_spec_verify_end_time(accepted_tokens=accepted)
 
-                set_time_batch(
-                    batch.reqs, "set_spec_draft_extend_start_time", trace_only=True
-                )
+            set_time_batch(
+                batch.reqs, "set_spec_draft_extend_start_time", trace_only=True
+            )
 
-                with self.draft_tp_context(
-                    self.draft_model_runner.tp_group
-                ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-                    # NOTE: We should use `check_forward_draft_extend_after_decode`
-                    # when DP attention is enabled, but it is slow. Skip it for now.
-                    if (
-                        self.server_args.enable_dp_attention
-                        or batch.spec_info.verified_id.shape[0] > 0
-                    ):
-                        # decode is not finished
-                        self.forward_draft_extend_after_decode(batch)
+            with self.draft_tp_context(
+                self.draft_model_runner.tp_group
+            ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
+                # NOTE: We should use `check_forward_draft_extend_after_decode`
+                # when DP attention is enabled, but it is slow. Skip it for now.
+                if (
+                    self.server_args.enable_dp_attention
+                    or batch.spec_info.verified_id.shape[0] > 0
+                ):
+                    # decode is not finished
+                    self.forward_draft_extend_after_decode(batch)
 
-                set_time_batch(
-                    batch.reqs, "set_spec_draft_extend_end_time", trace_only=True
-                )
+            set_time_batch(
+                batch.reqs, "set_spec_draft_extend_end_time", trace_only=True
+            )
 
-                return GenerationBatchResult(
-                    logits_output=logits_output,
-                    next_token_ids=verify_output.verified_id,
-                    num_accepted_tokens=sum(verify_output.accept_length_per_req_cpu),
-                    accept_length_per_req_cpu=verify_output.accept_length_per_req_cpu,
-                    can_run_cuda_graph=can_run_cuda_graph,
-                )
-            else:
-                logits_output, can_run_cuda_graph = self.forward_target(batch)
-                return GenerationBatchResult(
-                    logits_output=logits_output,
-                    next_token_ids=None,
-                    num_accepted_tokens=0,
-                    accept_length_per_req_cpu=None,
-                    can_run_cuda_graph=can_run_cuda_graph,
-                )
+            return GenerationBatchResult(
+                logits_output=logits_output,
+                next_token_ids=verify_output.verified_id,
+                num_accepted_tokens=sum(verify_output.accept_length_per_req_cpu),
+                accept_length_per_req_cpu=verify_output.accept_length_per_req_cpu,
+                can_run_cuda_graph=can_run_cuda_graph,
+            )
 
     def check_forward_draft_extend_after_decode(self, batch: ScheduleBatch):
         local_need_forward = batch.spec_info.verified_id.shape[0] > 0
