@@ -377,10 +377,40 @@ def forward_dsa_prepare_npu(
                 q = m.q_a_layernorm(q)
 
                 q_lora = q.clone()  # required for topk_indices
-                k_nope, k_pe = latent_cache.unsqueeze(1).split(
-                    [m.kv_lora_rank, m.qk_rope_head_dim], dim=-1
+                # 1 从 forward_batch 提取底层物理地址
+                ckv_cache, k_rope_cache = forward_batch.token_to_kv_pool.get_kv_buffer(m.layer_id)
+                slots = forward_batch.out_cache_loc.to(torch.int64)
+                cos, sin = m.rotary_emb.get_cos_sin_cache(positions, hidden_states.dtype)
+
+                # 2 调用 NPU 融合算子 (只处理标准 MLA，自动写入 ckv 和 k_rope 坑位)
+                _, _, k_pe, kv_a = torch_npu.npu_kv_rmsnorm_rope_cache(
+                    latent_cache.view(-1, 1, 1, m.kv_lora_rank + m.qk_rope_head_dim),  # bnsd
+                    m.kv_a_layernorm.weight,
+                    cos,
+                    sin,
+                    slots,
+                    k_rope_cache,
+                    ckv_cache,
+                    epsilon=m.kv_a_layernorm.variance_epsilon,
+                    cache_mode="PA_NZ" if is_fia_nz() else "PA_BNSD",
+                    is_output_kv=True, 
                 )
-                k_nope = m.kv_a_layernorm(k_nope)
+                # 3. 【关键补丁】手动写入 NSA 的 k_li
+                # 注意：这里的 k_li 生成逻辑取决于你的 SGLang 具体实现，通常是从 hidden_states 投影来的
+                # 请替换为你框架里实际的 k_li 生成代码！
+                k_li = m.generate_k_li_for_nsa(hidden_states)  # <--- 伪代码，需替换为实际逻辑
+                k_li_cache = forward_batch.token_to_kv_pool.get_kv_buffer(m.layer_id, buffer_type="k_li")
+                torch_npu.npu_scatter_nd_update_(
+                    k_li_cache.view(-1, k_li.shape[-1]), 
+                    slots.view(-1, 1), 
+                    k_li.view(-1, k_li.shape[-1])
+                )
+
+                # 4. 手动解压 kv_a 得到 k_nope，因为后续 attn_mqa 需要解压后的形状
+                kv = m.kv_b_proj(kv_a)[0]
+                k_nope = kv[..., : m.qk_nope_head_dim]
+
+
             q = m.q_b_proj(q_lora)[0].view(-1, m.num_local_heads, m.qk_head_dim)
 
         q_nope, q_pe = q.split([m.qk_nope_head_dim, m.qk_rope_head_dim], dim=-1)
@@ -393,8 +423,8 @@ def forward_dsa_prepare_npu(
             m.rotary_emb.sin_cos_cache = m.rotary_emb.cos_sin_cache.index_select(
                 0, positions
             )
-
-        q_pe, k_pe = m.rotary_emb(positions, q_pe, k_pe)
+        # 3 k_pe 已经在融合算子里做过 RoPE 了，绝对不能传进去做第二次！
+        q_pe, _ = m.rotary_emb(positions, q_pe, None)
 
         if nsa_use_prefill_cp(forward_batch):
             # support allgather+rerrange
@@ -443,7 +473,7 @@ def forward_dsa_core_npu(
         k_nope.contiguous(),
         k_nope.contiguous(),
         forward_batch,
-        save_kv_cache=True,  # False if forward_batch.forward_mode.is_extend() else True,
+        save_kv_cache=False,  # False if forward_batch.forward_mode.is_extend() else True,
         q_rope=q_pe.contiguous(),
         k_rope=k_pe.contiguous(),
         topk_indices=topk_indices,
