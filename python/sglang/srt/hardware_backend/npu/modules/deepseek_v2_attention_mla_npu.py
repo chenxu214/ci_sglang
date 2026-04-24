@@ -380,7 +380,10 @@ def forward_dsa_prepare_npu(
                 # 1 从 forward_batch 提取底层物理地址
                 ckv_cache, k_rope_cache = forward_batch.token_to_kv_pool.get_kv_buffer(m.layer_id)
                 slots = forward_batch.out_cache_loc.to(torch.int64)
-                cos, sin = m.rotary_emb.get_cos_sin_cache(positions, hidden_states.dtype)
+                cos_sin = m.rotary_emb.cos_sin_cache.index_select(0, positions)
+                rotary_dim = m.qk_rope_head_dim  # 即 rotary_dim
+                cos = cos_sin[..., :rotary_dim]
+                sin = cos_sin[..., rotary_dim:]
 
                 # 2 调用 NPU 融合算子 (只处理标准 MLA，自动写入 ckv 和 k_rope 坑位)
                 _, _, k_pe, kv_a = torch_npu.npu_kv_rmsnorm_rope_cache(
