@@ -62,8 +62,6 @@ class AscendKVManager(MooncakeKVManager):
 
         end_layer = start_layer + src_layers
 
-        from sglang.srt.distributed import get_world_rank
-        # print(f'==={get_world_rank}======={src_layers=}=={total_num_layers=}==={start_layer=}=={end_layer=}==={len(dst_kv_ptrs)=}==={len(src_kv_ptrs)=}')
         if src_layers == total_num_layers:
             sliced_dst_kv_ptrs = dst_kv_ptrs
         else:
@@ -95,7 +93,9 @@ class AscendKVManager(MooncakeKVManager):
 
         if self.pp_size > 1:
             if self.is_mla_backend:
-                src_kv_ptrs, sliced_dst_kv_ptrs, layers_current_pp_stage = self.get_mla_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
+                src_kv_ptrs, sliced_dst_kv_ptrs, layers_current_pp_stage = (
+                    self.get_mla_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
+                )
                 layers_params = [
                     (
                         src_kv_ptrs[layer_id],
@@ -105,9 +105,13 @@ class AscendKVManager(MooncakeKVManager):
                     for layer_id in range(layers_current_pp_stage)
                 ]
             else:
-                src_k_ptrs, src_v_ptrs, dst_k_ptrs, dst_v_ptrs, layers_current_pp_stage = (
-                    self.get_mha_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
-                )
+                (
+                    src_k_ptrs,
+                    src_v_ptrs,
+                    dst_k_ptrs,
+                    dst_v_ptrs,
+                    layers_current_pp_stage,
+                ) = self.get_mha_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
 
                 layers_params = [
                     (
