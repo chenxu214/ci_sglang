@@ -4,7 +4,6 @@ from typing import List, Tuple
 
 import numpy as np
 import numpy.typing as npt
-
 from sglang.srt.distributed import is_pipeline_last_stage
 from sglang.srt.disaggregation.ascend.transfer_engine import AscendTransferEngine
 from sglang.srt.disaggregation.common.utils import group_concurrent_contiguous
@@ -15,8 +14,6 @@ from sglang.srt.disaggregation.mooncake.conn import (
     MooncakeKVSender,
 )
 from sglang.srt.utils.network import get_local_ip_auto
-
-from sglang.srt.distributed import get_world_rank
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +104,6 @@ class AscendKVManager(MooncakeKVManager):
                     )
                     for layer_id in range(layers_current_pp_stage)
                 ]
-                # print(f'{get_world_rank()}========{layers_params=}')
             else:
                 src_k_ptrs, src_v_ptrs, dst_k_ptrs, dst_v_ptrs, layers_current_pp_stage = (
                     self.get_mha_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
