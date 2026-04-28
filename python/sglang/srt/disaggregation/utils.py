@@ -542,6 +542,7 @@ def setup_state_kv_args(
     Shared by prefill and decode bootstrap paths so the state_type dispatch
     lives in one place.
     """
+    from sglang.srt.hardware_backend.npu.memory_pool_npu import NPUMLATokenToKVPool
     from sglang.srt.mem_cache.base_swa_memory_pool import BaseSWAKVPool
     from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
     from sglang.srt.mem_cache.memory_pool import HybridLinearKVPool, NSATokenToKVPool
@@ -572,8 +573,12 @@ def setup_state_kv_args(
         # Get state dimension info for cross-TP slice transfer
         if hasattr(token_to_kv_pool, "get_state_dim_per_tensor"):
             kv_args.state_dim_per_tensor = token_to_kv_pool.get_state_dim_per_tensor()
-    elif isinstance(token_to_kv_pool, NSATokenToKVPool):
+    elif isinstance(token_to_kv_pool, (NSATokenToKVPool, NPUMLATokenToKVPool)):
         kv_args.state_type = "nsa"
+        if isinstance(token_to_kv_pool, NPUMLATokenToKVPool):
+            kv_args.kv_buf_groups = (
+                len(kv_args.kv_data_ptrs) // token_to_kv_pool.layer_num
+            )
         if draft_token_to_kv_pool is not None and isinstance(
             draft_token_to_kv_pool, NSATokenToKVPool
         ):
