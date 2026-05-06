@@ -176,12 +176,13 @@ class PrefillBootstrapQueue:
         kv_args.gpu_id = self.scheduler.gpu_id
 
         if hasattr(self.token_to_kv_pool, "get_state_buf_infos"):
-            state_data_ptrs, state_data_lens, state_item_lens = (
-                self.token_to_kv_pool.get_state_buf_infos()
-            )
-            kv_args.state_data_ptrs = state_data_ptrs
-            kv_args.state_data_lens = state_data_lens
-            kv_args.state_item_lens = state_item_lens
+            if not isinstance(self.token_to_kv_pool, NPUMLATokenToKVPool):
+                state_data_ptrs, state_data_lens, state_item_lens = (
+                    self.token_to_kv_pool.get_state_buf_infos()
+                )
+                kv_args.state_data_ptrs = state_data_ptrs
+                kv_args.state_data_lens = state_data_lens
+                kv_args.state_item_lens = state_item_lens
 
             if isinstance(self.token_to_kv_pool, SWAKVPool):
                 kv_args.state_type = "swa"
