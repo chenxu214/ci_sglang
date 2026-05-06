@@ -5,6 +5,7 @@ from typing import List, Tuple
 import numpy as np
 import numpy.typing as npt
 
+from sglang.srt.distributed import is_pipeline_last_stage
 from sglang.srt.disaggregation.ascend.transfer_engine import AscendTransferEngine
 from sglang.srt.disaggregation.common.utils import group_concurrent_contiguous
 from sglang.srt.disaggregation.mooncake.conn import (
@@ -14,6 +15,8 @@ from sglang.srt.disaggregation.mooncake.conn import (
     MooncakeKVSender,
 )
 from sglang.srt.utils.network import get_local_ip_auto
+
+from sglang.srt.distributed import get_world_rank
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,46 @@ class AscendKVManager(MooncakeKVManager):
                 self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
             )
 
+    def get_mla_kv_ptrs_with_pp(
+        self, src_kv_ptrs: List[int], dst_kv_ptrs: List[int]
+    ) -> Tuple[List[int], List[int], int]:
+        start_layer = self.kv_args.prefill_start_layer
+
+        if self.kv_args.state_type == "nsa":
+            ptrs_per_layer = 3
+        else:
+            ptrs_per_layer = 2
+
+        if self.kv_args.has_draft_pool:
+            total_num_layers = len(dst_kv_ptrs) // ptrs_per_layer - 1
+        else:
+            total_num_layers = len(dst_kv_ptrs) // ptrs_per_layer
+
+        if is_pipeline_last_stage() and self.kv_args.has_draft_pool:
+            src_layers = len(src_kv_ptrs) // ptrs_per_layer  - 1
+        else:
+            src_layers = len(src_kv_ptrs) // ptrs_per_layer
+
+        end_layer = start_layer + src_layers
+
+        from sglang.srt.distributed import get_world_rank
+        # print(f'==={get_world_rank}======={src_layers=}=={total_num_layers=}==={start_layer=}=={end_layer=}==={len(dst_kv_ptrs)=}==={len(src_kv_ptrs)=}')
+        if src_layers == total_num_layers:
+            sliced_dst_kv_ptrs = dst_kv_ptrs
+        else:
+            k_ptrs = dst_kv_ptrs[start_layer:end_layer]
+            v_ptrs = dst_kv_ptrs[total_num_layers + start_layer: total_num_layers + end_layer]
+            if self.kv_args.state_type == "nsa":
+                index_k_ptrs = dst_kv_ptrs[2 * total_num_layers + start_layer: 2 * total_num_layers + end_layer]
+                sliced_dst_kv_ptrs = k_ptrs + v_ptrs + index_k_ptrs
+                if is_pipeline_last_stage() and self.kv_args.has_draft_pool:
+                    sliced_dst_kv_ptrs += dst_kv_ptrs[-ptrs_per_layer:]
+            else:
+                sliced_dst_kv_ptrs = k_ptrs + v_ptrs
+
+        layers_current_pp_stage = len(src_kv_ptrs)
+        return src_kv_ptrs, sliced_dst_kv_ptrs, layers_current_pp_stage
+
     def send_kvcache(
         self,
         mooncake_session_id: str,
@@ -54,25 +97,37 @@ class AscendKVManager(MooncakeKVManager):
         )
 
         if self.pp_size > 1:
-            src_k_ptrs, src_v_ptrs, dst_k_ptrs, dst_v_ptrs, layers_current_pp_stage = (
-                self.get_mha_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
-            )
+            if self.is_mla_backend:
+                src_kv_ptrs, sliced_dst_kv_ptrs, layers_current_pp_stage = self.get_mla_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
+                layers_params = [
+                    (
+                        src_kv_ptrs[layer_id],
+                        sliced_dst_kv_ptrs[layer_id],
+                        self.kv_args.kv_item_lens[layer_id],
+                    )
+                    for layer_id in range(layers_current_pp_stage)
+                ]
+                # print(f'{get_world_rank()}========{layers_params=}')
+            else:
+                src_k_ptrs, src_v_ptrs, dst_k_ptrs, dst_v_ptrs, layers_current_pp_stage = (
+                    self.get_mha_kv_ptrs_with_pp(self.kv_args.kv_data_ptrs, dst_kv_ptrs)
+                )
 
-            layers_params = [
-                (
-                    src_k_ptrs[layer_id],
-                    dst_k_ptrs[layer_id],
-                    self.kv_args.kv_item_lens[layer_id],
-                )
-                for layer_id in range(layers_current_pp_stage)
-            ] + [
-                (
-                    src_v_ptrs[layer_id],
-                    dst_v_ptrs[layer_id],
-                    self.kv_args.kv_item_lens[layers_current_pp_stage + layer_id],
-                )
-                for layer_id in range(layers_current_pp_stage)
-            ]
+                layers_params = [
+                    (
+                        src_k_ptrs[layer_id],
+                        dst_k_ptrs[layer_id],
+                        self.kv_args.kv_item_lens[layer_id],
+                    )
+                    for layer_id in range(layers_current_pp_stage)
+                ] + [
+                    (
+                        src_v_ptrs[layer_id],
+                        dst_v_ptrs[layer_id],
+                        self.kv_args.kv_item_lens[layers_current_pp_stage + layer_id],
+                    )
+                    for layer_id in range(layers_current_pp_stage)
+                ]
         else:
             num_layers = len(self.kv_args.kv_data_ptrs)
             layers_params = [
