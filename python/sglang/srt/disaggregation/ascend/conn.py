@@ -5,6 +5,7 @@ from typing import List, Tuple
 import numpy as np
 import numpy.typing as npt
 
+from sglang.srt.distributed import is_pipeline_last_stage
 from sglang.srt.disaggregation.ascend.transfer_engine import AscendTransferEngine
 from sglang.srt.disaggregation.common.utils import group_concurrent_contiguous
 from sglang.srt.disaggregation.mooncake.conn import (
@@ -14,6 +15,8 @@ from sglang.srt.disaggregation.mooncake.conn import (
     MooncakeKVSender,
 )
 from sglang.srt.utils.network import get_local_ip_auto
+
+from sglang.srt.distributed import get_world_rank
 
 logger = logging.getLogger(__name__)
 

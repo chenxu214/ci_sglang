@@ -267,7 +267,7 @@ class RotaryEmbedding(MultiPlatformOp):
             else:
                 cos_sin = self.cos_sin_cache.index_select(0, positions)
 
-            if query.shape[0] * query.shape[1] < 65535:
+            if query.shape[0] * query.shape[1] < 65535 and query.shape[0] < 512:
                 return fused_rope_qk_mqa(
                     query,
                     key,

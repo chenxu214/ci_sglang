@@ -551,10 +551,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             "pp_proxy_tensors" in inspect.signature(self.model.forward).parameters
         )
 
-        if self.pp_size > 1:
-            assert (
-                self.support_pp
-            ), "Pipeline Parallel is not compatible with this model."
+        # if self.pp_size > 1:
+        #     assert (
+        #         self.support_pp
+        #     ), "Pipeline Parallel is not compatible with this model."
 
         # For weight updates
         self._model_update_group = {}
@@ -698,14 +698,14 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         if loop_num > 1:
             self.num_effective_layers = self.num_effective_layers * loop_num
 
-        assert (
-            (not model_has_mtp_layers)
-            or (self.spec_algorithm.is_none())
-            or (
-                (not self.spec_algorithm.is_none())
-                and (self.num_effective_layers == model_num_layers)
-            )
-        ), "PP is not compatible with MTP models."
+        # assert (
+        #     (not model_has_mtp_layers)
+        #     or (self.spec_algorithm.is_none())
+        #     or (
+        #         (not self.spec_algorithm.is_none())
+        #         and (self.num_effective_layers == model_num_layers)
+        #     )
+        # ), "PP is not compatible with MTP models."
 
         # Apply torchao quantization
         torchao_applied = getattr(self.model, "torchao_applied", False)

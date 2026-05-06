@@ -21,6 +21,9 @@ from typing import Iterable, Optional, Tuple
 import torch
 from safetensors.torch import load_file
 from torch import nn
+
+from sglang.srt.distributed.parallel_state import is_pipeline_last_stage
+from sglang.srt.model_executor.forward_batch_info import PPProxyTensors
 from transformers import PretrainedConfig
 
 from sglang.srt.configs.model_config import is_deepseek_nsa
@@ -160,7 +163,19 @@ class DeepseekModelNextN(nn.Module):
         positions: torch.Tensor,
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
+        pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
+        if forward_batch.forward_mode.is_extend():
+            if is_pipeline_last_stage():
+                if input_embeds is None:
+                    hidden_states = self.embed_tokens(input_ids)
+                else:
+                    hidden_states = input_embeds
+                residual = None
+            else:
+                assert pp_proxy_tensors is not None
+                hidden_states = pp_proxy_tensors["hidden_states"]
+                residual = pp_proxy_tensors["residual"]
         if _is_npu and self.quant_config is None:
             os.environ["SGLANG_DEEPEP_BF16_DISPATCH"] = "1"
             os.environ["DEEP_NORMAL_MODE_USE_INT8_QUANT"] = "0"
@@ -171,11 +186,11 @@ class DeepseekModelNextN(nn.Module):
                 input_embeds.device if input_embeds is not None else input_ids.device
             ),
         )
-
-        if input_embeds is None:
-            hidden_states = self.embed_tokens(input_ids)
-        else:
-            hidden_states = input_embeds
+        if forward_batch.forward_mode.is_decode() or forward_batch.forward_mode.is_draft_extend(include_v2=True):
+            if input_embeds is None:
+                hidden_states = self.embed_tokens(input_ids)
+            else:
+                hidden_states = input_embeds
 
         if hidden_states.shape[0] > 0:
             eh_input = torch.cat(
@@ -293,6 +308,7 @@ class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
         input_ids: torch.Tensor,
         positions: torch.Tensor,
         forward_batch: ForwardBatch,
+        pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
         # TODO current just support prefill batch=1 and len(input_ids) > self.cp_size * 2
         if self.nsa_enable_prefill_cp:
@@ -306,7 +322,7 @@ class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
                     forward_batch.seq_lens_cpu.tolist(),
                     extend_seqs_len=forward_batch.extend_seq_lens_cpu,
                 )
-        hidden_states = self.model(input_ids, positions, forward_batch)
+        hidden_states = self.model(input_ids, positions, forward_batch, pp_proxy_tensors)
         return self.logits_processor(
             input_ids, hidden_states, self.lm_head, forward_batch
         )
