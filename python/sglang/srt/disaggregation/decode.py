@@ -865,6 +865,12 @@ class DecodePreallocQueue:
                 state_indices,
                 decode_prefix_len=prefix_len,
             )
+            logger.info(
+                f"Decode prealloc for {decode_req.req.rid}: "
+                f"decode_prefix_len={prefix_len}, "
+                f"decode_prefix_pages={page_indices}, "
+                f"bootstrap_room={decode_req.req.bootstrap_room}"
+            )
             if (
                 self.transfer_queue.enable_staging
                 and hasattr(decode_req.kv_receiver, "require_staging")
