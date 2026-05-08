@@ -476,7 +476,7 @@ class EAGLEWorker(TpModelWorker):
                 return GenerationBatchResult(
                     logits_output=logits_output,
                     next_token_ids=next_token_ids,
-                    num_accepted_tokens=0,
+                    num_accepted_drafts=0,
                     can_run_cuda_graph=can_run_cuda_graph,
                 )
             else:

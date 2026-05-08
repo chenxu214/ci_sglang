@@ -3022,10 +3022,10 @@ class Scheduler(
                 #     else {}
                 # )
                 kwargs = {"pp_proxy_tensors": pp_proxy_tensors}
-                with self.record_forward_metrics(batch):
-                    batch_result = self.model_worker.forward_batch_generation(
-                        worker_batch_or_batch, **kwargs
-                    )
+                # with self.record_forward_metrics(batch):
+                batch_result = self.model_worker.forward_batch_generation(
+                    worker_batch_or_batch, **kwargs
+                )
                 future_indices_or_next_token_ids = batch_result.next_token_ids
                 self.update_cache_from_scheduler(batch, batch_result)
 

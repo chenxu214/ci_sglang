@@ -3822,14 +3822,14 @@ class ServerArgs:
                         "--disaggregation-decode-enable-radix-cache is incompatible "
                         "with --enable-hisparse"
                     )
-                if self.disaggregation_transfer_backend not in ("nixl", "mooncake"):
+                if self.disaggregation_transfer_backend not in ("nixl", "mooncake", "ascend"):
                     raise ValueError(
                         "--disaggregation-decode-enable-radix-cache currently "
                         "requires --disaggregation-transfer-backend in "
                         "('nixl', 'mooncake'), but got "
                         f"{self.disaggregation_transfer_backend!r}"
                     )
-                if self.speculative_algorithm is not None:
+                if self.speculative_algorithm is not None and self.disaggregation_transfer_backend != "ascend":
                     raise ValueError(
                         "--disaggregation-decode-enable-radix-cache is incompatible "
                         "with speculative decoding "
