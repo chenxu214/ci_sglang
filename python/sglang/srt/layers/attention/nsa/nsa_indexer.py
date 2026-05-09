@@ -1576,6 +1576,9 @@ class Indexer(MultiPlatformOp):
             and forward_batch.attn_cp_metadata is not None
         ):
             block_table = block_table[: actual_seq_lengths_q[0].numel()]
+            # if forward_batch.attn_cp_metadata and forward_batch.attn_cp_metadata.bs == 2:
+            #     print(f'====={actual_seq_lengths_q}')
+            #     print(f'====={actual_seq_lengths_kv}')
             topk_indices = self.do_npu_cp_balance_indexer(
                 q.view(-1, self.n_heads, self.head_dim),
                 past_key_states,
@@ -1583,7 +1586,14 @@ class Indexer(MultiPlatformOp):
                 actual_seq_lengths_q,
                 actual_seq_lengths_kv,
                 block_table,
+                total_q_tokens=(
+                    forward_batch.attn_cp_metadata.total_q_prev_tokens,
+                    forward_batch.attn_cp_metadata.total_q_next_tokens
+                ) if forward_batch.attn_cp_metadata else None,
             )
+            # if forward_batch.attn_cp_metadata and forward_batch.attn_cp_metadata.bs == 2:
+            #     print(f'==={forward_batch.attn_cp_metadata=}')
+            # print(f'={torch.distributed.get_rank()=}=={block_table.shape=}=={topk_indices[0].shape=}', flush=True)
             return topk_indices
         else:
             block_table = (
@@ -1591,7 +1601,10 @@ class Indexer(MultiPlatformOp):
                 if is_prefill
                 else block_table
             )
-
+            # if is_prefill and block_table.size(0) == 2:
+            #     print(f'={block_table.size(0)}====={q.shape=}', flush=True)
+            #     print(f'={block_table.size(0)}====={actual_seq_lengths_q=}', flush=True)
+            #     print(f'={block_table.size(0)}====={actual_seq_lengths_kv=}', flush=True)
             topk_indices = torch_npu.npu_lightning_indexer(
                 query=q.view(-1, self.n_heads, self.head_dim),
                 key=past_key_states,
@@ -1616,24 +1629,39 @@ class Indexer(MultiPlatformOp):
         actual_seq_lengths_q,
         actual_seq_lengths_kv,
         block_table,
+        total_q_tokens=None,
     ):
-        q_prev, q_next = torch.split(q, (q.size(0) + 1) // 2, dim=0)
+        if total_q_tokens is not None:
+            q_prev, q_next = torch.split(q, total_q_tokens, dim=0)
+        else:
+            q_prev, q_next = torch.split(q, (q.size(0) + 1) // 2, dim=0)
         weights_prev, weights_next = None, None
         if indexer_weights is not None:
-            weights_prev, weights_next = torch.split(
-                indexer_weights, (indexer_weights.size(0) + 1) // 2, dim=0
-            )
+            if total_q_tokens is not None:
+                weights_prev, weights_next = torch.split(
+                    indexer_weights, total_q_tokens, dim=0
+                )
+            else:
+                weights_prev, weights_next = torch.split(
+                    indexer_weights, (indexer_weights.size(0) + 1) // 2, dim=0
+                )
             weights_prev = weights_prev.contiguous().view(-1, weights_prev.shape[-1])
             weights_next = weights_next.contiguous().view(-1, weights_next.shape[-1])
 
         actual_seq_lengths_q_prev, actual_seq_lengths_q_next = actual_seq_lengths_q
         actual_seq_lengths_kv_prev, actual_seq_lengths_kv_next = actual_seq_lengths_kv
-
+        # if block_table.size(0) == 2:
+        #     print(f'={block_table.size(0)}==rank:{torch.distributed.get_rank()}==={q_prev.shape=}', flush=True)
+        #     print(f'={block_table.size(0)}==rank:{torch.distributed.get_rank()}==={q_next.shape=}', flush=True)
+        #     print(f'={block_table.size(0)}==rank:{torch.distributed.get_rank()}==={actual_seq_lengths_q_prev=}', flush=True)
+        #     print(f'={block_table.size(0)}==rank:{torch.distributed.get_rank()}==={actual_seq_lengths_q_next=}', flush=True)
+        #     print(f'={block_table.size(0)}==rank:{torch.distributed.get_rank()}==={actual_seq_lengths_kv_prev=}', flush=True)
+        #     print(f'={block_table.size(0)}==rank:{torch.distributed.get_rank()}==={actual_seq_lengths_kv_next=}', flush=True)
         topk_indices_prev = torch_npu.npu_lightning_indexer(
             query=q_prev,
             key=past_key_states,
             weights=weights_prev,
-            actual_seq_lengths_query=actual_seq_lengths_q_prev.to(
+            actual_seq_lengths_query=torch.cumsum(actual_seq_lengths_q_prev, dim=0).to(
                 device=q.device, dtype=torch.int32
             ),
             actual_seq_lengths_key=actual_seq_lengths_kv_prev.to(
@@ -1649,7 +1677,7 @@ class Indexer(MultiPlatformOp):
             query=q_next,
             key=past_key_states,
             weights=weights_next,
-            actual_seq_lengths_query=actual_seq_lengths_q_next.to(
+            actual_seq_lengths_query=torch.cumsum(actual_seq_lengths_q_next, dim=0).to(
                 device=q.device, dtype=torch.int32
             ),
             actual_seq_lengths_key=actual_seq_lengths_kv_next.to(

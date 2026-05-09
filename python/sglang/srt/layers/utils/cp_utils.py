@@ -461,6 +461,9 @@ def prepare_context_parallel_metadata(
     extend_seqs_len = [int(x) for x in extend_seqs_len]
 
     bs = len(extend_seqs_len)
+    # if bs == 2:
+    #     print(f'====={extend_seqs_len=}',flush=True)
+    #     print(f'====={global_num_tokens=}',flush=True)
     cp_segment_num = cp_size * 2
 
     # Prefix offset (radix cache hit length) per sequence. For non-NSA

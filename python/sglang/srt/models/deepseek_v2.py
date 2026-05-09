@@ -1111,11 +1111,14 @@ class DeepseekV2MoE(nn.Module):
             post_combine_hook_handle = (
                 self.experts.dispatcher.register_post_combine_hook(_post_combine_hook)
             )
-
+        # if forward_batch.attn_cp_metadata and forward_batch.attn_cp_metadata.bs == 2:
+        #     print(f'====={torch.distributed.get_rank()=}==={hidden_states.shape=}', flush=True)
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
             topk_output=topk_output,
         )
+        # if forward_batch.attn_cp_metadata and forward_batch.attn_cp_metadata.bs == 2:
+        #     print(f'====={torch.distributed.get_rank()=}==={final_hidden_states.shape=}', flush=True)
 
         if (
             hidden_states.shape[0] > 0
@@ -1889,7 +1892,8 @@ class DeepseekV2DecoderLayer(nn.Module):
             hidden_states, topk_indices = hidden_states
         else:
             topk_indices = None
-
+        # if forward_batch.attn_cp_metadata and forward_batch.attn_cp_metadata.bs == 2:
+        #     print(f'attn====={torch.distributed.get_rank()=}==={hidden_states.shape=}', flush=True)
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
@@ -2431,6 +2435,8 @@ class DeepseekV2ForCausalLM(nn.Module, DeepseekV2WeightLoaderMixin):
                     extend_seqs_len=forward_batch.extend_seq_lens_cpu,
                     global_num_tokens=forward_batch.global_num_tokens_cpu,
                 )
+                # if forward_batch.attn_cp_metadata and forward_batch.attn_cp_metadata.bs == 2:
+                #     print(f'==={forward_batch.attn_cp_metadata=}')
                 # print(f'======{forward_batch.attn_cp_metadata=}')
 
         with get_attn_tp_context().maybe_input_scattered(forward_batch):

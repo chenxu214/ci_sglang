@@ -722,11 +722,16 @@ class AscendAttnBackend(AttentionBackend):
         layer,
         actual_seq_qlen,
         actual_seq_lengths_kv,
+        total_q_tokens=None,
     ):
-        seq_len = q_nope.shape[0]
-        split_len = (seq_len + 1) // 2
-        q_nope_prev, q_nope_next = torch.split(q_nope, split_len, dim=0)
-        q_rope_prev, q_rope_next = torch.split(q_pe, split_len, dim=0)
+        if total_q_tokens is not None:
+            q_nope_prev, q_nope_next = torch.split(q_nope, total_q_tokens, dim=0)
+            q_rope_prev, q_rope_next = torch.split(q_pe, total_q_tokens, dim=0)
+        else:
+            seq_len = q_nope.shape[0]
+            split_len = (seq_len + 1) // 2
+            q_nope_prev, q_nope_next = torch.split(q_nope, split_len, dim=0)
+            q_rope_prev, q_rope_next = torch.split(q_pe, split_len, dim=0)
         q_nope_prev = q_nope_prev.contiguous()
         q_nope_next = q_nope_next.contiguous()
         q_rope_prev = q_rope_prev.contiguous()
@@ -946,6 +951,10 @@ class AscendAttnBackend(AttentionBackend):
                 layer,
                 actual_seq_qlen,
                 actual_seq_lengths_kv,
+                total_q_tokens=(
+                    forward_batch.attn_cp_metadata.total_q_prev_tokens,
+                    forward_batch.attn_cp_metadata.total_q_next_tokens
+                ) if forward_batch.attn_cp_metadata else None,
             )
         else:
             attn_out, _, _ = torch_npu.npu_sparse_flash_attention(
@@ -970,7 +979,7 @@ class AscendAttnBackend(AttentionBackend):
                 attention_mode=2,
                 return_softmax_lse=False,
             )
-
+        # print(f'={torch.distributed.get_rank()=}=={self.forward_metadata.block_tables.shape=}=={attn_out.shape=}', flush=True)
         return attn_out
 
     def forward_extend(
