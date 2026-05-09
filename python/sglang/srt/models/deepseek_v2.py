@@ -2421,13 +2421,17 @@ class DeepseekV2ForCausalLM(nn.Module, DeepseekV2WeightLoaderMixin):
             if can_nsa_cp_split(
                 len(input_ids), self.cp_size, self.use_nsa, forward_batch
             ):
+                # if torch.distributed.get_rank() == 0:
+                #     print(f'======{forward_batch=}')
                 forward_batch.attn_cp_metadata = prepare_context_parallel_metadata(
                     len(input_ids),
                     self.cp_rank,
                     self.cp_size,
                     forward_batch.seq_lens_cpu.tolist(),
                     extend_seqs_len=forward_batch.extend_seq_lens_cpu,
+                    global_num_tokens=forward_batch.global_num_tokens_cpu,
                 )
+                # print(f'======{forward_batch.attn_cp_metadata=}')
 
         with get_attn_tp_context().maybe_input_scattered(forward_batch):
             hidden_states = self.model(

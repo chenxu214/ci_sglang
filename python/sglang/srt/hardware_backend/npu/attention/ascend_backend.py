@@ -735,7 +735,9 @@ class AscendAttnBackend(AttentionBackend):
 
         actual_seq_qlen_prev, actual_seq_qlen_next = actual_seq_qlen
         actual_seq_lengths_kv_prev, actual_seq_lengths_kv_next = actual_seq_lengths_kv
-
+        # print(f'======{actual_seq_qlen=}')
+        # print(f'======{actual_seq_lengths_kv=}')
+        # print(f'======{self.forward_metadata.block_tables=}')
         attn_out_prev, _, _ = torch_npu.npu_sparse_flash_attention(
             query=q_nope_prev,
             key=k_nope,

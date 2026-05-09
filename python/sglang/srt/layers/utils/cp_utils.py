@@ -431,6 +431,7 @@ def prepare_context_parallel_metadata(
     cp_size,
     seqs_len,
     extend_seqs_len=None,
+    global_num_tokens=None,
     device="cuda",
 ):
     from sglang.srt.layers.attention.nsa.utils import (
@@ -455,6 +456,8 @@ def prepare_context_parallel_metadata(
     total_q_prev_tokens cleanly separates them.
     """
     assert extend_seqs_len is not None
+    assert global_num_tokens is not None
+
     extend_seqs_len = [int(x) for x in extend_seqs_len]
 
     bs = len(extend_seqs_len)
@@ -473,6 +476,8 @@ def prepare_context_parallel_metadata(
         prefix_offsets = [0] * bs
 
     # Per-sequence block sizes: first (L % cp_segment_num) blocks get +1.
+    if sum(extend_seqs_len) < sum(global_num_tokens):
+        extend_seqs_len[-1] += sum(global_num_tokens) - sum(extend_seqs_len)
     per_seq_block_sizes: List[List[int]] = []
     split_list: List[int] = []
     for s in range(bs):
