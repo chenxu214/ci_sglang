@@ -3017,11 +3017,13 @@ class Scheduler(
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
                 future_indices_or_next_token_ids = batch_result.next_token_ids
             else:
-                kwargs = (
-                    {"pp_proxy_tensors": pp_proxy_tensors}
-                    if self.spec_algorithm.is_none()
-                    else {}
-                )
+                # kwargs = (
+                #     {"pp_proxy_tensors": pp_proxy_tensors}
+                #     if self.spec_algorithm.is_none()
+                #     else {}
+                # )
+                kwargs = {"pp_proxy_tensors": pp_proxy_tensors}
+                # with self.record_forward_metrics(batch):
                 batch_result = self.model_worker.forward_batch_generation(
                     worker_batch_or_batch, **kwargs
                 )
@@ -3933,6 +3935,10 @@ def run_scheduler_process(
     dp_rank: Optional[int],
     pipe_writer,
 ):
+    if _is_npu:
+        # init zbal if is set
+        from sglang.srt.hardware_backend.npu.utils import init_zbal
+        init_zbal(server_args.tp_size, gpu_id, tp_rank)
     # Load plugins so hooks can override Scheduler and its dependencies.
     load_plugins()
     dp_rank = configure_scheduler_process(

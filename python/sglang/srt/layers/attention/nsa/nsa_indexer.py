@@ -240,6 +240,7 @@ class Indexer(MultiPlatformOp):
             is_neox_style=is_neox_style,
             device=get_global_server_args().device,
         )
+        self.all_num = 1
         self.block_size = block_size
         self.scale_fmt = scale_fmt
         self.softmax_scale = self.head_dim**-0.5
@@ -1256,10 +1257,16 @@ class Indexer(MultiPlatformOp):
                     forward_batch.attn_cp_metadata is not None
                     and is_nsa_prefill_cp_in_seq_split()
                 ):
-                    kv_len_prev = forward_batch.attn_cp_metadata.kv_len_prev
-                    kv_len_next = forward_batch.attn_cp_metadata.kv_len_next
-                    actual_seq_q_prev = forward_batch.attn_cp_metadata.actual_seq_q_prev
-                    actual_seq_q_next = forward_batch.attn_cp_metadata.actual_seq_q_next
+                    # NSA CP is gated to bs=1 by can_cp_split; index [0] of
+                    # the per-seq lists reproduces the previous scalar values.
+                    kv_len_prev = forward_batch.attn_cp_metadata.kv_len_prev_list[0]
+                    kv_len_next = forward_batch.attn_cp_metadata.kv_len_next_list[0]
+                    actual_seq_q_prev = (
+                        forward_batch.attn_cp_metadata.actual_seq_q_prev_list[0]
+                    )
+                    actual_seq_q_next = (
+                        forward_batch.attn_cp_metadata.actual_seq_q_next_list[0]
+                    )
 
                     # TODO support mutil-batch
                     # cp_batch_seq_index_prev = forward_batch.attn_cp_metadata["cp_batch_seq_index_prev"]
@@ -1544,7 +1551,10 @@ class Indexer(MultiPlatformOp):
                 )
 
         past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
-
+        # if layer_id == 0 and is_prefill:
+        #     from sglang.srt.distributed import get_world_rank
+        #     torch.save(past_key_states, f"/home/chenxu/tmp/{self.all_num}-{get_world_rank()}---{forward_batch.forward_mode}-past_key_states.pt")
+        #     self.all_num += 1
         if self.rotary_emb.is_neox_style and self.alt_stream is not None:
             torch.npu.current_stream().wait_event(q_rope_event)
         if envs.SGLANG_NPU_USE_MULTI_STREAM.get():

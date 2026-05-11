@@ -28,6 +28,7 @@ import torch
 
 from sglang.srt.disaggregation.base import KVPoll
 from sglang.srt.disaggregation.common.conn import CommonKVManager
+from sglang.srt.distributed import is_pipeline_last_stage
 from sglang.srt.disaggregation.utils import (
     FAKE_BOOTSTRAP_HOST,
     DisaggregationMode,
@@ -151,15 +152,18 @@ class PrefillBootstrapQueue:
             self.token_to_kv_pool.get_contiguous_buf_infos()
         )
 
-        if self.draft_token_to_kv_pool is not None:
+        if self.draft_token_to_kv_pool is not None and is_pipeline_last_stage():
             # We should also transfer draft model kv cache. The indices are
             # always shared with a target model.
             draft_kv_data_ptrs, draft_kv_data_lens, draft_kv_item_lens = (
                 self.draft_token_to_kv_pool.get_contiguous_buf_infos()
             )
+            # Now assume that the MTP has only one layer.
             kv_data_ptrs += draft_kv_data_ptrs
             kv_data_lens += draft_kv_data_lens
             kv_item_lens += draft_kv_item_lens
+        if self.draft_token_to_kv_pool is not None:
+            kv_args.has_draft_pool = True
 
         kv_args.kv_data_ptrs = kv_data_ptrs
         kv_args.kv_data_lens = kv_data_lens
@@ -177,7 +181,9 @@ class PrefillBootstrapQueue:
         kv_args.ib_device = self.scheduler.server_args.disaggregation_ib_device
         kv_args.gpu_id = self.scheduler.gpu_id
 
-        setup_state_kv_args(kv_args, self.token_to_kv_pool, self.draft_token_to_kv_pool)
+        setup_state_kv_args(
+            kv_args, self.token_to_kv_pool, self.draft_token_to_kv_pool, self.scheduler.model_config.num_hidden_layers
+        )
 
         kv_manager_class = get_kv_class(self.transfer_backend, KVClassType.MANAGER)
         kv_manager = kv_manager_class(

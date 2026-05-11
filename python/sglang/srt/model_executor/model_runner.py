@@ -546,10 +546,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             "pp_proxy_tensors" in inspect.signature(self.model.forward).parameters
         )
 
-        if self.pp_size > 1:
-            assert (
-                self.support_pp
-            ), "Pipeline Parallel is not compatible with this model."
+        # if self.pp_size > 1:
+        #     assert (
+        #         self.support_pp
+        #     ), "Pipeline Parallel is not compatible with this model."
 
         # For weight updates
         self._model_update_group = {}
@@ -690,14 +690,14 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         if loop_num > 1:
             self.num_effective_layers = self.num_effective_layers * loop_num
 
-        assert (
-            (not model_has_mtp_layers)
-            or (self.spec_algorithm.is_none())
-            or (
-                (not self.spec_algorithm.is_none())
-                and (self.num_effective_layers == model_num_layers)
-            )
-        ), "PP is not compatible with MTP models."
+        # assert (
+        #     (not model_has_mtp_layers)
+        #     or (self.spec_algorithm.is_none())
+        #     or (
+        #         (not self.spec_algorithm.is_none())
+        #         and (self.num_effective_layers == model_num_layers)
+        #     )
+        # ), "PP is not compatible with MTP models."
 
         # Apply torchao quantization
         torchao_applied = getattr(self.model, "torchao_applied", False)
@@ -774,8 +774,30 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             self.kernel_warmup()
             self._pre_initialize_flashinfer_allreduce_workspace()
             self.init_device_graphs()
-        elif self.device in ["npu", "cpu"]:
+        elif self.device == "cpu":
             self.init_attention_backend()
+            self.init_device_graphs()
+        elif self.device == "npu":
+            disable_cuda_graph_bk = self.server_args.disable_cuda_graph
+            use_npu_zero_buffer = envs.SGLANG_ZBAL_LOCAL_MEM_SIZE.get() > 0
+            capture_dalay_enable = (self.server_args.disaggregation_mode in ["decode", "null"] and
+                                    (
+                                                use_npu_zero_buffer and self.spec_algorithm.is_eagle() and not disable_cuda_graph_bk))
+            if capture_dalay_enable:
+                # we will delay main model graph capture until MTP weights already loaded
+                self.server_args.disable_cuda_graph = True
+
+            self.init_attention_backend()
+            # lazy init for zbal with mix mode(before graph capture when enable_cuda_graph)
+            if use_npu_zero_buffer and capture_dalay_enable:
+                pass  # will lazy init zbal till MTP weights loaded
+            elif use_npu_zero_buffer and not self.is_draft_worker:
+                from sglang.srt.hardware_backend.npu.utils import lazy_init_zbal_gva_mem
+                # lazy_init_zbal_gva_mem(self.device, self.gpu_id, self.tp_rank, self.tp_size,
+                #                        get_world_group().cpu_group)
+                from sglang.srt.distributed.parallel_state import get_world_size, get_world_rank
+                lazy_init_zbal_gva_mem(self.device, self.gpu_id, get_world_rank(), get_world_size(),
+                                       get_world_group().cpu_group)
             self.init_device_graphs()
         elif current_platform.is_out_of_tree():
             self.init_attention_backend()
