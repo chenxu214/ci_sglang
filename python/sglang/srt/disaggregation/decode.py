@@ -370,7 +370,9 @@ class DecodePreallocQueue:
             self.metadata_buffers.get_buf_infos()
         )
 
-        setup_state_kv_args(kv_args, self.token_to_kv_pool, self.draft_token_to_kv_pool)
+        setup_state_kv_args(
+            kv_args, self.token_to_kv_pool, self.draft_token_to_kv_pool, self.scheduler.model_config.num_hidden_layers
+        )
 
         kv_args.ib_device = self.scheduler.server_args.disaggregation_ib_device
         kv_args.gpu_id = self.scheduler.gpu_id

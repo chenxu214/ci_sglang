@@ -537,6 +537,7 @@ def setup_state_kv_args(
     kv_args: KVArgs,
     token_to_kv_pool,
     draft_token_to_kv_pool=None,
+    total_kv_layers: int = None,
 ) -> None:
     """Populate ``kv_args`` state-buffer fields from the given pool.
 
@@ -569,8 +570,13 @@ def setup_state_kv_args(
             kv_args.state_dim_per_tensor = token_to_kv_pool.get_state_dim_per_tensor()
     elif isinstance(token_to_kv_pool, (NSATokenToKVPool, NPUMLATokenToKVPool)):
         kv_args.state_type = "nsa"
+        if isinstance(token_to_kv_pool, NPUMLATokenToKVPool):
+            kv_args.kv_buf_groups = (
+                len(kv_args.kv_data_ptrs) // token_to_kv_pool.layer_num
+            )
+            kv_args.total_kv_layers = total_kv_layers
         if draft_token_to_kv_pool is not None and isinstance(
-            draft_token_to_kv_pool, (NSATokenToKVPool, NPUMLATokenToKVPool)
+            draft_token_to_kv_pool, NSATokenToKVPool
         ):
             (
                 draft_state_data_ptrs,

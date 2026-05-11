@@ -43,37 +43,28 @@ class AscendKVManager(MooncakeKVManager):
     def get_mla_kv_ptrs_with_pp(
         self, src_kv_ptrs: List[int], dst_kv_ptrs: List[int]
     ) -> Tuple[List[int], List[int], int]:
+        # src_kv_ptrs: k_data, v_data, index_k_data(optional)
+        # dst_kv_ptrs: k_data, v_data, index_k_data(optional)
         start_layer = self.kv_args.prefill_start_layer
-
-        if self.kv_args.state_type == "nsa":
-            ptrs_per_layer = 3
-        else:
-            ptrs_per_layer = 2
-
-        if self.kv_args.has_draft_pool:
-            total_num_layers = len(dst_kv_ptrs) // ptrs_per_layer - 1
-        else:
-            total_num_layers = len(dst_kv_ptrs) // ptrs_per_layer
-
-        if is_pipeline_last_stage() and self.kv_args.has_draft_pool:
-            src_layers = len(src_kv_ptrs) // ptrs_per_layer  - 1
-        else:
-            src_layers = len(src_kv_ptrs) // ptrs_per_layer
-
+        kv_buf_groups = getattr(self.kv_args, "kv_buf_groups", 1)
+        total_kv_layers = getattr(self.kv_args, "total_kv_layers", 0)
+        src_layers = len(src_kv_ptrs) // kv_buf_groups
+        # When only speculative-algorithm is enabled for decode
+        # the KV has one more layer than prefill.
+        # The draft layer needs to be skipped.
+        dst_total_layers = min(
+            len(dst_kv_ptrs) // kv_buf_groups, total_kv_layers
+        ) if total_kv_layers else len(dst_kv_ptrs) // kv_buf_groups
         end_layer = start_layer + src_layers
-
-        if src_layers == total_num_layers:
+        if src_layers == dst_total_layers:
             sliced_dst_kv_ptrs = dst_kv_ptrs
         else:
-            k_ptrs = dst_kv_ptrs[start_layer:end_layer]
-            v_ptrs = dst_kv_ptrs[total_num_layers + start_layer: total_num_layers + end_layer]
-            if self.kv_args.state_type == "nsa":
-                index_k_ptrs = dst_kv_ptrs[2 * total_num_layers + start_layer: 2 * total_num_layers + end_layer]
-                sliced_dst_kv_ptrs = k_ptrs + v_ptrs + index_k_ptrs
-                if is_pipeline_last_stage() and self.kv_args.has_draft_pool:
-                    sliced_dst_kv_ptrs += dst_kv_ptrs[-ptrs_per_layer:]
-            else:
-                sliced_dst_kv_ptrs = k_ptrs + v_ptrs
+            sliced_dst_kv_ptrs = []
+            for i in range(kv_buf_groups):
+                layer_offset = i * dst_total_layers
+                sliced_dst_kv_ptrs.extend(
+                    dst_kv_ptrs[layer_offset + start_layer: layer_offset + end_layer]
+                )
 
         layers_current_pp_stage = len(src_kv_ptrs)
         return src_kv_ptrs, sliced_dst_kv_ptrs, layers_current_pp_stage
