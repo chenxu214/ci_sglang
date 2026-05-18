@@ -80,6 +80,26 @@ def is_nsa_prefill_cp_round_robin_split():
     )
 
 
+def is_nsa_prefill_cp_layer_split() -> bool:
+    return (
+        is_nsa_enable_prefill_cp()
+        and get_global_server_args().enable_nsa_prefill_cp_layer_split
+    )
+
+
+def get_nsa_cp_layer_split_assignment(layer_id: int, total_layers: int, cp_size: int) -> int:
+    # Returns the CP rank of the layer_id.
+    layers_per_rank = total_layers // cp_size
+    owner_rank = layer_id // layers_per_rank
+    return owner_rank
+
+
+def is_rank_own_layer(layer_id: int, total_layers: int, cp_size: int) -> bool:
+    # Returns whether the layer is in the local rank.
+    owner = get_nsa_cp_layer_split_assignment(layer_id, total_layers, cp_size)
+    return owner == get_attention_cp_rank()
+
+
 def can_nsa_prefill_cp_round_robin_split(forward_batch: "ForwardBatch"):
     if not forward_batch.forward_mode.is_context_parallel_extend():
         return False

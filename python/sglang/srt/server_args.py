@@ -750,6 +750,7 @@ class ServerArgs:
     # Context parallelism
     enable_prefill_context_parallel: bool = False
     prefill_cp_mode: str = "in-seq-split"
+    enable_nsa_prefill_cp_layer_split: bool = False
 
     # Dynamic batch tokenizer
     enable_dynamic_batch_tokenizer: bool = False
@@ -6391,6 +6392,11 @@ class ServerArgs:
             "--enable-prefill-context-parallel",
             action="store_true",
             help="Enable context parallelism used in the prefill phase",
+        )
+        parser.add_argument(
+            "--enable-nsa-prefill-cp-layer-split",
+            action="store_true",
+            help="Enable layer-wise KV cache split (LayerSplit) for NSA prefill CP on Ascend NPU.",
         )
         parser.add_argument(
             "--prefill-cp-mode",
