@@ -216,6 +216,7 @@ MOE_A2A_BACKEND_CHOICES = [
     "ascend_fuseep",
     "flashinfer",
     "megamoe",
+    "alltoallv",
 ]
 
 FP8_GEMM_RUNNER_BACKEND_CHOICES = [
@@ -3189,7 +3190,7 @@ class ServerArgs:
                 f"to be the same as the tensor parallel size[{self.tp_size}]."
             )
 
-        if self.moe_a2a_backend == "deepep":
+        if self.moe_a2a_backend == "deepep" or self.moe_a2a_backend == "alltoallv":
             if self.deepep_mode == "normal":
                 logger.warning("Cuda graph is disabled because deepep_mode=`normal`")
                 self.disable_cuda_graph = True
