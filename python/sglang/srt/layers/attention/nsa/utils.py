@@ -100,6 +100,36 @@ def is_rank_own_layer(layer_id: int, total_layers: int, cp_size: int) -> bool:
     return owner == get_attention_cp_rank()
 
 
+def compute_layer_split_range(cp_rank: int, cp_size: int, total_layers: int) -> Tuple[int, int, int]:
+    """Compute (start_layer, end_layer, layer_num) for the given cp_rank.
+
+    When total_layers is not divisible by cp_size, the remaining layers are
+    distributed to the later ranks. Example: total_layers=19, cp_size=4
+    yields allocation [4, 5, 5, 5] (rank 0→4, rank 1→5, rank 2→5, rank 3→5).
+
+    Args:
+        cp_rank: Current CP rank index (0-based).
+        cp_size: Total number of CP ranks.
+        total_layers: Total number of model layers.
+
+    Returns:
+        Tuple of (start_layer, end_layer, layer_num).
+    """
+    base = total_layers // cp_size
+    remainder = total_layers % cp_size
+    start_extra = cp_size - remainder
+
+    if cp_rank < start_extra:
+        layer_num = base
+        start_layer = cp_rank * base
+    else:
+        layer_num = base + 1
+        start_layer = start_extra * base + (cp_rank - start_extra) * (base + 1)
+
+    end_layer = start_layer + layer_num
+    return start_layer, end_layer, layer_num
+
+
 def can_nsa_prefill_cp_round_robin_split(forward_batch: "ForwardBatch"):
     if not forward_batch.forward_mode.is_context_parallel_extend():
         return False

@@ -461,6 +461,23 @@ class ModelRunnerKVCacheMixin:
                 from sglang.srt.hardware_backend.npu.memory_pool_npu import (
                     NPUMLATokenToKVPool,
                 )
+                from sglang.srt.layers.attention.nsa.utils import (
+                    compute_layer_split_range,
+                    is_nsa_prefill_cp_layer_split,
+                )
+
+                start_layer = self.start_layer
+                end_layer = self.end_layer
+                layer_num = self.num_effective_layers
+
+                if is_nsa_model and is_nsa_prefill_cp_layer_split():
+                    cp_start_layer, cp_end_layer, cp_layer_num = compute_layer_split_range(
+                        self.attn_cp_rank,
+                        self.attn_cp_size,
+                        self.num_effective_layers,
+                    )
+                    start_layer += cp_start_layer
+                    end_layer += start_layer
 
                 self.token_to_kv_pool = NPUMLATokenToKVPool(
                     self.max_total_num_tokens,
@@ -471,11 +488,11 @@ class ModelRunnerKVCacheMixin:
                     index_head_dim=(
                         self.model_config.index_head_dim if is_nsa_model else None
                     ),
-                    layer_num=self.num_effective_layers,
+                    layer_num=layer_num,
                     device=self.device,
                     enable_memory_saver=self.server_args.enable_memory_saver,
-                    start_layer=self.start_layer,
-                    end_layer=self.end_layer,
+                    start_layer=start_layer,
+                    end_layer=end_layer,
                 )
             else:
                 from sglang.srt.hardware_backend.npu.memory_pool_npu import (
