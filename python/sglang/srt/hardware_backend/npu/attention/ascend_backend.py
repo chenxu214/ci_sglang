@@ -899,8 +899,11 @@ class AscendAttnBackend(AttentionBackend):
         if not is_nsa_prefill_cp_layer_split():
             k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
         else:
-            topk_indices_pre, topk_indices_next, k_nope, k_pe, kv_event = topk_indices
-            topk_indices = (topk_indices_pre, topk_indices_next)
+            if forward_batch.attn_cp_metadata is not None:
+                topk_indices_pre, topk_indices_next, k_nope, k_pe, kv_event = topk_indices
+                topk_indices = (topk_indices_pre, topk_indices_next)
+            else:
+                topk_indices, k_nope, k_pe, kv_event = topk_indices
 
         if is_prefill:
             if self.forward_metadata.actual_seq_lengths_q is not None:
@@ -960,6 +963,8 @@ class AscendAttnBackend(AttentionBackend):
                 kv_event=kv_event if is_nsa_prefill_cp_layer_split() else None,
             )
         else:
+            if is_nsa_prefill_cp_layer_split():
+                torch.npu.current_stream().wait_event(kv_event)
             attn_out, _, _ = torch_npu.npu_sparse_flash_attention(
                 query=q_nope,
                 key=k_nope,

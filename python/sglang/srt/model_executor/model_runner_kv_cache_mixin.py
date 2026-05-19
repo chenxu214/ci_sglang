@@ -10,9 +10,13 @@ from sglang.srt.configs.model_config import (
     is_deepseek_nsa,
     is_deepseek_v4,
 )
-from sglang.srt.distributed.parallel_state import get_world_group
+from sglang.srt.distributed.parallel_state import get_world_group, get_world_rank
 from sglang.srt.environ import envs
-from sglang.srt.layers.dp_attention import get_attention_tp_size
+from sglang.srt.layers.dp_attention import (
+    get_attention_tp_size,
+    get_attention_cp_size,
+    get_attention_cp_rank,
+)
 from sglang.srt.mem_cache.allocator import (
     PagedTokenToKVPoolAllocator,
     TokenToKVPoolAllocator,
@@ -471,14 +475,16 @@ class ModelRunnerKVCacheMixin:
                 layer_num = self.num_effective_layers
 
                 if is_nsa_model and is_nsa_prefill_cp_layer_split():
+                    # 计算自己rank的layer id，需要加上start_layer才是全局的
                     cp_start_layer, cp_end_layer, cp_layer_num = compute_layer_split_range(
-                        self.attn_cp_rank,
-                        self.attn_cp_size,
+                        get_attention_cp_rank(),
+                        get_attention_cp_size(),
                         self.num_effective_layers,
                     )
                     end_layer = cp_end_layer + start_layer
                     start_layer += cp_start_layer
                     layer_num = cp_layer_num
+                    # print(f'=rank:{get_world_rank()}===={start_layer=}, {end_layer=}, {layer_num=}, {get_attention_cp_rank()=}')
 
                 self.token_to_kv_pool = NPUMLATokenToKVPool(
                     self.max_total_num_tokens,
@@ -496,6 +502,7 @@ class ModelRunnerKVCacheMixin:
                     end_layer=end_layer,
                     **(
                         dict(
+                            start_layer_override=self.start_layer,
                             layer_num_override=self.num_effective_layers,
                         )
                         if is_nsa_prefill_cp_layer_split()

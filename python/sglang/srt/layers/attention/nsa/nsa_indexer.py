@@ -35,7 +35,7 @@ from sglang.srt.utils import (
     is_hip,
     is_npu,
 )
-
+from sglang.srt.distributed.parallel_state import get_world_group, get_world_rank
 from sglang.srt.layers.attention.nsa.utils import (
     is_nsa_prefill_cp_layer_split,
     is_owner_layer,
@@ -1522,43 +1522,45 @@ class Indexer(MultiPlatformOp):
                 forward_batch,
                 torch.npu.current_stream(),
             )
-            # 判断layer id是否在本地rank
-            # 添加broadcast去广播当前layer的k，在当前流上执行
-            if is_nsa_prefill_cp_layer_split():
-                start_layer = forward_batch.token_to_kv_pool.start_layer
-                end_layer = forward_batch.token_to_kv_pool.end_layer
-                total_layers = forward_batch.token_to_kv_pool.layer_num_override
-                owner = compute_layer_split_owner(layer_id, self.cp_size, total_layers)
-                cp_group = get_attn_cp_group()
-                src_global_rank = cp_group.ranks[owner]
+        # 判断layer id是否在本地rank
+        # 添加broadcast去广播当前layer的index_k，异步
+        if is_nsa_prefill_cp_layer_split():
+            start_layer = forward_batch.token_to_kv_pool.start_layer
+            start_layer_override = forward_batch.token_to_kv_pool.start_layer_override
+            total_layers = forward_batch.token_to_kv_pool.layer_num_override
+            # layer_id是全局的，需要减去start_layer才是local_layer_id
+            owner = compute_layer_split_owner(layer_id - start_layer_override, self.cp_size, total_layers)
+            cp_group = get_attn_cp_group()
+            src_global_rank = cp_group.ranks[owner]
+            # print(f'rank:{get_world_rank()}=={layer_id=}=={cp_group.ranks=}==={owner=}=={start_layer_override=}', flush=True)
 
-                if self.cp_rank == owner:
-                    forward_batch.token_to_kv_pool.set_index_k_buffer(
-                        layer_id, forward_batch.out_cache_loc, k
-                    )
+            if self.cp_rank == owner:
+                forward_batch.token_to_kv_pool.set_index_k_buffer(
+                    layer_id, forward_batch.out_cache_loc, k
+                )
 
-                    past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
-                else:
-                    past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(start_layer)
+                past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
+            else:
+                past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(start_layer)
 
-                broadcast_stream = get_indexer_weight_stream()
-                broadcast_stream.wait_stream(torch.npu.current_stream())
-                with torch.npu.stream(broadcast_stream):
-                    dist.broadcast(past_key_states, src=src_global_rank, group=cp_group.device_group)
-                    index_k_event = broadcast_stream.record_event()
+            broadcast_stream = get_indexer_weight_stream()
+            broadcast_stream.wait_stream(torch.npu.current_stream())
+            with torch.npu.stream(broadcast_stream):
+                dist.broadcast(past_key_states, src=src_global_rank, group=cp_group.device_group)
+                index_k_event = broadcast_stream.record_event()
 
-                # 获取当前rank layer的kv cache
-                # 在另一条流执行broadcast，插入record event；
-                # 在ascend_backend获取broadcast的结果和event，并wait_event
-                if self.cp_rank == owner:
-                    k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(layer_id)
-                else:
-                    k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(start_layer)
+            # 获取当前rank layer的kv cache
+            # 在另一条流执行broadcast，插入record event；
+            # 在ascend_backend获取broadcast的结果和event，并wait_event
+            if self.cp_rank == owner:
+                k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(layer_id)
+            else:
+                k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(start_layer)
 
-                with torch.npu.stream(broadcast_stream):
-                    dist.broadcast(k_nope, src=src_global_rank, group=cp_group.device_group)
-                    dist.broadcast(k_pe, src=src_global_rank, group=cp_group.device_group)
-                    kv_event = broadcast_stream.record_event()
+            with torch.npu.stream(broadcast_stream):
+                dist.broadcast(k_nope, src=src_global_rank, group=cp_group.device_group)
+                dist.broadcast(k_pe, src=src_global_rank, group=cp_group.device_group)
+                kv_event = broadcast_stream.record_event()
 
         if not is_nsa_prefill_cp_layer_split():
             forward_batch.token_to_kv_pool.set_index_k_buffer(
@@ -1666,7 +1668,8 @@ class Indexer(MultiPlatformOp):
                 if is_prefill
                 else block_table
             )
-
+            if is_nsa_prefill_cp_layer_split():
+                torch.npu.current_stream().wait_event(index_k_event)
             topk_indices = torch_npu.npu_lightning_indexer(
                 query=q.view(-1, self.n_heads, self.head_dim),
                 key=past_key_states,
@@ -1681,6 +1684,8 @@ class Indexer(MultiPlatformOp):
                 sparse_count=self.index_topk,
                 sparse_mode=3,
             )
+            if is_nsa_prefill_cp_layer_split():
+                return topk_indices[0], k_nope, k_pe, kv_event
             return topk_indices[0]
 
     def do_npu_cp_balance_indexer(

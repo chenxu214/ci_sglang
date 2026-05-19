@@ -10,7 +10,7 @@ from sglang.srt.mem_cache.memory_pool import (
 )
 from sglang.srt.utils import get_bool_env_var
 from sglang.srt.utils.common import is_npu
-
+from sglang.srt.distributed.parallel_state import get_world_group, get_world_rank
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
 
@@ -273,6 +273,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         enable_memory_saver: bool,
         start_layer: Optional[int] = None,
         end_layer: Optional[int] = None,
+        start_layer_override: Optional[int] = None,
         layer_num_override: Optional[int] = None,
     ):
         super(MLATokenToKVPool, self).__init__(
@@ -289,6 +290,11 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         self.kv_lora_rank = kv_lora_rank
         self.qk_rope_head_dim = qk_rope_head_dim
         self.index_head_dim = index_head_dim
+        self.start_layer_override = (
+            start_layer_override
+            if start_layer_override is not None
+            else start_layer
+        )
         self.layer_num_override = (
             layer_num_override
             if layer_num_override is not None
@@ -458,7 +464,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
 
         if self.store_dtype != self.dtype:
             index_k = index_k.view(self.store_dtype)
-
+        # print(f'=rank:{get_world_rank()}==={layer_id=}==={self.start_layer=}, {self.end_layer=}, {self.layer_num=}')
         torch_npu.npu_scatter_nd_update_(
             self.index_k_buffer[layer_id - self.start_layer].view(
                 -1, 1, self.index_head_dim

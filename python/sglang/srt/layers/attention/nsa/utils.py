@@ -80,10 +80,16 @@ def is_nsa_prefill_cp_round_robin_split():
     )
 
 
-def is_nsa_prefill_cp_layer_split() -> bool:
+def is_nsa_prefill_cp_layer_split(forward_batch=None) -> bool:
+    if forward_batch is None:
+        return (
+                is_nsa_enable_prefill_cp()
+                and get_global_server_args().enable_nsa_prefill_cp_layer_split
+        )
     return (
         is_nsa_enable_prefill_cp()
         and get_global_server_args().enable_nsa_prefill_cp_layer_split
+        and forward_batch.attn_cp_metadata is not None
     )
 
 
