@@ -28,6 +28,8 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMo
 from sglang.srt.speculative.spec_info import SpecInput
 from sglang.srt.utils import get_bool_env_var, get_current_device_stream_fast
 
+from sglang.srt.layers.attention.nsa.utils import is_nsa_prefill_cp_layer_split
+
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.model_runner import ModelRunner
@@ -722,6 +724,7 @@ class AscendAttnBackend(AttentionBackend):
         layer,
         actual_seq_qlen,
         actual_seq_lengths_kv,
+        kv_event=None,
     ):
         seq_len = q_nope.shape[0]
         split_len = (seq_len + 1) // 2
@@ -735,6 +738,8 @@ class AscendAttnBackend(AttentionBackend):
 
         actual_seq_qlen_prev, actual_seq_qlen_next = actual_seq_qlen
         actual_seq_lengths_kv_prev, actual_seq_lengths_kv_next = actual_seq_lengths_kv
+        if kv_event:
+            torch.npu.current_stream().wait_event(kv_event)
 
         attn_out_prev, _, _ = torch_npu.npu_sparse_flash_attention(
             query=q_nope_prev,
@@ -879,6 +884,9 @@ class AscendAttnBackend(AttentionBackend):
             and not forward_batch.forward_mode.is_draft_extend()
             and not forward_batch.forward_mode.is_target_verify()
         )
+        # 在mla_prepare已经提前save
+        if is_nsa_prefill_cp_layer_split():
+            save_kv_cache = False
 
         if save_kv_cache:
             k = k.view(-1, layer.tp_k_head_num, self.kv_lora_rank)
@@ -887,7 +895,12 @@ class AscendAttnBackend(AttentionBackend):
                 layer, forward_batch.out_cache_loc, k, k_rope
             )
         q_nope, q_pe = q, q_rope
-        k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+        # 开启layer_split后，kv不从这里获取，需要外面传入broadcast的结果，插入wait_event
+        if not is_nsa_prefill_cp_layer_split():
+            k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+        else:
+            topk_indices_pre, topk_indices_next, k_nope, k_pe, kv_event = topk_indices
+            topk_indices = (topk_indices_pre, topk_indices_next)
 
         if is_prefill:
             if self.forward_metadata.actual_seq_lengths_q is not None:
@@ -944,6 +957,7 @@ class AscendAttnBackend(AttentionBackend):
                 layer,
                 actual_seq_qlen,
                 actual_seq_lengths_kv,
+                kv_event=kv_event if is_nsa_prefill_cp_layer_split() else None,
             )
         else:
             attn_out, _, _ = torch_npu.npu_sparse_flash_attention(

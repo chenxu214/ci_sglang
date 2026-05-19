@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 from einops import rearrange
 
 from sglang.jit_kernel.fused_store_index_cache import (
@@ -34,6 +35,14 @@ from sglang.srt.utils import (
     is_hip,
     is_npu,
 )
+
+from sglang.srt.layers.attention.nsa.utils import (
+    is_nsa_prefill_cp_layer_split,
+    is_owner_layer,
+    compute_layer_split_owner
+)
+
+from sglang.srt.distributed.parallel_state import get_attn_cp_group
 
 logger = logging.getLogger(__name__)
 
@@ -1513,10 +1522,48 @@ class Indexer(MultiPlatformOp):
                 forward_batch,
                 torch.npu.current_stream(),
             )
+            # 判断layer id是否在本地rank
+            # 添加broadcast去广播当前layer的k，在当前流上执行
+            if is_nsa_prefill_cp_layer_split():
+                start_layer = forward_batch.token_to_kv_pool.start_layer
+                end_layer = forward_batch.token_to_kv_pool.end_layer
+                total_layers = forward_batch.token_to_kv_pool.layer_num_override
+                owner = compute_layer_split_owner(layer_id, self.cp_size, total_layers)
+                cp_group = get_attn_cp_group()
+                src_global_rank = cp_group.ranks[owner]
 
-        forward_batch.token_to_kv_pool.set_index_k_buffer(
-            layer_id, forward_batch.out_cache_loc, k
-        )
+                if self.cp_rank == owner:
+                    forward_batch.token_to_kv_pool.set_index_k_buffer(
+                        layer_id, forward_batch.out_cache_loc, k
+                    )
+
+                    past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
+                else:
+                    past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(start_layer)
+
+                broadcast_stream = get_indexer_weight_stream()
+                broadcast_stream.wait_stream(torch.npu.current_stream())
+                with torch.npu.stream(broadcast_stream):
+                    dist.broadcast(past_key_states, src=src_global_rank, group=cp_group.device_group)
+                    index_k_event = broadcast_stream.record_event()
+
+                # 获取当前rank layer的kv cache
+                # 在另一条流执行broadcast，插入record event；
+                # 在ascend_backend获取broadcast的结果和event，并wait_event
+                if self.cp_rank == owner:
+                    k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(layer_id)
+                else:
+                    k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(start_layer)
+
+                with torch.npu.stream(broadcast_stream):
+                    dist.broadcast(k_nope, src=src_global_rank, group=cp_group.device_group)
+                    dist.broadcast(k_pe, src=src_global_rank, group=cp_group.device_group)
+                    kv_event = broadcast_stream.record_event()
+
+        if not is_nsa_prefill_cp_layer_split():
+            forward_batch.token_to_kv_pool.set_index_k_buffer(
+                layer_id, forward_batch.out_cache_loc, k
+            )
         if is_prefill:
             if (
                 self.nsa_enable_prefill_cp
@@ -1580,8 +1627,8 @@ class Indexer(MultiPlatformOp):
                 actual_seq_lengths_q = (
                     forward_batch.attn_backend.forward_metadata.actual_seq_lengths_q
                 )
-
-        past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
+        if not is_nsa_prefill_cp_layer_split():
+            past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
 
         if self.rotary_emb.is_neox_style and self.alt_stream is not None:
             torch.npu.current_stream().wait_event(q_rope_event)
@@ -1607,7 +1654,11 @@ class Indexer(MultiPlatformOp):
                 actual_seq_lengths_q,
                 actual_seq_lengths_kv,
                 block_table,
+                index_k_event=index_k_event if is_nsa_prefill_cp_layer_split() else None,
             )
+            if is_nsa_prefill_cp_layer_split():
+                topk_indices_pre, topk_indices_next = topk_indices
+                return topk_indices_pre, topk_indices_next, k_nope, k_pe, kv_event
             return topk_indices
         else:
             block_table = (
@@ -1640,6 +1691,7 @@ class Indexer(MultiPlatformOp):
         actual_seq_lengths_q,
         actual_seq_lengths_kv,
         block_table,
+        index_k_event=None,
     ):
         q_prev, q_next = torch.split(q, (q.size(0) + 1) // 2, dim=0)
         weights_prev, weights_next = None, None
@@ -1652,7 +1704,8 @@ class Indexer(MultiPlatformOp):
 
         actual_seq_lengths_q_prev, actual_seq_lengths_q_next = actual_seq_lengths_q
         actual_seq_lengths_kv_prev, actual_seq_lengths_kv_next = actual_seq_lengths_kv
-
+        if index_k_event:
+            torch.npu.current_stream().wait_event(index_k_event)
         topk_indices_prev = torch_npu.npu_lightning_indexer(
             query=q_prev,
             key=past_key_states,

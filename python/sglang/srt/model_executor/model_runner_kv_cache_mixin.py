@@ -476,8 +476,9 @@ class ModelRunnerKVCacheMixin:
                         self.attn_cp_size,
                         self.num_effective_layers,
                     )
+                    end_layer = cp_end_layer + start_layer
                     start_layer += cp_start_layer
-                    end_layer += start_layer
+                    layer_num = cp_layer_num
 
                 self.token_to_kv_pool = NPUMLATokenToKVPool(
                     self.max_total_num_tokens,
@@ -493,6 +494,13 @@ class ModelRunnerKVCacheMixin:
                     enable_memory_saver=self.server_args.enable_memory_saver,
                     start_layer=start_layer,
                     end_layer=end_layer,
+                    **(
+                        dict(
+                            layer_num_override=self.num_effective_layers,
+                        )
+                        if is_nsa_prefill_cp_layer_split()
+                        else {}
+                    ),
                 )
             else:
                 from sglang.srt.hardware_backend.npu.memory_pool_npu import (

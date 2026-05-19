@@ -14,6 +14,8 @@ from sglang.srt.hardware_backend.npu.attention.mla_preprocess import (
 from sglang.srt.layers.attention.nsa.nsa_indexer import scattered_to_tp_attn_full
 from sglang.srt.layers.attention.nsa.utils import (
     nsa_use_prefill_cp,
+    is_nsa_prefill_cp_layer_split,
+    is_owner_layer,
 )
 from sglang.srt.layers.communicator import ScatterMode, get_attn_tp_context
 
@@ -231,6 +233,22 @@ def forward_mla_prepare_npu(
             k_nope, k_pe = m.rebuild_cp_kv_cache(
                 latent_cache, forward_batch, k_nope, k_pe
             )
+            # 在indexer计算之前保存当前层kv cache
+            # 方便在indexer里面执行异步broadcast
+            if (
+                is_nsa_prefill_cp_layer_split()
+                and is_owner_layer(
+                    m.layer_id,
+                    start_layer=forward_batch.token_to_kv_pool.start_layer,
+                    end_layer=forward_batch.token_to_kv_pool.end_layer,
+                )
+            ):
+                k = k_nope.view(-1, m.num_local_heads, m.kv_lora_rank)
+                k_rope = k_pe.view(-1, m.num_local_heads, m.qk_rope_head_dim)
+                forward_batch.token_to_kv_pool.set_kv_buffer(
+                    m.layer_id, forward_batch.out_cache_loc, k, k_rope
+                )
+
         topk_indices = None
         if q_lora is not None:
             topk_indices = m.indexer(

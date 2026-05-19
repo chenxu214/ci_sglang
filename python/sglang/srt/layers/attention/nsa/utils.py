@@ -87,19 +87,6 @@ def is_nsa_prefill_cp_layer_split() -> bool:
     )
 
 
-def get_nsa_cp_layer_split_assignment(layer_id: int, total_layers: int, cp_size: int) -> int:
-    # Returns the CP rank of the layer_id.
-    layers_per_rank = total_layers // cp_size
-    owner_rank = layer_id // layers_per_rank
-    return owner_rank
-
-
-def is_rank_own_layer(layer_id: int, total_layers: int, cp_size: int) -> bool:
-    # Returns whether the layer is in the local rank.
-    owner = get_nsa_cp_layer_split_assignment(layer_id, total_layers, cp_size)
-    return owner == get_attention_cp_rank()
-
-
 def compute_layer_split_range(cp_rank: int, cp_size: int, total_layers: int) -> Tuple[int, int, int]:
     """Compute (start_layer, end_layer, layer_num) for the given cp_rank.
 
@@ -128,6 +115,24 @@ def compute_layer_split_range(cp_rank: int, cp_size: int, total_layers: int) -> 
 
     end_layer = start_layer + layer_num
     return start_layer, end_layer, layer_num
+
+
+def is_owner_layer(layer_id: int, start_layer: int, end_layer: int) -> bool:
+    """Returns whether the layer is in the local rank."""
+    return start_layer <= layer_id < end_layer
+
+
+def compute_layer_split_owner(layer_id: int, cp_size: int, total_layers: int) -> int:
+    """Return which CP rank owns the given layer_id."""
+    base = total_layers // cp_size
+    remainder = total_layers % cp_size
+    start_extra = cp_size - remainder
+
+    threshold = start_extra * base
+    if layer_id < threshold:
+        return layer_id // base
+    else:
+        return start_extra + (layer_id - threshold) // (base + 1)
 
 
 def can_nsa_prefill_cp_round_robin_split(forward_batch: "ForwardBatch"):

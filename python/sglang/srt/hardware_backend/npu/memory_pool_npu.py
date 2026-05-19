@@ -273,6 +273,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         enable_memory_saver: bool,
         start_layer: Optional[int] = None,
         end_layer: Optional[int] = None,
+        layer_num_override: Optional[int] = None,
     ):
         super(MLATokenToKVPool, self).__init__(
             size=size,
@@ -288,6 +289,11 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         self.kv_lora_rank = kv_lora_rank
         self.qk_rope_head_dim = qk_rope_head_dim
         self.index_head_dim = index_head_dim
+        self.layer_num_override = (
+            layer_num_override
+            if layer_num_override is not None
+            else layer_num
+        )
 
         self.custom_mem_pool = None
 
