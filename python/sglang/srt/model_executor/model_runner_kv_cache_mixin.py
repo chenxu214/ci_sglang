@@ -484,7 +484,7 @@ class ModelRunnerKVCacheMixin:
                     end_layer = cp_end_layer + start_layer
                     start_layer += cp_start_layer
                     layer_num = cp_layer_num
-                    # print(f'=rank:{get_world_rank()}===={start_layer=}, {end_layer=}, {layer_num=}, {get_attention_cp_rank()=}')
+                    self.max_total_num_tokens = self.max_total_num_tokens * get_attention_cp_size()
 
                 self.token_to_kv_pool = NPUMLATokenToKVPool(
                     self.max_total_num_tokens,

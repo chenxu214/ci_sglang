@@ -35,7 +35,6 @@ from sglang.srt.utils import (
     is_hip,
     is_npu,
 )
-from sglang.srt.distributed.parallel_state import get_world_group, get_world_rank
 from sglang.srt.layers.attention.nsa.utils import (
     is_nsa_prefill_cp_layer_split,
     is_owner_layer,
@@ -1532,7 +1531,6 @@ class Indexer(MultiPlatformOp):
             owner = compute_layer_split_owner(layer_id - start_layer_override, self.cp_size, total_layers)
             cp_group = get_attn_cp_group()
             src_global_rank = cp_group.ranks[owner]
-            # print(f'rank:{get_world_rank()}=={layer_id=}=={cp_group.ranks=}==={owner=}=={start_layer_override=}', flush=True)
 
             if self.cp_rank == owner:
                 forward_batch.token_to_kv_pool.set_index_k_buffer(
@@ -1541,7 +1539,8 @@ class Indexer(MultiPlatformOp):
 
                 past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
             else:
-                past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(start_layer)
+                past_key_states_ = forward_batch.token_to_kv_pool.get_index_k_buffer(start_layer)
+                past_key_states = torch.empty_like(past_key_states_)
 
             broadcast_stream = get_indexer_weight_stream()
             broadcast_stream.wait_stream(torch.npu.current_stream())
@@ -1555,7 +1554,9 @@ class Indexer(MultiPlatformOp):
             if self.cp_rank == owner:
                 k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(layer_id)
             else:
-                k_nope, k_pe = forward_batch.token_to_kv_pool.get_kv_buffer(start_layer)
+                k_nope_, k_pe_ = forward_batch.token_to_kv_pool.get_kv_buffer(start_layer)
+                k_nope = torch.empty_like(k_nope_)
+                k_pe = torch.empty_like(k_pe_)
 
             with torch.npu.stream(broadcast_stream):
                 dist.broadcast(k_nope, src=src_global_rank, group=cp_group.device_group)
@@ -1670,6 +1671,7 @@ class Indexer(MultiPlatformOp):
             )
             if is_nsa_prefill_cp_layer_split():
                 torch.npu.current_stream().wait_event(index_k_event)
+
             topk_indices = torch_npu.npu_lightning_indexer(
                 query=q.view(-1, self.n_heads, self.head_dim),
                 key=past_key_states,
@@ -1711,6 +1713,7 @@ class Indexer(MultiPlatformOp):
         actual_seq_lengths_kv_prev, actual_seq_lengths_kv_next = actual_seq_lengths_kv
         if index_k_event:
             torch.npu.current_stream().wait_event(index_k_event)
+
         topk_indices_prev = torch_npu.npu_lightning_indexer(
             query=q_prev,
             key=past_key_states,

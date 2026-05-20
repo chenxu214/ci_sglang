@@ -426,7 +426,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
     ):
-        layer_id = layer.layer_id
+        layer_id = layer if isinstance(layer, int) else layer.layer_id
         if cache_k.dtype != self.dtype:
             cache_k = cache_k.to(self.dtype)
             cache_v = cache_v.to(self.dtype)

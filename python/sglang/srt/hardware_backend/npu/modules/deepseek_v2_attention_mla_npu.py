@@ -233,21 +233,6 @@ def forward_mla_prepare_npu(
             k_nope, k_pe = m.rebuild_cp_kv_cache(
                 latent_cache, forward_batch, k_nope, k_pe
             )
-            # 在indexer计算之前保存当前层kv cache
-            # 方便在indexer里面执行异步broadcast
-            if (
-                is_nsa_prefill_cp_layer_split()
-                and is_owner_layer(
-                    m.layer_id,
-                    start_layer=forward_batch.token_to_kv_pool.start_layer,
-                    end_layer=forward_batch.token_to_kv_pool.end_layer,
-                )
-            ):
-                k = k_nope.view(-1, m.num_local_heads, m.kv_lora_rank)
-                k_rope = k_pe.view(-1, m.num_local_heads, m.qk_rope_head_dim)
-                forward_batch.token_to_kv_pool.set_kv_buffer(
-                    m.layer_id, forward_batch.out_cache_loc, k, k_rope
-                )
 
         topk_indices = None
         if q_lora is not None:
@@ -421,7 +406,21 @@ def forward_dsa_prepare_npu(
             k_nope, k_pe = m.rebuild_cp_kv_cache(
                 latent_cache, forward_batch, k_nope, k_pe
             )
-
+    # 在indexer计算之前保存当前层kv cache
+    # 方便在indexer里面执行异步broadcast
+    if (
+        is_nsa_prefill_cp_layer_split()
+        and is_owner_layer(
+            m.layer_id,
+            start_layer=forward_batch.token_to_kv_pool.start_layer,
+            end_layer=forward_batch.token_to_kv_pool.end_layer,
+        )
+    ):
+        k = k_nope.view(-1, 1, m.kv_lora_rank)
+        k_rope = k_pe.view(-1, 1, m.qk_rope_head_dim)
+        forward_batch.token_to_kv_pool.set_kv_buffer(
+            m.layer_id, forward_batch.out_cache_loc, k, k_rope
+        )
     if m.skip_topk:
         topk_indices = prev_topk_indices
     else:
