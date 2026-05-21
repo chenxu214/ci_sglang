@@ -201,7 +201,12 @@ class DeepEPMoE(FusedMoE):
         if self.deprecate_flag:
             return super().run_moe_core(dispatch_output)
 
-        from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker, NpuDispatcherWithAllToAllVOutput
+        from sglang.srt.layers.moe.token_dispatcher import (
+            DispatchOutputChecker,
+            NpuDispatcherWithAllToAllVOutput,
+            NpuDispatcherWithAllGatherOutput,
+            MoEAllGatherCombineInput,
+        )
 
         if _is_npu:
             assert DispatchOutputChecker.format_is_deepep(dispatch_output)
@@ -227,6 +232,13 @@ class DeepEPMoE(FusedMoE):
                 group_list_type=dispatch_output.group_list_type,
                 combine_metadata=dispatch_output.combine_metadata,
                 dynamic_scale=dispatch_output.dynamic_scale,
+            )
+        if isinstance(dispatch_output, NpuDispatcherWithAllGatherOutput):
+            return MoEAllGatherCombineInput(
+                hidden_states=output,
+                topk_weights=dispatch_output.combine_metadata.topk_weights,
+                expanded_row_idx=dispatch_output.combine_metadata.expanded_row_idx,
+                original_shape=dispatch_output.combine_metadata.original_shape,
             )
         combine_input_wrapper = (
             DeepEPNormalCombineInput
@@ -289,7 +301,8 @@ class DeepEPMoE(FusedMoE):
         from sglang.srt.layers.moe.token_dispatcher import (
             DispatchOutputChecker,
             DeepEPNormalDispatchOutput,
-            NpuDispatcherWithAllToAllVOutput
+            NpuDispatcherWithAllToAllVOutput,
+            NpuDispatcherWithAllGatherOutput,
         )
 
         # NOTE: Ascend's Dispatch & Combine does not support FP16
@@ -357,6 +370,22 @@ class DeepEPMoE(FusedMoE):
                     group_list,
                     output_dtype,
                 )
+        elif DispatchOutputChecker.format_is_deepep_ag(dispatch_output):
+            if TYPE_CHECKING:
+                assert isinstance(dispatch_output, NpuDispatcherWithAllGatherOutput)
+            hidden_states = dispatch_output.hidden_states
+            hidden_states_scale = dispatch_output.dynamic_scale
+            group_list = dispatch_output.group_list
+            group_list_type = dispatch_output.group_list_type
+
+            hidden_states = self.quant_method.apply_without_routing_weights(
+                self,
+                hidden_states,
+                hidden_states_scale,
+                group_list_type,
+                group_list,
+                output_dtype,
+            )
         else:
             raise ValueError(f"Not Supported DeepEP format {dispatch_output.format}")
 

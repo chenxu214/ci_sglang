@@ -439,6 +439,8 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # For dumper: request IDs for cross-step sequence tracking
     rids: Optional[List[str]] = None
 
+    max_token_across_dp = None
+
     @classmethod
     def init_new(
         cls,
@@ -911,7 +913,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             self.is_extend_in_batch, global_num_tokens
         )
         self.dp_padding_mode = dp_padding_mode
-
+        self.max_token_across_dp = max(global_num_tokens)
         if dp_padding_mode.is_max_len():
             # when DP gather mode is all gather, we will use
             # all_gather_into_tensor to gather hidden states, where transferred
@@ -1071,6 +1073,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         tokens = self.input_ids.shape[0]
         rank_size = get_tensor_model_parallel_world_size()
         tokens_padded = (tokens + rank_size - 1) // rank_size * rank_size
+        self.max_token_across_dp = tokens_padded
         self._pad_inputs_to_size(model_runner, tokens_padded, self.batch_size)
 
     def post_forward_mlp_sync_batch(self, logits_output: LogitsProcessorOutput):

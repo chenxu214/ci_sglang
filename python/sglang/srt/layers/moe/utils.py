@@ -148,6 +148,7 @@ class DeepEPMode(Enum):
     NORMAL = "normal"
     LOW_LATENCY = "low_latency"
     AUTO = "auto"
+    ALLGATHER = "allgather"
 
     def enable_normal(self) -> bool:
         return self in [DeepEPMode.NORMAL, DeepEPMode.AUTO]
@@ -169,6 +170,9 @@ class DeepEPMode(Enum):
 
     def is_low_latency(self) -> bool:
         return self == DeepEPMode.LOW_LATENCY
+
+    def is_allgather(self) -> bool:
+        return self == DeepEPMode.ALLGATHER
 
     def is_auto(self) -> bool:
         return self == DeepEPMode.AUTO

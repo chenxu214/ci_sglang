@@ -49,6 +49,7 @@ from sglang.srt.distributed import (
     divide,
     get_moe_expert_parallel_world_size,
     get_pp_group,
+    get_tp_group,
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
 )
@@ -91,6 +92,7 @@ from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.moe import (
     get_moe_a2a_backend,
     get_moe_runner_backend,
+    get_deepep_mode,
     should_skip_post_experts_all_reduce,
     should_use_flashinfer_cutlass_moe_fp4_allgather,
 )
@@ -685,6 +687,8 @@ class DeepseekV2MoE(nn.Module):
         )
         self._fuse_shared_experts_inside_sbo = SboFlags.fuse_shared_experts_inside_sbo()
 
+        self.no_pad_num_tokens = 0
+
     def get_moe_weights(self):
         return [
             x.data
@@ -995,6 +999,30 @@ class DeepseekV2MoE(nn.Module):
         sbo_overlap_combine_flag = (
             sbo_enabled_flag and SboFlags.enable_combine_shared_two_stream_overlap()
         )
+        def _prepare_with_allgather(hidden_states, router_logits=None):
+            if get_deepep_mode().is_allgather():
+                # allgather
+                max_tokens_across_dp = forward_batch.max_token_across_dp
+                self.no_pad_num_tokens = hidden_states.shape[0]
+                pad_size = max_tokens_across_dp - self.no_pad_num_tokens
+                if router_logits is None:
+                    router_logits = torch.zeros((self.no_pad_num_tokens, self.num_experts), device=hidden_states.device)
+                if pad_size > 0:
+                    hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
+                    router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
+
+                # All-gather across DP group
+                hidden_states = get_tp_group().all_gather(hidden_states, 0)
+                router_logits = get_tp_group().all_gather(router_logits, 0)
+
+            return hidden_states, router_logits
+
+        def _finalize_with_allgather(final_hidden_states):
+            if get_deepep_mode().is_allgather():
+                final_hidden_states = get_tp_group().reduce_scatterv(final_hidden_states)
+                final_hidden_states = final_hidden_states[: self.no_pad_num_tokens]
+
+            return final_hidden_states
 
         if hidden_states.shape[0] > 0:
             # router_logits: (num_tokens, n_experts)
@@ -1013,6 +1041,9 @@ class DeepseekV2MoE(nn.Module):
                 if getattr(self, "is_hash", False)
                 else {}
             )
+            # deepep_mode == allgather
+            hidden_states, router_logits = _prepare_with_allgather(hidden_states, router_logits)
+
             topk_output = self.topk(
                 hidden_states,
                 router_logits,
@@ -1023,6 +1054,8 @@ class DeepseekV2MoE(nn.Module):
                 **topk_kwargs,
             )
         else:
+            # deepep_mode == allgather
+            hidden_states, router_logits = _prepare_with_allgather(hidden_states)
             topk_output = self.topk.empty_topk_output(hidden_states.device)
 
         if sbo_overlap_dispatch_flag:
@@ -1177,6 +1210,9 @@ class DeepseekV2MoE(nn.Module):
             hidden_states=hidden_states,
             topk_output=topk_output,
         )
+
+        # deepep_mode == allgather
+        final_hidden_states = _finalize_with_allgather(final_hidden_states)
 
         if (
             hidden_states.shape[0] > 0

@@ -146,6 +146,12 @@ class DispatchOutputChecker:
         return dispatch_output.format.is_deepep_ll()
 
     @staticmethod
+    def format_is_deepep_ag(
+            dispatch_output: DispatchOutput,
+    ) -> TypeGuard[DeepEPLLDispatchOutput]:
+        return dispatch_output.format.is_deepep_ag()
+
+    @staticmethod
     def format_is_deepep(
         dispatch_output: DispatchOutput,
     ) -> TypeGuard[Union[DeepEPNormalDispatchOutput, DeepEPLLDispatchOutput]]:
@@ -163,6 +169,7 @@ class DispatchOutputFormat(Enum):
     STANDARD = "standard"
     DEEPEP_NORMAL = "deepep_normal"
     DEEPEP_LL = "deepep_ll"
+    DEEPEP_AG = "deepep_allgather"
     FLASHINFER = "flashinfer"
 
     def is_standard(self) -> bool:
@@ -174,10 +181,14 @@ class DispatchOutputFormat(Enum):
     def is_deepep_ll(self) -> bool:
         return self == DispatchOutputFormat.DEEPEP_LL
 
+    def is_deepep_ag(self) -> bool:
+        return self == DispatchOutputFormat.DEEPEP_AG
+
     def is_deepep(self) -> bool:
         return self in [
             DispatchOutputFormat.DEEPEP_NORMAL,
             DispatchOutputFormat.DEEPEP_LL,
+            DispatchOutputFormat.DEEPEP_AG,
         ]
 
     def is_flashinfer(self) -> bool:
@@ -217,12 +228,19 @@ class CombineInputChecker:
         return combine_input.format == CombineInputFormat.DEEPEP_LL
 
     @staticmethod
+    def format_is_deepep_ag(
+            combine_input: CombineInput,
+    ) -> TypeGuard[DeepEPLLCombineInput]:
+        return combine_input.format == CombineInputFormat.DEEPEP_AG
+
+    @staticmethod
     def format_is_deepep(
         combine_input: CombineInput,
     ) -> TypeGuard[Union[DeepEPNormalCombineInput, DeepEPLLCombineInput]]:
         return combine_input.format in [
             CombineInputFormat.DEEPEP_NORMAL,
             CombineInputFormat.DEEPEP_LL,
+            CombineInputFormat.DEEPEP_AG
         ]
 
     @staticmethod
@@ -236,6 +254,7 @@ class CombineInputFormat(Enum):
     STANDARD = "standard"
     DEEPEP_NORMAL = "deepep_normal"
     DEEPEP_LL = "deepep_ll"
+    DEEPEP_AG = "deepep_ag"
     FLASHINFER = "flashinfer"
 
 
