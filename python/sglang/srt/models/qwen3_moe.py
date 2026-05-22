@@ -35,6 +35,7 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_rank,
     moe_expert_parallel_all_reduce,
     moe_tensor_model_parallel_all_reduce,
+    get_moe_ep_group,
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
@@ -50,6 +51,7 @@ from sglang.srt.layers.linear import (
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.moe import (
     get_moe_a2a_backend,
+    get_deepep_mode,
     should_skip_post_experts_all_reduce,
 )
 from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
@@ -352,9 +354,35 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
     def forward_deepep(
         self, hidden_states: torch.Tensor, forward_batch: ForwardBatch
     ) -> torch.Tensor:
+        def _prepare_with_allgather(hidden_states, router_logits=None):
+            if get_deepep_mode().is_allgather():
+                # allgather
+                max_tokens_across_dp = forward_batch.max_token_across_dp
+                self.no_pad_num_tokens = hidden_states.shape[0]
+                pad_size = max_tokens_across_dp - self.no_pad_num_tokens
+                if router_logits is None:
+                    router_logits = torch.zeros((self.no_pad_num_tokens, self.num_experts), device=hidden_states.device)
+                if pad_size > 0:
+                    hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
+                    router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
+
+                # All-gather across ep group
+                hidden_states = get_moe_ep_group().all_gather(hidden_states, 0)
+                router_logits = get_moe_ep_group().all_gather(router_logits, 0)
+
+            return hidden_states, router_logits
+
+        def _finalize_with_allgather(final_hidden_states):
+            if get_deepep_mode().is_allgather():
+                final_hidden_states = get_moe_ep_group().reduce_scatterv(final_hidden_states)
+                final_hidden_states = final_hidden_states[: self.no_pad_num_tokens]
+
+            return final_hidden_states
         if hidden_states.shape[0] > 0:
             # router_logits: (num_tokens, n_experts)
             router_logits, _ = self.gate(hidden_states)
+            # deepep_mode == allgather
+            hidden_states, router_logits = _prepare_with_allgather(hidden_states, router_logits)
             topk_output = self.topk(
                 hidden_states,
                 router_logits,
@@ -364,11 +392,15 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                 ),
             )
         else:
+            # deepep_mode == allgather
+            hidden_states, router_logits = _prepare_with_allgather(hidden_states)
             topk_output = self.topk.empty_topk_output(hidden_states.device)
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
             topk_output=topk_output,
         )
+        # deepep_mode == allgather
+        final_hidden_states = _finalize_with_allgather(final_hidden_states)
         return final_hidden_states
 
     def op_gate(self, state):
