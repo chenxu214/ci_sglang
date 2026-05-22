@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from typing import NamedTuple
+
 import numpy as np
 import torch
 
+from sglang.srt.distributed.parallel_state import get_moe_ep_group
 from sglang.srt.environ import envs
 from sglang.srt.layers.moe.token_dispatcher.base import (
     BaseDispatcher,
@@ -16,8 +18,6 @@ from sglang.srt.layers.moe.token_dispatcher.base import (
 from sglang.srt.layers.moe.token_dispatcher.deepep import DeepEPBuffer
 from sglang.srt.layers.moe.topk import TopKOutput
 from sglang.srt.layers.moe.utils import DeepEPMode, async_all_to_all
-
-from sglang.srt.distributed.parallel_state import get_moe_ep_group
 from sglang.srt.utils.common import get_bool_env_var, is_npu
 
 logger = logging.getLogger(__name__)
@@ -158,20 +158,25 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
 
         self.params_bytes = 2
 
-        self.expert_ids_per_ep_rank = torch.arange(
-            self.num_experts,
-            dtype=torch.int32,
-            device=torch.npu.current_device()
-        ) % self.num_local_experts
+        self.expert_ids_per_ep_rank = (
+            torch.arange(
+                self.num_experts, dtype=torch.int32, device=torch.npu.current_device()
+            )
+            % self.num_local_experts
+        )
 
         local_expert_indices_offset = self.ep_rank * self.num_local_experts
 
-        self.local_expert_indices = [local_expert_indices_offset + i for i in range(self.num_local_experts)]
-        assert len(self.local_expert_indices) == self.num_local_experts, "Invalid local expert indices"
+        self.local_expert_indices = [
+            local_expert_indices_offset + i for i in range(self.num_local_experts)
+        ]
+        assert (
+            len(self.local_expert_indices) == self.num_local_experts
+        ), "Invalid local expert indices"
         for i in range(len(self.local_expert_indices) - 1):
-            assert self.local_expert_indices[i] == self.local_expert_indices[i + 1] - 1, (
-                "local_expert_indices must be continuous"
-            )
+            assert (
+                self.local_expert_indices[i] == self.local_expert_indices[i + 1] - 1
+            ), "local_expert_indices must be continuous"
 
     def dispatch(
         self, hidden_states: torch.Tensor, topk_output: TopKOutput, **kwargs
@@ -193,9 +198,13 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
         # quant
         input_quant = get_bool_env_var("DEEP_NORMAL_MODE_USE_INT8_QUANT")
         if input_quant:
-            permutated_local_input_tokens, dynamic_scale = torch_npu.npu_dynamic_quant(permutated_local_input_tokens)
-            _, dynamic_scale_after_all2all, permute2_ep_all_to_all_handle = async_all_to_all(
-                dynamic_scale, output_splits, input_splits, self.ep_group
+            permutated_local_input_tokens, dynamic_scale = torch_npu.npu_dynamic_quant(
+                permutated_local_input_tokens
+            )
+            _, dynamic_scale_after_all2all, permute2_ep_all_to_all_handle = (
+                async_all_to_all(
+                    dynamic_scale, output_splits, input_splits, self.ep_group
+                )
             )
             permute2_ep_all_to_all_handle.wait()
             dynamic_scale.untyped_storage().resize_(0)
@@ -209,13 +218,15 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
         permutated_local_input_tokens.untyped_storage().resize_(0)
 
         # Postprocess
-        global_input_tokens, dynamic_scale_final, reversed_global_input_permutation_mapping = (
-            self._dispatch_postprocess(
-                global_input_tokens,
-                global_input_tokens_local_experts_indices,
-                input_quant,
-                dynamic_scale_after_all2all=dynamic_scale_after_all2all,
-            )
+        (
+            global_input_tokens,
+            dynamic_scale_final,
+            reversed_global_input_permutation_mapping,
+        ) = self._dispatch_postprocess(
+            global_input_tokens,
+            global_input_tokens_local_experts_indices,
+            input_quant,
+            dynamic_scale_after_all2all=dynamic_scale_after_all2all,
         )
 
         return NpuDispatcherWithAllToAllVOutput(
@@ -231,7 +242,7 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
                 reversed_global_input_permutation_mapping=reversed_global_input_permutation_mapping,
                 hidden_shape=hidden_shape,
                 hidden_shape_before_permute=hidden_shape_before_permute,
-            )
+            ),
         )
 
     def _dispatch_preprocess(self, hidden_states, topk_ids):
@@ -246,10 +257,12 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
         ) = self._preprocess(topk_ids)
         hidden_shape_before_permute = hidden_states.shape
 
-        permutated_local_input_tokens, reversed_local_input_permutation_mapping = torch_npu.npu_moe_token_permute(
-            tokens=hidden_states,
-            indices=topk_ids,
-            num_out_tokens=num_out_tokens,
+        permutated_local_input_tokens, reversed_local_input_permutation_mapping = (
+            torch_npu.npu_moe_token_permute(
+                tokens=hidden_states,
+                indices=topk_ids,
+                num_out_tokens=num_out_tokens,
+            )
         )
 
         return (
@@ -264,7 +277,9 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
         )
 
     def _preprocess(self, topk_ids: torch.Tensor):
-        num_local_tokens_per_expert = torch.histc(topk_ids, bins=self.num_experts, min=0, max=self.num_experts)
+        num_local_tokens_per_expert = torch.histc(
+            topk_ids, bins=self.num_experts, min=0, max=self.num_experts
+        )
 
         ep_size = self.ep_size
         num_out_tokens = topk_ids.numel()
@@ -276,25 +291,33 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
             .numpy()
         )
 
-        num_global_tokens_per_expert = get_moe_ep_group().all_gather(
-            num_local_tokens_per_expert
-        ).reshape(ep_size, self.num_experts)
+        num_global_tokens_per_expert = (
+            get_moe_ep_group()
+            .all_gather(num_local_tokens_per_expert)
+            .reshape(ep_size, self.num_experts)
+        )
 
         num_global_tokens_per_local_expert = num_global_tokens_per_expert[
-                                             :, self.local_expert_indices[0]: self.local_expert_indices[-1] + 1
-                                             ]
+            :, self.local_expert_indices[0] : self.local_expert_indices[-1] + 1
+        ]
         if num_global_tokens_per_local_expert is None:
-            raise ValueError("num_global_tokens_per_local_expert must be set before sum.")
+            raise ValueError(
+                "num_global_tokens_per_local_expert must be set before sum."
+            )
 
         output_splits = (
-            num_global_tokens_per_local_expert.sum(axis=-1).to(torch.device("cpu"), non_blocking=True).numpy()
+            num_global_tokens_per_local_expert.sum(axis=-1)
+            .to(torch.device("cpu"), non_blocking=True)
+            .numpy()
         )
         num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(axis=0)
 
         global_input_tokens_local_experts_indices = None
         if self.num_local_experts > 1:
             if num_global_tokens_per_local_expert is None:
-                raise ValueError("num_global_tokens_per_local_expert must be set before operations.")
+                raise ValueError(
+                    "num_global_tokens_per_local_expert must be set before operations."
+                )
             global_input_tokens_local_experts_indices = torch.repeat_interleave(
                 self.expert_ids_per_ep_rank, num_global_tokens_per_local_expert.ravel()
             )
@@ -322,19 +345,26 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
 
         # Handle quantized case
         if is_quant:
-            assert global_input_tokens_local_experts_indices is not None, (
-                "global_input_tokens_local_experts_indices must be provided"
-            )
+            assert (
+                global_input_tokens_local_experts_indices is not None
+            ), "global_input_tokens_local_experts_indices must be provided"
             dynamic_scale_after_all2all, _ = torch_npu.npu_moe_token_permute(
-                dynamic_scale_after_all2all.unsqueeze(-1), global_input_tokens_local_experts_indices
+                dynamic_scale_after_all2all.unsqueeze(-1),
+                global_input_tokens_local_experts_indices,
             )
             dynamic_scale_after_all2all = dynamic_scale_after_all2all.squeeze(-1)
 
         # Non-quantized case
-        global_input_tokens, reversed_global_input_permutation_mapping = torch_npu.npu_moe_token_permute(
-            global_input_tokens, global_input_tokens_local_experts_indices
+        global_input_tokens, reversed_global_input_permutation_mapping = (
+            torch_npu.npu_moe_token_permute(
+                global_input_tokens, global_input_tokens_local_experts_indices
+            )
         )
-        return global_input_tokens, dynamic_scale_after_all2all, reversed_global_input_permutation_mapping
+        return (
+            global_input_tokens,
+            dynamic_scale_after_all2all,
+            reversed_global_input_permutation_mapping,
+        )
 
     def combine(self, combine_input) -> torch.Tensor:
         # 1. Preprocess using metadata
@@ -353,28 +383,36 @@ class NpuDispatcherWithAllToAllV(BaseDispatcher):
         hidden_states.untyped_storage().resize_(0)
 
         # 3. Postprocess using metadata
-        output = self._combine_postprocess(permutated_local_input_tokens, combine_metadata)
+        output = self._combine_postprocess(
+            permutated_local_input_tokens, combine_metadata
+        )
 
         return output
 
     def _combine_preprocess(
-            self, hidden_states: torch.Tensor, combine_metadata
+        self, hidden_states: torch.Tensor, combine_metadata
     ) -> torch.Tensor:
         # Unpermutation 2: expert output to AlltoAll input
         rev_global = combine_metadata.reversed_global_input_permutation_mapping
-        if hidden_states.shape[0] > 0 and self.num_local_experts > 1 and rev_global is not None:
+        if (
+            hidden_states.shape[0] > 0
+            and self.num_local_experts > 1
+            and rev_global is not None
+        ):
             hidden_states = torch_npu.npu_moe_token_unpermute(hidden_states, rev_global)
         return hidden_states
 
     def _combine_postprocess(
-            self,
-            permutated_local_input_tokens: torch.Tensor,
-            combine_metadata,
+        self,
+        permutated_local_input_tokens: torch.Tensor,
+        combine_metadata,
     ) -> torch.Tensor:
         # Unpermutation 1: AlltoAll output to output
         output = torch_npu.npu_moe_token_unpermute(
             permuted_tokens=permutated_local_input_tokens,
-            sorted_indices=combine_metadata.reversed_local_input_permutation_mapping.to(torch.int32),
+            sorted_indices=combine_metadata.reversed_local_input_permutation_mapping.to(
+                torch.int32
+            ),
             probs=combine_metadata.topk_weights,
             restore_shape=combine_metadata.hidden_shape_before_permute,
         )
@@ -417,7 +455,9 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         num_local_experts: int = None,
         hidden_size: int = None,
         params_dtype: torch.dtype = None,
-        deepep_mode: DeepEPMode = DeepEPMode.ALL_GATHER,
+        deepep_mode: DeepEPMode = DeepEPMode.ALLGATHER,
+        async_finish: bool = False,
+        return_recv_hook: bool = False,
     ):
         self.group = group
         self.router_topk = router_topk
@@ -432,16 +472,15 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         self.ep_group = get_moe_ep_group()
 
     def dispatch(
-            self, hidden_states: torch.Tensor, topk_output: TopKOutput, **kwargs
+        self, hidden_states: torch.Tensor, topk_output: TopKOutput, **kwargs
     ) -> DispatchOutput:
         input_quant = get_bool_env_var("DEEP_NORMAL_MODE_USE_INT8_QUANT")
         if input_quant:
             hidden_states, pertoken_scale = torch_npu.npu_dynamic_quant(hidden_states)
 
-        hidden_states = topk_output.hidden_states
-        topk_output = topk_output.topk_output
+        topk_weights = topk_output.topk_weights
+        topk_ids = topk_output.topk_ids
 
-        topk_weights, topk_ids, _ = topk_output
         top_k = topk_ids.shape[1]
         original_shape = hidden_states.shape
         topk_weights = topk_weights

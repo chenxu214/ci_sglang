@@ -162,6 +162,7 @@ assert isinstance(DeepEPLLCombineInput, CombineInput)
 class DeepEPDispatchMode(IntEnum):
     NORMAL = auto()
     LOW_LATENCY = auto()
+    ALL_GATHER = auto()
 
 
 class DeepEPBuffer:
@@ -281,11 +282,17 @@ class DeepEPBuffer:
         cls._dispatch_mode = DeepEPDispatchMode.LOW_LATENCY
 
     @classmethod
+    def set_dispatch_mode_as_all_gather(cls):
+        cls._dispatch_mode = DeepEPDispatchMode.ALL_GATHER
+
+    @classmethod
     def set_dispatch_mode(cls, mode: DeepEPMode):
         if mode.is_low_latency():
             cls.set_dispatch_mode_as_low_latency()
         elif mode.is_normal():
             cls.set_dispatch_mode_as_normal()
+        elif mode.is_allgather():
+            cls.set_dispatch_mode_as_all_gather()
         else:
             raise Exception("unsupported mode")
 

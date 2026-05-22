@@ -21,9 +21,12 @@ from sglang.srt.layers.moe.token_dispatcher.flashinfer import (
     FlashinferDispatchOutput,
 )
 from sglang.srt.layers.moe.token_dispatcher.fuseep import (
-    NpuFuseEPDispatcher,
-    NpuDispatcherWithAllToAllVOutput,
+    MoEAllGatherCombineInput,
+    NpuDispatcherWithAllGather,
+    NpuDispatcherWithAllGatherOutput,
     NpuDispatcherWithAllToAllV,
+    NpuDispatcherWithAllToAllVOutput,
+    NpuFuseEPDispatcher,
 )
 from sglang.srt.layers.moe.token_dispatcher.mooncake import (
     MooncakeCombineInput,

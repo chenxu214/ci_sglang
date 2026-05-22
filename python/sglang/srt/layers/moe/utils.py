@@ -156,6 +156,9 @@ class DeepEPMode(Enum):
     def enable_low_latency(self) -> bool:
         return self in [DeepEPMode.LOW_LATENCY, DeepEPMode.AUTO]
 
+    def enable_allgather(self) -> bool:
+        return self in [DeepEPMode.ALLGATHER]
+
     def resolve(self, is_extend_in_batch: bool) -> DeepEPMode:
         if self != DeepEPMode.AUTO:
             return self

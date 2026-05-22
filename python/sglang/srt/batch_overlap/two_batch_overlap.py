@@ -1037,9 +1037,19 @@ class MaybeTboDeepEPDispatcher(BaseDispatcher):
         super().__init__()
         num_inner_dispatchers = 2 if is_tbo_enabled() else 1
         if get_moe_a2a_backend().is_deepep():
-            self._inners = [
-                DeepEPDispatcher(**kwargs) for _ in range(num_inner_dispatchers)
-            ]
+            if get_deepep_mode().is_allgather():
+                from sglang.srt.layers.moe.token_dispatcher.fuseep import (
+                    NpuDispatcherWithAllGather,
+                )
+
+                self._inners = [
+                    NpuDispatcherWithAllGather(**kwargs)
+                    for _ in range(num_inner_dispatchers)
+                ]
+            else:
+                self._inners = [
+                    DeepEPDispatcher(**kwargs) for _ in range(num_inner_dispatchers)
+                ]
         elif get_moe_a2a_backend().is_mooncake():
             self._inners = [
                 MooncakeEPDispatcher(**kwargs) for _ in range(num_inner_dispatchers)
