@@ -374,8 +374,13 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
         def _finalize_with_allgather(final_hidden_states):
             if get_deepep_mode().is_allgather():
-                final_hidden_states = get_moe_ep_group().reduce_scatterv(final_hidden_states)
-                final_hidden_states = final_hidden_states[: self.no_pad_num_tokens]
+                out_tensor = torch.zeros(
+                    (forward_batch.max_token_across_dp, final_hidden_states.shape[1]),
+                    device=final_hidden_states.device,
+                    dtype=final_hidden_states.dtype,
+                )
+                get_moe_ep_group().reduce_scatter_tensor(out_tensor, final_hidden_states)
+                final_hidden_states = out_tensor[: self.no_pad_num_tokens]
 
             return final_hidden_states
         if hidden_states.shape[0] > 0:
