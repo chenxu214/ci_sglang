@@ -50,6 +50,7 @@ from sglang.srt.distributed import (
     get_moe_expert_parallel_world_size,
     get_pp_group,
     get_tp_group,
+    get_moe_ep_group,
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
 )
@@ -1011,15 +1012,15 @@ class DeepseekV2MoE(nn.Module):
                     hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
                     router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
 
-                # All-gather across DP group
-                hidden_states = get_tp_group().all_gather(hidden_states, 0)
-                router_logits = get_tp_group().all_gather(router_logits, 0)
+                # All-gather across ep group
+                hidden_states = get_moe_ep_group().all_gather(hidden_states, 0)
+                router_logits = get_moe_ep_group().all_gather(router_logits, 0)
 
             return hidden_states, router_logits
 
         def _finalize_with_allgather(final_hidden_states):
             if get_deepep_mode().is_allgather():
-                final_hidden_states = get_tp_group().reduce_scatterv(final_hidden_states)
+                final_hidden_states = get_moe_ep_group().reduce_scatterv(final_hidden_states)
                 final_hidden_states = final_hidden_states[: self.no_pad_num_tokens]
 
             return final_hidden_states
