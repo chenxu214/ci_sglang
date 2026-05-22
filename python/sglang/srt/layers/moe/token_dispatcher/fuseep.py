@@ -487,9 +487,9 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
 
         num_tokens = hidden_states.shape[:-1].numel()
 
-        first_expert_idx = 0
-        last_expert_idx = self.num_experts
-        global_num_experts = self.num_experts
+        first_expert_idx = self.ep_rank * self.num_local_experts
+        last_expert_idx = first_expert_idx + self.num_local_experts
+        global_num_experts = self.num_local_experts
 
         sorted_hidden_states, expanded_row_idx, expert_tokens, pertoken_scale = (
             torch.ops.npu.npu_moe_init_routing_v2(
@@ -508,14 +508,14 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         expert_tokens = expert_tokens.to(torch.int64)
         group_list_type = 1
 
-        local_start = self.ep_rank * self.num_local_experts
-        local_end = (self.ep_rank + 1) * self.num_local_experts
-        local_expert_tokens = expert_tokens[local_start:local_end]
+        # local_start = self.ep_rank * self.num_local_experts
+        # local_end = (self.ep_rank + 1) * self.num_local_experts
+        # local_expert_tokens = expert_tokens[local_start:local_end]
 
         return NpuDispatcherWithAllGatherOutput(
             hidden_states=sorted_hidden_states,
             dynamic_scale=pertoken_scale if input_quant else None,
-            group_list=local_expert_tokens,
+            group_list=expert_tokens,
             group_list_type=group_list_type,
             combine_metadata=MoEAllGatherCombineInput(
                 hidden_states=sorted_hidden_states,
