@@ -489,7 +489,7 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
 
         first_expert_idx = self.ep_rank * self.num_local_experts
         last_expert_idx = first_expert_idx + self.num_local_experts
-        global_num_experts = self.num_local_experts
+        global_num_experts = self.num_experts
 
         sorted_hidden_states, expanded_row_idx, expert_tokens, pertoken_scale = (
             torch.ops.npu.npu_moe_init_routing_v2(
