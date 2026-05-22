@@ -501,7 +501,7 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
                 expert_tokens_num_type=1,
                 expert_tokens_num_flag=True,
                 active_expert_range=[first_expert_idx, last_expert_idx],
-                quant_mode=1 if input_quant else 0,
+                quant_mode=1 if input_quant else -1,
             )
         )
 
