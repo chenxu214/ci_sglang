@@ -475,8 +475,8 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         self, hidden_states: torch.Tensor, topk_output: TopKOutput, **kwargs
     ) -> DispatchOutput:
         input_quant = get_bool_env_var("DEEP_NORMAL_MODE_USE_INT8_QUANT")
-        if input_quant:
-            hidden_states, pertoken_scale = torch_npu.npu_dynamic_quant(hidden_states)
+        # if input_quant:
+        #     hidden_states, pertoken_scale = torch_npu.npu_dynamic_quant(hidden_states)
 
         topk_weights = topk_output.topk_weights
         topk_ids = topk_output.topk_ids
@@ -495,7 +495,7 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
             torch.ops.npu.npu_moe_init_routing_v2(
                 hidden_states,
                 topk_ids,
-                scale=pertoken_scale,
+                scale=None,
                 active_num=num_tokens * top_k,
                 expert_num=global_num_experts,
                 expert_tokens_num_type=1,
