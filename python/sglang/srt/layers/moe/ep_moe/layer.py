@@ -237,8 +237,15 @@ class DeepEPMoE(FusedMoE):
             return MoEAllGatherCombineInput(
                 hidden_states=output,
                 topk_weights=dispatch_output.combine_metadata.topk_weights,
-                expanded_row_idx=dispatch_output.combine_metadata.expanded_row_idx,
+                reversed_local_input_permutation_mapping=dispatch_output.combine_metadata.reversed_local_input_permutation_mapping,
                 original_shape=dispatch_output.combine_metadata.original_shape,
+                num_original_tokens=dispatch_output.combine_metadata.num_original_tokens,
+                total_tokens=dispatch_output.combine_metadata.total_tokens,
+                ep_rank=dispatch_output.combine_metadata.ep_rank,
+                ep_size=dispatch_output.combine_metadata.ep_size,
+                local_start=dispatch_output.combine_metadata.local_start,
+                local_end=dispatch_output.combine_metadata.local_end,
+                top_k=dispatch_output.combine_metadata.top_k,
             )
         combine_input_wrapper = (
             DeepEPNormalCombineInput

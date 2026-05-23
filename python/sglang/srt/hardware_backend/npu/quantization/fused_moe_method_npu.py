@@ -864,11 +864,9 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             group_list_type=group_list_type,
             output_dtype=output_dtype,
         )[0]
-
         hidden_states, swiglu_out_scale = swiglu_quant(
             hidden_states, group_list, group_list_type
         )
-
         hidden_states = torch.ops.npu.npu_grouped_matmul(
             x=[hidden_states],
             weight=[layer.w2_weight],
@@ -881,7 +879,6 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             group_list_type=group_list_type,
             output_dtype=output_dtype,
         )[0]
-
         return hidden_states
 
 

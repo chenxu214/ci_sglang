@@ -2028,6 +2028,9 @@ class DeepseekV2DecoderLayer(nn.Module):
             _mlp_ctx = nullcontext()
 
         with _mlp_ctx:
+            # DEBUG: capture pre-MLP hidden_states for first N MoE layers
+            # if self._is_layer_sparse(self.layer_id, False) and self.layer_id < 10:
+            #     _hs_pre = hidden_states.detach()
             hidden_states = self.mlp(
                 hidden_states,
                 forward_batch,
@@ -2035,6 +2038,16 @@ class DeepseekV2DecoderLayer(nn.Module):
                 use_reduce_scatter,
                 gemm_output_zero_allocator,
             )
+            # DEBUG: compare pre/post MLP
+            # if self._is_layer_sparse(self.layer_id, False) and self.layer_id < 10:
+            #     _hs_post = hidden_states.detach()
+            #     rank = torch.distributed.get_rank()
+            #     print(f"[LAYER-{self.layer_id}][rank-{rank}] pre-MLP:  shape={_hs_pre.shape}, "
+            #           f"min={_hs_pre.min().item():.6f}, max={_hs_pre.max().item():.6f}, "
+            #           f"mean={_hs_pre.mean().item():.6f}")
+            #     print(f"[LAYER-{self.layer_id}][rank-{rank}] post-MLP: shape={_hs_post.shape}, "
+            #           f"min={_hs_post.min().item():.6f}, max={_hs_post.max().item():.6f}, "
+            #           f"mean={_hs_post.mean().item():.6f}")
 
         if not self.nsa_enable_prefill_cp and should_allreduce_fusion:
             hidden_states._sglang_needs_allreduce_fusion = True

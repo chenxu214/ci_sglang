@@ -437,8 +437,15 @@ class NpuDispatcherWithAllGatherOutput(NamedTuple):
 class MoEAllGatherCombineInput(NamedTuple):
     hidden_states: torch.Tensor
     topk_weights: torch.Tensor
-    expanded_row_idx: torch.Tensor
+    reversed_local_input_permutation_mapping: torch.Tensor  # full mapping (not sliced), for npu_moe_token_unpermute
     original_shape: torch.Size
+    num_original_tokens: int
+    total_tokens: int
+    ep_rank: int
+    ep_size: int
+    local_start: int  # start index in full permuted tokens for local experts
+    local_end: int    # end index in full permuted tokens for local experts
+    top_k: int        # topk value, needed for padding
 
     @property
     def format(self) -> DispatchOutputFormat:
@@ -475,64 +482,157 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         self, hidden_states: torch.Tensor, topk_output: TopKOutput, **kwargs
     ) -> DispatchOutput:
         input_quant = get_bool_env_var("DEEP_NORMAL_MODE_USE_INT8_QUANT")
-        # if input_quant:
-        #     hidden_states, pertoken_scale = torch_npu.npu_dynamic_quant(hidden_states)
 
         topk_weights = topk_output.topk_weights
         topk_ids = topk_output.topk_ids
-
         top_k = topk_ids.shape[1]
         original_shape = hidden_states.shape
-        topk_weights = topk_weights
-
-        num_tokens = hidden_states.shape[:-1].numel()
+        # NOTE: hidden_states, topk_ids, topk_weights are already allgathered by
+        # _prepare_with_allgather in DeepseekV2MoE.forward_deepep, so we use them directly.
+        num_original_tokens = hidden_states.shape[0]
 
         first_expert_idx = self.ep_rank * self.num_local_experts
         last_expert_idx = first_expert_idx + self.num_local_experts
         global_num_experts = self.num_experts
 
-        sorted_hidden_states, expanded_row_idx, expert_tokens, pertoken_scale = (
-            torch.ops.npu.npu_moe_init_routing_v2(
-                hidden_states,
-                topk_ids,
-                scale=None,
-                active_num=num_tokens * top_k,
-                expert_num=global_num_experts,
-                expert_tokens_num_type=1,
-                expert_tokens_num_flag=True,
-                active_expert_range=[first_expert_idx, last_expert_idx],
-                quant_mode=1 if input_quant else -1,
-            )
+        # Step 1: use the already-allgathered data (no need to allgather again)
+        hidden_states_all = hidden_states
+        topk_ids_all = topk_ids
+        topk_weights_all = topk_weights
+        total_tokens = hidden_states_all.shape[0]
+        active_num = total_tokens * top_k
+
+        # Step 2: permute tokens by expert globally
+        permuted_tokens, reversed_mapping = torch_npu.npu_moe_token_permute(
+            hidden_states_all,
+            topk_ids_all,
+            num_out_tokens=active_num,
         )
+        # permuted_tokens: (total_tokens * top_k, hidden_size), sorted by global expert idx
+        # reversed_mapping: (total_tokens * top_k,), encodes (token_idx, topk_slot)
 
-        expert_tokens = expert_tokens.to(torch.int64)
-        group_list_type = 1
+        # Step 3: count tokens per expert globally
+        tokens_per_expert = torch.bincount(
+            topk_ids_all.flatten(), minlength=global_num_experts
+        ).to(torch.int64)
 
-        # local_start = self.ep_rank * self.num_local_experts
-        # local_end = (self.ep_rank + 1) * self.num_local_experts
-        # local_expert_tokens = expert_tokens[local_start:local_end]
+        # Step 4: slice out local expert tokens from the globally permuted output
+        cumsum = tokens_per_expert.cumsum(0)
+        local_start = 0 if first_expert_idx == 0 else cumsum[first_expert_idx - 1].item()
+        local_end = cumsum[last_expert_idx - 1].item()
+        local_permuted = permuted_tokens[local_start:local_end]
+
+        # DEBUG: print dispatch stats
+        # print(f"[ALLGATHER-DISPATCH] rank={self.ep_rank}/{self.ep_size}, "
+        #       f"num_original_tokens={num_original_tokens}, total_tokens={total_tokens}, "
+        #       f"active_num={active_num}, top_k={top_k}")
+        # print(f"[ALLGATHER-DISPATCH] rank={self.ep_rank}, "
+        #       f"first_expert={first_expert_idx}-{last_expert_idx}, "
+        #       f"local_start={local_start}, local_end={local_end}, "
+        #       f"local_tokens={local_end - local_start}")
+        non_zero = [(i, v.item()) for i, v in enumerate(tokens_per_expert) if v.item() > 0]
+        # print(f"[ALLGATHER-DISPATCH] rank={self.ep_rank}, "
+        #       f"expert_token_counts(nonzero)={non_zero}")
+
+        # Save the FULL reversed_mapping (not sliced) for combine's npu_moe_token_unpermute
+        # which requires dim(0) == total_tokens * top_k
+
+        # Step 5: quantization (if enabled)
+        if input_quant:
+            local_permuted, pertoken_scale = torch_npu.npu_dynamic_quant(local_permuted)
+        else:
+            pertoken_scale = None
+
+        # Step 6: build group_list for grouped_matmul
+        # group_type=0 means direct 1:1 mapping: group_list[i] -> weight[i]
+        # So we need only the local expert token counts (num_local_experts entries)
+        expert_tokens = tokens_per_expert[first_expert_idx:last_expert_idx]
 
         return NpuDispatcherWithAllGatherOutput(
-            hidden_states=sorted_hidden_states,
+            hidden_states=local_permuted,
             dynamic_scale=pertoken_scale if input_quant else None,
             group_list=expert_tokens,
-            group_list_type=group_list_type,
+            group_list_type=1,
             combine_metadata=MoEAllGatherCombineInput(
-                hidden_states=sorted_hidden_states,
-                topk_weights=topk_weights,
-                expanded_row_idx=expanded_row_idx,
+                hidden_states=local_permuted,
+                topk_weights=topk_weights_all,
+                reversed_local_input_permutation_mapping=reversed_mapping,  # FULL mapping
                 original_shape=original_shape,
+                num_original_tokens=num_original_tokens,
+                total_tokens=total_tokens,
+                ep_rank=self.ep_rank,
+                ep_size=self.ep_size,
+                local_start=local_start,
+                local_end=local_end,
+                top_k=top_k,
             ),
         )
 
     def combine(self, combine_input) -> torch.Tensor:
         assert combine_input.original_shape is not None
-        final_hidden_states = torch.ops.npu.npu_moe_token_unpermute(
-            permuted_tokens=combine_input.hidden_states,
-            sorted_indices=torch.abs(combine_input.expanded_row_idx),
-            probs=combine_input.topk_weights,
-        )
-        if len(combine_input.original_shape) == 3:
-            final_hidden_states = final_hidden_states.view(combine_input.original_shape)
 
-        return final_hidden_states
+        # combine_input.hidden_states: (N_local, hidden_size) - GMM output for local experts
+        # combine_input.reversed_local_input_permutation_mapping: (total_tokens * top_k,) - FULL mapping from npu_moe_token_permute
+        # combine_input.topk_weights: (total_tokens, top_k) - allgathered weights
+        # combine_input.total_tokens: total tokens across all ranks after allgather
+        # combine_input.num_original_tokens: tokens originally on this rank
+        # combine_input.local_start / local_end: indices of local expert tokens in full permuted output
+
+        gmm_output = combine_input.hidden_states
+        full_reversed_mapping = combine_input.reversed_local_input_permutation_mapping  # FULL, shape (total_tokens * top_k,)
+        topk_weights = combine_input.topk_weights  # (total_tokens, top_k)
+        total_tokens = combine_input.total_tokens
+        top_k = combine_input.top_k
+        hidden_size = gmm_output.shape[-1]
+        dtype = gmm_output.dtype
+        device = gmm_output.device
+        local_start = combine_input.local_start
+        local_end = combine_input.local_end
+        num_original_tokens = combine_input.num_original_tokens
+        ep_size = combine_input.ep_size
+
+        # Step 1: pad local GMM output to full permuted tokens size
+        # npu_moe_token_unpermute requires dim(0) == total_tokens * top_k
+        full_permuted = torch.zeros(
+            (total_tokens * top_k, hidden_size), dtype=dtype, device=device
+        )
+        full_permuted[local_start:local_end] = gmm_output
+
+        # DEBUG: gmm output stats
+        # print(f"[ALLGATHER-COMBINE] rank={combine_input.ep_rank}/{ep_size}, "
+        #       f"gmm_output shape={gmm_output.shape}, "
+        #       f"min={gmm_output.min().item():.6f}, max={gmm_output.max().item():.6f}, "
+        #       f"mean={gmm_output.mean().item():.6f}")
+        # print(f"[ALLGATHER-COMBINE] rank={combine_input.ep_rank}, "
+        #       f"full_permuted shape={full_permuted.shape}, "
+        #       f"local_range=[{local_start}:{local_end}], "
+        #       f"nonzero_ratio={(full_permuted.abs().sum(dim=-1) > 0).float().mean().item():.4f}, "
+        #       f"mean={full_permuted.mean().item():.6f}")
+
+        # Step 2: unpermute full tensor with weight application
+        # This scatters all expert outputs (local=GMM result, remote=zeros) to token positions
+        full_output = torch_npu.npu_moe_token_unpermute(
+            permuted_tokens=full_permuted,
+            sorted_indices=full_reversed_mapping.to(torch.int32),
+            probs=topk_weights,
+            restore_shape=(total_tokens, hidden_size),
+        )
+        # full_output: (total_tokens, hidden_size) with weighted partial results from local experts
+
+        # DEBUG: after unpermute
+        # print(f"[ALLGATHER-COMBINE] rank={combine_input.ep_rank}, "
+        #       f"full_output shape={full_output.shape}, dtype={full_output.dtype}, "
+        #       f"min={full_output.min().item():.6f}, max={full_output.max().item():.6f}, "
+        #       f"mean={full_output.mean().item():.6f}")
+
+        # Step 3: return full_output directly, leaving reduction to _finalize_with_allgather
+        # which calls reduce_scatter_tensor to sum partial contributions and scatter back.
+        # Each rank's full_output only contains this rank's local expert contributions
+        # (remote expert regions are zeros), so reduce_scatter sums across ranks correctly.
+
+        # DEBUG: after combine (before _finalize_with_allgather)
+        # print(f"[ALLGATHER-COMBINE] rank={combine_input.ep_rank}, "
+        #       f"returning full_output shape={full_output.shape}, "
+        #       f"will be reduce_scattered by _finalize_with_allgather")
+
+        return full_output
