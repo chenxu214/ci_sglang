@@ -1059,6 +1059,15 @@ class CudaGraphRunner:
             lora_ids=lora_ids,
         )
 
+        if self.require_mlp_tp_gather:
+            forward_batch.max_token_across_dp = num_tokens
+
+        if forward_batch.max_token_across_dp is None:
+            from sglang.srt.layers.moe.utils import get_deepep_mode
+
+            if get_deepep_mode().is_allgather():
+                forward_batch.max_token_across_dp = num_tokens
+
         # HiSparse: set coordinator so the hisparse code path is captured into the graph
         forward_batch.hisparse_coordinator = self.model_runner.hisparse_coordinator
         if forward_batch.hisparse_coordinator is not None:
