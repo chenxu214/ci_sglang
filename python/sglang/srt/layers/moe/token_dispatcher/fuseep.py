@@ -498,37 +498,41 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         total_tokens = hidden_states_all.shape[0]
         active_num = total_tokens * top_k
 
-        # 1. 在全局范围 [0, global_num_experts] 内调用 npu_moe_init_routing_v2
-        # 这可以同时替代原来的 npu_moe_token_permute 以及之后的 torch.bincount
-        # 且输出的数据排布与映射索引与原版完全对齐
-        expanded_x, expanded_row_idx, tokens_per_expert, _ = torch_npu.npu_moe_init_routing_v2(
+        _, expanded_row_idx, tokens_per_expert, _ = torch_npu.npu_moe_init_routing_v2(
             hidden_states_all,
-            expert_idx=topk_ids_all.to(torch.int32),  # 必须为 int32 类型
+            expert_idx=topk_ids_all.to(torch.int32),
             scale=None,
             offset=None,
             active_num=active_num,
             expert_num=global_num_experts,
-            expert_tokens_num_type=1,                # 1 代表 count 模式
-            expert_tokens_num_flag=True,              # 输出每个专家的 token 数量
-            active_expert_range=[0, global_num_experts],  # 设置为全局，确保 reversed_mapping 完整
-            quant_mode=-1                             # 保持非量化输出，在 Python 侧精确量化以确保数值无偏
+            expert_tokens_num_type=1,
+            expert_tokens_num_flag=True,
+            active_expert_range=[0, global_num_experts],
+            quant_mode=-1,
         )
 
-        tokens_per_expert = tokens_per_expert.to(torch.int64)
+        local_permuted, _, expert_tokens, _ = torch_npu.npu_moe_init_routing_v2(
+            hidden_states_all,
+            expert_idx=topk_ids_all.to(torch.int32),
+            scale=None,
+            offset=None,
+            active_num=active_num,
+            expert_num=global_num_experts,
+            expert_tokens_num_type=1,
+            expert_tokens_num_flag=True,
+            active_expert_range=[first_expert_idx, last_expert_idx],
+            quant_mode=-1,
+        )
 
-        # 2. 局部切片逻辑（与原版完全一致）
-        cumsum = tokens_per_expert.cumsum(0)
-        local_start = 0 if first_expert_idx == 0 else cumsum[first_expert_idx - 1].item()
-        local_end = cumsum[last_expert_idx - 1].item()
-        local_permuted = expanded_x[local_start:local_end]
-
-        # 3. 动态量化（采用原版 npu_dynamic_quant，确保精度 100% 对齐）
         if input_quant:
             local_permuted, pertoken_scale = torch_npu.npu_dynamic_quant(local_permuted)
         else:
             pertoken_scale = None
 
-        expert_tokens = tokens_per_expert[first_expert_idx:last_expert_idx]
+        tokens_per_expert = tokens_per_expert.to(torch.int64)
+        cumsum = tokens_per_expert.cumsum(0)
+        local_start = 0 if first_expert_idx == 0 else cumsum[first_expert_idx - 1]
+        local_end = cumsum[last_expert_idx - 1]
 
         return NpuDispatcherWithAllGatherOutput(
             hidden_states=local_permuted,
@@ -538,7 +542,7 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
             combine_metadata=MoEAllGatherCombineInput(
                 hidden_states=local_permuted,
                 topk_weights=topk_weights_all,
-                reversed_local_input_permutation_mapping=expanded_row_idx,  # 传递完整的映射
+                reversed_local_input_permutation_mapping=expanded_row_idx,
                 original_shape=original_shape,
                 num_original_tokens=num_original_tokens,
                 total_tokens=total_tokens,
@@ -554,8 +558,8 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         assert combine_input.original_shape is not None
 
         gmm_output = combine_input.hidden_states
-        full_reversed_mapping = combine_input.reversed_local_input_permutation_mapping  # 完整的映射
-        topk_weights = combine_input.topk_weights  # (total_tokens, top_k)
+        full_reversed_mapping = combine_input.reversed_local_input_permutation_mapping
+        topk_weights = combine_input.topk_weights
         total_tokens = combine_input.total_tokens
         top_k = combine_input.top_k
         hidden_size = gmm_output.shape[-1]
@@ -563,12 +567,13 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         device = gmm_output.device
         local_start = combine_input.local_start
         local_end = combine_input.local_end
+        total_permuted = total_tokens * top_k
 
-        # 4. 恢复局部拼接和 unpermute（与原版完全相同的数值路径）
-        full_permuted = torch.zeros(
-            (total_tokens * top_k, hidden_size), dtype=dtype, device=device
-        )
-        full_permuted[local_start:local_end] = gmm_output
+        full_permuted = torch.zeros(total_permuted, hidden_size, dtype=dtype, device=device)
+        all_idx = torch.arange(total_permuted, dtype=torch.int64, device=device)
+        local_mask = (all_idx >= local_start) & (all_idx < local_end)
+        mask_2d = local_mask.unsqueeze(-1).expand(total_permuted, hidden_size)
+        full_permuted.masked_scatter_(mask_2d, gmm_output.reshape(-1))
 
         full_output = torch_npu.npu_moe_token_unpermute(
             permuted_tokens=full_permuted,
