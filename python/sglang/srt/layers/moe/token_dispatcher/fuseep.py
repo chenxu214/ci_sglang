@@ -436,14 +436,14 @@ class NpuDispatcherWithAllGatherOutput(NamedTuple):
 class MoEAllGatherCombineInput(NamedTuple):
     hidden_states: torch.Tensor
     topk_weights: torch.Tensor
-    reversed_local_input_permutation_mapping: torch.Tensor  # 保持全局完整映射
+    reversed_local_input_permutation_mapping: torch.Tensor
     original_shape: torch.Size
     num_original_tokens: int
     total_tokens: int
     ep_rank: int
     ep_size: int
-    local_start: int                                        # 用于恢复局部拼接
-    local_end: int                                          # 用于恢复局部拼接
+    local_start: int
+    local_end: int
     top_k: int
 
     @property
@@ -478,7 +478,7 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         self.ep_group = get_moe_ep_group()
 
     def dispatch(
-        self, hidden_states: torch.Tensor, topk_output: TopKOutput, **kwargs
+            self, hidden_states: torch.Tensor, topk_output: TopKOutput, **kwargs
     ) -> NpuDispatcherWithAllGatherOutput:
         input_quant = get_bool_env_var("DEEP_NORMAL_MODE_USE_INT8_QUANT")
 
@@ -570,10 +570,12 @@ class NpuDispatcherWithAllGather(BaseDispatcher):
         total_permuted = total_tokens * top_k
 
         full_permuted = torch.zeros(total_permuted, hidden_size, dtype=dtype, device=device)
-        all_idx = torch.arange(total_permuted, dtype=torch.int64, device=device)
-        local_mask = (all_idx >= local_start) & (all_idx < local_end)
-        mask_2d = local_mask.unsqueeze(-1).expand(total_permuted, hidden_size)
-        full_permuted.masked_scatter_(mask_2d, gmm_output.reshape(-1))
+        arange_static = torch.arange(total_permuted, dtype=torch.int64, device=device)
+        src_idx = arange_static - local_start
+        src_idx_clamped = torch.clamp(src_idx, 0, total_permuted - 1)
+        src_data = gmm_output.index_select(0, src_idx_clamped)
+        mask_1d = (arange_static >= local_start) & (arange_static < local_end)
+        full_permuted = torch.where(mask_1d.unsqueeze(-1), src_data, full_permuted)
 
         full_output = torch_npu.npu_moe_token_unpermute(
             permuted_tokens=full_permuted,
