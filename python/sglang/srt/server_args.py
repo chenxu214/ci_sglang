@@ -2024,6 +2024,29 @@ class ServerArgs:
     offload_mode: A[str, "Mode of offloading."] = "cpu"
 
     # -------------------------------------------------------------------------
+    # MoE DRAM Offload
+    # -------------------------------------------------------------------------
+    moe_dram_offload: A[
+        bool,
+        "Offload MoE expert weights to Host DRAM. Only Top-K selected "
+        "experts are loaded to HBM on demand during forward.",
+    ] = False
+    moe_dram_pool_size_gb: A[
+        Optional[float],
+        "DRAM pool size (in GB) for MoE expert weights. If None, "
+        "auto-calculated from actual MoE weight sizes on this rank "
+        "(TP slicing already gives total/world_size per rank). "
+        "Must be large enough to hold all expert weights and backed "
+        "by physical memory (do NOT over-allocate).",
+    ] = None
+    moe_use_acc_offload: A[
+        bool,
+        "Use MemFabric acc_offload (AICore AIV kernel with MTE engine) "
+        "for batch sparse copy from DRAM to HBM. Falls back to PyTorch "
+        "H2D if memfabric_hybrid is not available. Defaults to True.",
+    ] = True
+
+    # -------------------------------------------------------------------------
     # Cuda graphs
     # -------------------------------------------------------------------------
     cuda_graph_config: A[

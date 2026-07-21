@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Optional
 from typing import TYPE_CHECKING
 
@@ -26,8 +25,6 @@ from sglang.srt.layers.quantization.utils import (
 from sglang.srt.utils import next_power_of_2, set_weight_attrs
 
 import torch_npu
-
-logger = logging.getLogger(__name__)
 
 __all__ = ["NPUCompressedTensorsW4A16mxfp4MoE"]
 
@@ -143,15 +140,25 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
+        # Skip NZ format cast and int4pack when MoE DRAM offload is enabled.
+        # Both npu_format_cast(format=29) and npu_convert_weight_to_int4pack
+        # produce NPU-specific layouts incompatible with CPU round-trip
+        # (AICPU Transpose kernel fails with errorCode=0x2a). For offload,
+        # weights are stored in ND format (after unpack+transpose) and
+        # converted to NZ+int4pack at forward time in w4a16_mxfp4_gmm_npu.
+        _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
+
         layer.w13_weight.data = unpack_uint8_to_fp4_return_float32(layer.w13_weight.data)
         layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
-        layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29, customize_dtype=torch.bfloat16)
-        layer.w13_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w13_weight.data).contiguous()
+        if not _skip_nz_cast:
+            layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29, customize_dtype=torch.bfloat16)
+            layer.w13_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w13_weight.data).contiguous()
 
         layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
         layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
-        layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.bfloat16)
-        layer.w2_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w2_weight.data).contiguous()
+        if not _skip_nz_cast:
+            layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.bfloat16)
+            layer.w2_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w2_weight.data).contiguous()
 
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
         layer.w2_weight_scale.data = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
@@ -447,6 +454,22 @@ def w4a16_mxfp4_gmm_npu(
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
 
+    # For ND-format weights (from DRAM offload), convert to NZ+int4pack at
+    # forward time. NZ format and int4pack are NPU-specific layouts that
+    # cannot be stored in DRAM (AICPU Transpose kernel fails on CPU
+    # transfer), so DRAM offload weights are stored in ND format (after
+    # unpack+transpose) and converted here. This matches the non-offload
+    # path's process_weights_after_loading.
+    #
+    # The is_contiguous() guard distinguishes the two paths:
+    #   - ND path (offload): contiguous after unpack+transpose → convert
+    #   - NZ path (non-offload): non-contiguous after NZ cast → skip
+    if weight.is_contiguous():
+        weight = torch_npu.npu_format_cast(
+            weight, 29, customize_dtype=torch.bfloat16
+        )
+        weight = torch_npu.npu_convert_weight_to_int4pack(weight)
+
     return torch.ops.npu.npu_grouped_matmul(
         [input],
         [weight],
@@ -457,31 +480,3 @@ def w4a16_mxfp4_gmm_npu(
         group_list_type=group_list_type,
         output_dtype=output_dtype,
     )[0]
-
-    # if input_scale is None:
-    #     x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
-    #         input,
-    #         axis=1,
-    #         round_mode="rint",
-    #         dst_type=torch_npu.float4_e2m1fn_x2,
-    #         block_size=32,
-    #         scale_alg=None,
-    #     )
-    # else:
-    #     x, x_scale = input, input_scale
-    #
-    # return torch.ops.npu.npu_grouped_matmul(
-    #     [x],
-    #     [weight],
-    #     scale=[weight_scale],
-    #     scale_dtype=torch_npu.float8_e8m0fnu,
-    #     per_token_scale=[x_scale],
-    #     split_item=2,
-    #     group_type=0,
-    #     group_list=group_list,
-    #     group_list_type=group_list_type,
-    #     output_dtype=output_dtype,
-    #     x_dtype=torch_npu.float4_e2m1fn_x2,
-    #     weight_dtype=torch_npu.float4_e2m1fn_x2,
-    #     per_token_scale_dtype=torch_npu.float8_e8m0fnu,
-    # )[0]
