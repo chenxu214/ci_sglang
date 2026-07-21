@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 from typing import TYPE_CHECKING
 
 import torch
@@ -40,12 +41,6 @@ if TYPE_CHECKING:
 class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
 
     def __init__(self):
-        if not is_blackwell_supported():
-            raise ValueError(
-                "Current platform does not support MXFP4"
-                " quantization. Please use Blackwell and"
-                " above."
-            )
         self.group_size = 32
 
     def create_weights(
@@ -95,7 +90,7 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
                 2 * intermediate_size_per_partition,
                 # 2 fp4 items are packed in the input dimension
                 hidden_size // self.group_size,
-                dtype=torch.float8_e4m3fn,
+                dtype=torch.float8_e8m0fnu,
             ),
             requires_grad=False,
         )
@@ -111,7 +106,7 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
                 hidden_size,
                 # 2 fp4 items are packed in the input dimension
                 intermediate_size_per_partition // self.group_size,
-                dtype=torch.float8_e4m3fn,
+                dtype=torch.float8_e8m0fnu,
             ),
             requires_grad=False,
         )
@@ -120,6 +115,11 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
             {"quant_method": FusedMoeWeightScaleSupported.GROUP.value}
         )
         set_weight_attrs(w2_weight_scale, extra_weight_attrs)
+
+        w13_weight_scale.format_ue8m0 = False
+        w2_weight_scale.format_ue8m0 = False
+        layer.register_parameter("w13_weight_scale_inv", w13_weight_scale)
+        layer.register_parameter("w2_weight_scale_inv", w2_weight_scale)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         # From packed to weight
@@ -133,14 +133,23 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        layer.w13_weight.data = torch_npu.npu_format_cast(
-            layer.w13_weight.data.view(torch.uint8),
-            29,
-        ).transpose(1, 2)
-        layer.w2_weight.data = torch_npu.npu_format_cast(
-            layer.w2_weight.data.view(torch.uint8),
-            29,
-        ).transpose(1, 2)
+        # layer.w13_weight.data = torch_npu.npu_format_cast(
+        #     layer.w13_weight.data.view(torch.uint8),
+        #     29,
+        # ).transpose(1, 2)
+        # layer.w2_weight.data = torch_npu.npu_format_cast(
+        #     layer.w2_weight.data.view(torch.uint8),
+        #     29,
+        # ).transpose(1, 2)
+
+        layer.w13_weight_scale_inv = torch.nn.Parameter(
+            _reshape_mxfp4_scale_for_npu(layer.w13_weight_scale_inv.data),
+            requires_grad=False,
+        )
+        layer.w2_weight_scale_inv = torch.nn.Parameter(
+            _reshape_mxfp4_scale_for_npu(layer.w2_weight_scale_inv.data),
+            requires_grad=False,
+        )
 
     def create_moe_runner(
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
@@ -152,12 +161,6 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         layer: torch.nn.Module,
         dispatch_output: StandardDispatchOutput,
     ) -> CombineInput:
-
-        from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
-
-        x = dispatch_output.hidden_states
-        topk_output = dispatch_output.topk_output
-
         combine_input = npu_apply_w4a16_mxfp4_moe_deepep(layer, dispatch_output)
         if combine_input is not None:
             return combine_input
@@ -184,6 +187,18 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
             top_k,
         )
         return StandardCombineInput(hidden_states=output)
+
+
+def _reshape_mxfp4_scale_for_npu(scale: torch.Tensor) -> torch.Tensor:
+    if scale.dim() == 3:
+        num_experts, n, k32 = scale.shape
+        if k32 % 2 != 0:
+            raise ValueError(
+                "MXFP4 scale K dimension must be divisible by 2 for "
+                "[E, K/64, N, 2] layout."
+            )
+        scale = scale.view(num_experts, n, k32 // 2, 2).transpose(1, 2)
+    return scale
 
 
 def npu_fused_experts_w4a16_mxfp4(
