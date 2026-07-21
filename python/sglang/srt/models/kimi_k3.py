@@ -849,13 +849,33 @@ def _apply_attn_res(
     if prefix_sum.shape[0] == 0:
         return prefix_sum
 
-    values = torch.cat((block_residual, prefix_sum.unsqueeze(1)), dim=1)
-    values_float = values.float()
-    variance = values_float.square().mean(-1, keepdim=True)
-    normalized = values_float * torch.rsqrt(variance + norm.variance_epsilon)
     score_weight = norm.weight.float() * proj.weight.squeeze(0).float()
-    probabilities = (normalized * score_weight).sum(-1).softmax(-1).unsqueeze(1)
-    return torch.matmul(probabilities, values_float).squeeze(1).to(values.dtype)
+    output = torch.empty_like(prefix_sum)
+
+    # Attention residuals grow to several hidden-size streams.  Materializing
+    # all fp32 normalized streams at once costs multiple GiB for long prefills.
+    # The mixing is token-local, so compute it in bounded token chunks and fold
+    # the RMS scale into the score after the hidden-dimension reduction.
+    token_chunk_size = 256
+    for start in range(0, prefix_sum.shape[0], token_chunk_size):
+        end = min(start + token_chunk_size, prefix_sum.shape[0])
+        values = torch.cat(
+            (
+                block_residual[start:end],
+                prefix_sum[start:end].unsqueeze(1),
+            ),
+            dim=1,
+        )
+        values_float = values.float()
+        variance = values_float.square().mean(-1, keepdim=True)
+        inv_rms = torch.rsqrt(variance + norm.variance_epsilon)
+        scores = torch.matmul(values_float, score_weight) * inv_rms.squeeze(-1)
+        probabilities = scores.softmax(-1).unsqueeze(1)
+        output[start:end].copy_(
+            torch.matmul(probabilities, values_float).squeeze(1).to(values.dtype)
+        )
+
+    return output
 
 
 class KimiLinearModel(nn.Module):
@@ -919,10 +939,10 @@ class KimiLinearModel(nn.Module):
             self.norm = PPMissingLayer()
             self.use_attn_residuals = False
 
-        world_size = get_parallel().tp_size
+        attn_tp_size = get_parallel().attn_tp_size
         assert (
-            config.num_attention_heads % world_size == 0
-        ), "num_attention_heads must be divisible by world_size"
+            config.num_attention_heads % attn_tp_size == 0
+        ), "num_attention_heads must be divisible by attn_tp_size"
 
     def forward(
         self,
