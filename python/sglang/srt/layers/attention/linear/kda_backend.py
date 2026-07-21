@@ -17,12 +17,16 @@ from sglang.srt.layers.radix_linear_attention import RadixLinearAttention
 from sglang.srt.utils import is_cpu, is_cuda, is_npu
 from sglang.srt.utils.common import rank0_log
 
-# KDA always uses the triton causal_conv1d_fn (no CUDA override).
-# Only causal_conv1d_update needs platform-specific overrides for decode.
+# Ascend's public decode wrapper assigns an FP32 updated state into the BF16
+# cache without casting. Use its functional implementation and write back with
+# an explicit cast in forward_decode.
 if is_npu():
-    from sgl_kernel_npu.mamba.causal_conv1d import causal_conv1d_update_npu
+    from sgl_kernel_npu.mamba.causal_conv1d import (
+        causal_conv1d_fn_npu,
+        torch_causal_conv1d_update_npu,
+    )
 
-    causal_conv1d_update = causal_conv1d_update_npu
+    causal_conv1d_fn = causal_conv1d_fn_npu
 elif is_cpu():
     from sgl_kernel.mamba import causal_conv1d_update_cpu
 
@@ -198,6 +202,16 @@ class KDAAttnBackend(MambaAttnBackendBase):
         prefill_backend = get_linear_attn_prefill_backend()
         self.kernel_dispatcher = KDAKernelDispatcher(decode_backend, prefill_backend)
 
+    @staticmethod
+    def _channel_first_conv_states(conv_states: torch.Tensor) -> torch.Tensor:
+        """Return convolution state in [pool, channels, window] layout.
+
+        The NPU memory pool already reverses the generic Kimi state shape to
+        this layout for the Ascend causal-conv kernels. Other platforms keep
+        the generic [pool, window, channels] layout and need a transpose.
+        """
+        return conv_states if is_npu() else conv_states.transpose(-1, -2)
+
     def forward_decode(
         self,
         layer: RadixLinearAttention,
@@ -234,14 +248,28 @@ class KDAAttnBackend(MambaAttnBackendBase):
         replayssm_k = layer_cache.replayssm_k
         replayssm_g = layer_cache.replayssm_g
 
-        qkv = causal_conv1d_update(
-            mixed_qkv,
-            conv_states.transpose(-1, -2),
-            layer.conv_weights,
-            layer.bias,
-            activation="silu",
-            conv_state_indices=cache_indices,
-        )
+        conv_states = self._channel_first_conv_states(conv_states)
+        if is_npu():
+            qkv, updated_conv_states = torch_causal_conv1d_update_npu(
+                mixed_qkv.unsqueeze(-1),
+                conv_states[cache_indices],
+                layer.conv_weights,
+                bias=layer.bias,
+                activation="silu",
+            )
+            conv_states.index_copy_(
+                0, cache_indices, updated_conv_states.to(conv_states.dtype)
+            )
+            qkv = qkv.squeeze(-1)
+        else:
+            qkv = causal_conv1d_update(
+                mixed_qkv,
+                conv_states,
+                layer.conv_weights,
+                layer.bias,
+                activation="silu",
+                conv_state_indices=cache_indices,
+            )
 
         # Skip split + reshape by consuming the packed mixed_qkv directly in a
         # single fused Triton kernel (KDA per-K gate variant of GDN PR #20627).
@@ -307,7 +335,7 @@ class KDAAttnBackend(MambaAttnBackendBase):
         cache_indices = self.forward_metadata.mamba_cache_indices
 
         mamba_cache_params = self.req_to_token_pool.mamba2_layer_cache(layer.layer_id)
-        conv_states = mamba_cache_params.conv[0].transpose(-1, -2)
+        conv_states = self._channel_first_conv_states(mamba_cache_params.conv[0])
 
         ssm_states = mamba_cache_params.temporal
 
@@ -324,39 +352,47 @@ class KDAAttnBackend(MambaAttnBackendBase):
         else:
             q_bias, k_bias, v_bias = None, None, None
 
-        q = causal_conv1d_fn(
-            q,
-            q_conv_weight,
-            q_bias,
-            activation="silu",
-            conv_states=q_conv_state,
-            has_initial_state=has_initial_state,
-            cache_indices=cache_indices,
-            query_start_loc=query_start_loc,
-            seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
-        ).transpose(0, 1)
-        k = causal_conv1d_fn(
-            k,
-            k_conv_weight,
-            k_bias,
-            activation="silu",
-            conv_states=k_conv_state,
-            has_initial_state=has_initial_state,
-            cache_indices=cache_indices,
-            query_start_loc=query_start_loc,
-            seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
-        ).transpose(0, 1)
-        v = causal_conv1d_fn(
-            v,
-            v_conv_weight,
-            v_bias,
-            activation="silu",
-            conv_states=v_conv_state,
-            has_initial_state=has_initial_state,
-            cache_indices=cache_indices,
-            query_start_loc=query_start_loc,
-            seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
-        ).transpose(0, 1)
+        def run_conv(x, weight, bias, state):
+            if is_npu():
+                # The Ascend varlen wrapper creates its padding buffer in the
+                # weight dtype. K3 stores conv weights in FP32 and activations /
+                # cache in BF16, so adapt both inputs through a small active-row
+                # FP32 state and explicitly cast the results back.
+                local_indices = torch.arange(
+                    cache_indices.shape[0],
+                    device=cache_indices.device,
+                    dtype=cache_indices.dtype,
+                )
+                state_work = state[cache_indices].to(weight.dtype).contiguous()
+                out = causal_conv1d_fn(
+                    x.to(weight.dtype),
+                    weight,
+                    bias,
+                    activation="silu",
+                    conv_states=state_work,
+                    has_initial_state=has_initial_state,
+                    cache_indices=local_indices,
+                    query_start_loc=query_start_loc,
+                    seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
+                )
+                state.index_copy_(0, cache_indices, state_work.to(state.dtype))
+                return out.to(x.dtype).transpose(0, 1)
+
+            return causal_conv1d_fn(
+                x,
+                weight,
+                bias,
+                activation="silu",
+                conv_states=state,
+                has_initial_state=has_initial_state,
+                cache_indices=cache_indices,
+                query_start_loc=query_start_loc,
+                seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
+            ).transpose(0, 1)
+
+        q = run_conv(q, q_conv_weight, q_bias, q_conv_state)
+        k = run_conv(k, k_conv_weight, k_bias, k_conv_state)
+        v = run_conv(v, v_conv_weight, v_bias, v_conv_state)
 
         q = q.unflatten(-1, (-1, layer.head_q_dim)).unsqueeze(0)  # n (h d) -> 1 n h d
         k = k.unflatten(-1, (-1, layer.head_k_dim)).unsqueeze(0)  # n (h d) -> 1 n h d
