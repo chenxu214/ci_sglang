@@ -3570,6 +3570,7 @@ class HybridLinearKVPool(KVCache):
             )
         else:
             TokenToKVPoolClass = MLATokenToKVPool
+            mla_pool_extra_args = {}
 
             if current_platform.is_out_of_tree():
                 TokenToKVPoolClass = current_platform.get_mla_kv_pool_cls()
@@ -3579,6 +3580,10 @@ class HybridLinearKVPool(KVCache):
                 )
 
                 TokenToKVPoolClass = NPUMLATokenToKVPool
+                # The NPU pool keeps DSA index cache in a separate tensor.
+                # Hybrid KDA/MLA models do not use DSA, but the constructor
+                # still requires the argument explicitly.
+                mla_pool_extra_args["index_head_dim"] = None
 
             self.full_kv_pool = TokenToKVPoolClass(
                 size=size,
@@ -3589,6 +3594,7 @@ class HybridLinearKVPool(KVCache):
                 kv_lora_rank=kv_lora_rank,
                 qk_rope_head_dim=qk_rope_head_dim,
                 enable_memory_saver=enable_memory_saver,
+                **mla_pool_extra_args,
             )
         self.full_attention_layer_id_mapping = {
             id: i for i, id in enumerate(full_attention_layer_ids)

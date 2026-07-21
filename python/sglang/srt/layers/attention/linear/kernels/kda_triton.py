@@ -205,6 +205,28 @@ class TritonKDAKernel(LinearAttnKernelBase):
         return_intermediate_states: bool = False,
         **kwargs,
     ) -> torch.Tensor:
+        # The chunk KDA kernels use CUDA-oriented Triton autotuning. On NPU,
+        # the first request can spend minutes benchmarking configurations on
+        # every TP rank. The recurrent kernel implements the same KDA update,
+        # supports varlen prefill through cu_seqlens, and has a fixed launch
+        # configuration, so use it for the Ascend path as well as decode.
+        if is_npu():
+            return fused_sigmoid_gating_delta_rule_update(
+                A_log=A_log,
+                dt_bias=dt_bias,
+                q=q,
+                k=k,
+                v=v,
+                a=g,
+                b=beta,
+                initial_state_source=ssm_states,
+                initial_state_indices=cache_indices,
+                cu_seqlens=query_start_loc,
+                use_qk_l2norm_in_kernel=True,
+                softplus_beta=1.0,
+                softplus_threshold=20.0,
+                is_kda=True,
+            )
         return chunk_kda(
             q=q,
             k=k,

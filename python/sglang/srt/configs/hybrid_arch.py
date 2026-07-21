@@ -100,8 +100,11 @@ def mamba2_config(model_config: ModelConfig):
 
 def kimi_linear_config(model_config: ModelConfig):
     config = model_config.hf_config
+    config = getattr(config, "text_config", config)
     if isinstance(config, KimiLinearConfig):
         return config
+    if getattr(config, "model_type", None) == "kimi_linear":
+        return KimiLinearConfig(**config.to_dict())
     return None
 
 
