@@ -55,6 +55,7 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     NPUCompressedTensorsW4A16Int4DynamicMoE,
     NPUCompressedTensorsW8A8Int8,
     NPUCompressedTensorsW8A8Int8DynamicMoE,
+    NPUCompressedTensorsW4A16mxfp4MoE,
 )
 from sglang.srt.layers.quantization.compressed_tensors.utils import (
     find_matched_target,
@@ -548,6 +549,7 @@ class CompressedTensorsConfig(QuantizationConfig):
 
         # Detect If Mixed Precision
         if self._is_wNa16_group_channel(weight_quant, input_quant):
+            # print(f"============={self.quant_format=}, {CompressionFormat.pack_quantized.value=}")
             if (
                 self.quant_format == CompressionFormat.pack_quantized.value
                 and weight_quant.num_bits in WNA16_SUPPORTED_BITS
@@ -705,6 +707,8 @@ class CompressedTensorsConfig(QuantizationConfig):
                     self._is_dynamic_token_w4(weight_quant, input_quant)
                     and input_quant is None
                 ):
+                    if self.quant_format == "mxfp4-pack-quantized":
+                        return NPUCompressedTensorsW4A16mxfp4MoE()
                     logger.info_once("Using NPUCompressedTensorsW4A16Int4DynamicMoE")
                     return NPUCompressedTensorsW4A16Int4DynamicMoE(self)
         elif self._is_fp4a4_nvfp4(weight_quant, input_quant):
