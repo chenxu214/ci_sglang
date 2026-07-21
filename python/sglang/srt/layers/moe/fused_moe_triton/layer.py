@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Adapted from https://github.com/vllm-project/vllm/blob/a6221a144af772fd1a68fe7e627935dc53e81738/vllm/model_executor/layers/fused_moe/layer.py
 
+import contextlib
 import logging
 from enum import Enum
 from functools import cached_property
@@ -82,6 +83,48 @@ _is_hip = is_hip()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
+
+logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _force_cpu_allocation():
+    """Force all torch tensor allocations to CPU.
+
+    On Ascend NPU, ``torch_npu/contrib/transfer_to_npu.py`` patches
+    ``torch.empty``/``torch.zeros``/``torch.ones`` etc. to redirect
+    allocations to NPU.  The standard ``torch.device("cpu")`` context
+    manager may not reliably override this because the patched functions
+    can bypass the default-device mechanism.
+
+    This context manager monkey-patches the tensor-creation functions to
+    explicitly inject ``device='cpu'`` into kwargs when no device is
+    specified, ensuring weights are allocated on CPU regardless of any
+    NPU contrib patches.  Used during ``create_weights`` when
+    ``moe_dram_offload`` is enabled to avoid allocating all 80 layers'
+    expert weights on HBM simultaneously (which causes OOM).
+    """
+    _torch_fns = ["empty", "zeros", "ones", "randn", "rand", "full",
+                  "arange", "linspace", "tensor"]
+    _saved = {}
+
+    def _make_patched(original_fn):
+        def _patched(*args, **kwargs):
+            if "device" not in kwargs or kwargs["device"] is None:
+                kwargs["device"] = "cpu"
+            return original_fn(*args, **kwargs)
+        return _patched
+
+    for name in _torch_fns:
+        if hasattr(torch, name):
+            _saved[name] = getattr(torch, name)
+            setattr(torch, name, _make_patched(_saved[name]))
+
+    try:
+        yield
+    finally:
+        for name, fn in _saved.items():
+            setattr(torch, name, fn)
 
 
 def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig) -> BaseDispatcher:
@@ -305,20 +348,41 @@ class FusedMoE(torch.nn.Module):
             f"quant_method={type(self.quant_method).__name__})."
         )
 
-        self.quant_method.create_weights(
-            layer=self,
-            num_experts=self.num_local_experts,
-            hidden_size=hidden_size,
-            intermediate_size_per_partition=self.intermediate_size_per_partition,
-            params_dtype=params_dtype,
-            weight_loader=(
-                self.weight_loader
-                if not use_weight_loader_fused
-                else self.weight_loader_fused
-            ),
-            with_bias=with_bias,
-            moe_intermediate_size=intermediate_size,
-        )
+        _moe_dram_offload = getattr(server_args, "moe_dram_offload", False)
+        self.moe_dram_offload = _moe_dram_offload
+        self._dram_offload_enabled = False
+        self._expert_weight_store = None
+        if _moe_dram_offload:
+            with _force_cpu_allocation():
+                self.quant_method.create_weights(
+                    layer=self,
+                    num_experts=self.num_local_experts,
+                    hidden_size=hidden_size,
+                    intermediate_size_per_partition=self.intermediate_size_per_partition,
+                    params_dtype=params_dtype,
+                    weight_loader=(
+                        self.weight_loader
+                        if not use_weight_loader_fused
+                        else self.weight_loader_fused
+                    ),
+                    with_bias=with_bias,
+                    moe_intermediate_size=intermediate_size,
+                )
+        else:
+            self.quant_method.create_weights(
+                layer=self,
+                num_experts=self.num_local_experts,
+                hidden_size=hidden_size,
+                intermediate_size_per_partition=self.intermediate_size_per_partition,
+                params_dtype=params_dtype,
+                weight_loader=(
+                    self.weight_loader
+                    if not use_weight_loader_fused
+                    else self.weight_loader_fused
+                ),
+                with_bias=with_bias,
+                moe_intermediate_size=intermediate_size,
+            )
 
         self.quant_method.create_moe_runner(self, self.moe_runner_config)
         self.dispatcher = create_moe_dispatcher(self.moe_runner_config)
@@ -1201,6 +1265,11 @@ class FusedMoE(torch.nn.Module):
             from sglang.srt.hardware_backend.npu.moe.fuseep import forward_fuseep
 
             return forward_fuseep(self, hidden_states, topk_output)
+
+        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM
+        if self._dram_offload_enabled and self._expert_weight_store is not None:
+            self._load_experts_on_demand(topk_output)
+
         if is_in_tc_piecewise_cuda_graph():
             if TopKOutputChecker.format_is_standard(topk_output):
                 return moe_forward_piecewise_cuda_graph_impl(
@@ -1278,6 +1347,153 @@ class FusedMoE(torch.nn.Module):
             layer=self,
             dispatch_output=dispatch_output,
         )
+
+    # ------------------------------------------------------------------
+    # MoE DRAM offload methods
+    # ------------------------------------------------------------------
+    def enable_dram_offload(self, expert_weight_store):
+        """Enable DRAM offload mode for this MoE layer.
+
+        After calling this, the forward() method will load Top-K expert
+        weights from Host DRAM to HBM before computation.
+        """
+        self._expert_weight_store = expert_weight_store
+        self._dram_offload_enabled = True
+
+    def _get_expert_weight_names(self) -> list:
+        """Get the list of weight attribute names for this MoE layer."""
+        names = []
+        for attr in ["w13_weight", "w2_weight",
+                      "w13_weight_scale", "w2_weight_scale",
+                      "w13_weight_scale_inv", "w2_weight_scale_inv",
+                      "w13_weight_scale_second", "w2_weight_scale_second",
+                      "w13_weight_offset", "w2_weight_offset",
+                      "w13_weight_offset_second", "w2_weight_offset_second",
+                      "w13_bias", "w2_bias",
+                      "w13_scale_bias", "w2_scale_bias"]:
+            if hasattr(self, attr):
+                names.append(attr)
+        return names
+
+    def offload_expert_weights_to_dram(self):
+        if self._expert_weight_store is None:
+            return
+
+        weight_names = self._get_expert_weight_names()
+        if not weight_names:
+            return
+
+        num_experts = self.num_local_experts
+
+        for expert_id in range(num_experts):
+            expert_weights = {}
+            for name in weight_names:
+                param = getattr(self, name)
+                expert_weights[name] = param.data[expert_id]
+
+            self._expert_weight_store.register_expert(
+                layer_id=self.layer_id,
+                expert_id=expert_id,
+                weights=expert_weights,
+            )
+
+        # Free the original weight tensors entirely.
+        # During forward, shared HBM buffers will be used instead.
+        for name in weight_names:
+            if hasattr(self, name):
+                delattr(self, name)
+
+        logger.info(
+            f"[FusedMoE] Layer {self.layer_id}: Offloaded {num_experts} experts "
+            f"to Host DRAM ({len(weight_names)} weight tensors per expert), "
+            f"original tensors freed"
+        )
+
+    def _load_experts_on_demand(self, topk_output: TopKOutput):
+        """Load Top-K selected experts from DRAM to shared HBM buffer.
+
+        Uses ExpertWeightStore.get_shared_hbm_buffer() to obtain a shared
+        HBM tensor (same across all layers), then loads Top-K experts into
+        it. The shared buffer avoids allocating 80 separate HBM tensors.
+
+        Note: In EP mode, only local experts are loaded. Tokens requiring
+        remote experts are handled by the dispatcher (all-to-all).
+        """
+        if not hasattr(topk_output, "topk_ids") or topk_output.topk_ids is None:
+            return
+
+        topk_ids = topk_output.topk_ids
+        global_expert_ids = topk_ids.unique().cpu().tolist()
+
+        if not global_expert_ids:
+            return
+
+        # Map global expert IDs to local expert IDs
+        local_expert_ids = []
+        for gid in global_expert_ids:
+            lid = self._map_global_expert_id_to_local_expert_id(gid)
+            if lid >= 0 and lid < self.num_local_experts:
+                local_expert_ids.append(lid)
+
+        if not local_expert_ids:
+            return
+
+        # Batch load local experts from DRAM to HBM
+        loaded_weights = self._expert_weight_store.batch_get_expert_weights(
+            layer_id=self.layer_id,
+            expert_ids=local_expert_ids,
+        )
+
+        if not loaded_weights:
+            return
+
+        # Get weight names from loaded data (attributes may be deleted after offload)
+        sample_expert_weights = next(iter(loaded_weights.values()))
+        weight_names = list(sample_expert_weights.keys())
+
+        # Get shared HBM buffers and write loaded expert data into them.
+        # The buffer shape is [num_local_experts, ...], same for all layers.
+        # Only Top-K entries are filled; the rest contain stale data but
+        # are never accessed (kernel only reads Top-K indices from router).
+        for name in weight_names:
+            sample_weight = sample_expert_weights[name]
+
+            full_shape = (self.num_local_experts,) + sample_weight.shape
+            dtype = sample_weight.dtype
+
+            # Get or create shared HBM buffer
+            hbm_buffer = self._expert_weight_store.get_shared_hbm_buffer(
+                name, full_shape, dtype
+            )
+
+            # Write loaded experts into the buffer
+            for expert_id, weights in loaded_weights.items():
+                if name in weights:
+                    hbm_buffer[expert_id].copy_(weights[name])
+
+            # Set as the layer's weight parameter for computation
+            setattr(self, name, hbm_buffer)
+
+        # Async prefetch: predict next layer's experts using router logits
+        if hasattr(topk_output, "router_logits") and topk_output.router_logits is not None:
+            try:
+                router_logits = topk_output.router_logits
+                avg_logits = router_logits.mean(dim=0) if router_logits.dim() > 1 else router_logits
+                _, prefetch_global_ids = torch.topk(
+                    avg_logits, k=min(8, self.num_local_experts)
+                )
+                prefetch_local_ids = []
+                for gid in prefetch_global_ids.cpu().tolist():
+                    lid = self._map_global_expert_id_to_local_expert_id(gid)
+                    if lid >= 0 and lid < self.num_local_experts:
+                        prefetch_local_ids.append(lid)
+                if prefetch_local_ids:
+                    self._expert_weight_store.async_prefetch(
+                        layer_id=self.layer_id + 1,
+                        expert_ids=prefetch_local_ids,
+                    )
+            except Exception:
+                pass  # Prefetch is best-effort
 
     @classmethod
     def make_expert_params_mapping(

@@ -133,14 +133,40 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        layer.w13_weight.data = torch_npu.npu_format_cast(
-            layer.w13_weight.data.view(torch.uint8),
-            29,
-        ).transpose(1, 2)
-        layer.w2_weight.data = torch_npu.npu_format_cast(
-            layer.w2_weight.data.view(torch.uint8),
-            29,
-        ).transpose(1, 2)
+        # Skip NZ format cast when MoE DRAM offload is enabled.
+        # NZ (FRACTAL_NZ) format stores data in 5HD block layout which
+        # cannot be copied to CPU (AICPU Transpose kernel fails with
+        # errorCode=0x2a). Since DRAM offload requires weights to round-
+        # trip NPU→CPU→DRAM→CPU→NPU, NZ format is incompatible.
+        # npu_grouped_matmul handles ND format input correctly.
+        # The transpose(1, 2) MUST still be applied to align the
+        # weight's N dim (2*intermediate) with the scale's N dim
+        # (see _reshape_mxfp4_scale_for_npu), otherwise CANN raises
+        # "n dim of weight[X] and n dim of scale[Y] should be equal".
+        # Read the flag from the FusedMoE instance (set in __init__)
+        # rather than get_global_server_args() to avoid initialization
+        # timing issues.
+        _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
+
+        if not _skip_nz_cast:
+            layer.w13_weight.data = torch_npu.npu_format_cast(
+                layer.w13_weight.data.view(torch.uint8),
+                29,
+            ).transpose(1, 2)
+            layer.w2_weight.data = torch_npu.npu_format_cast(
+                layer.w2_weight.data.view(torch.uint8),
+                29,
+            ).transpose(1, 2)
+        else:
+            # Skip NZ format cast (incompatible with CPU round-trip),
+            # but keep transpose(1, 2) so the weight's N dim matches
+            # the scale's N dim expected by aclnnGroupedMatmulV4.
+            layer.w13_weight.data = layer.w13_weight.data.view(
+                torch.uint8
+            ).transpose(1, 2)
+            layer.w2_weight.data = layer.w2_weight.data.view(
+                torch.uint8
+            ).transpose(1, 2)
 
         layer.w13_weight_scale_inv = torch.nn.Parameter(
             _reshape_mxfp4_scale_for_npu(layer.w13_weight_scale_inv.data),

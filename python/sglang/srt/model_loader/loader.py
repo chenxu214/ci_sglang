@@ -158,8 +158,33 @@ def device_loading_context(module: torch.nn.Module, target_device: torch.device)
         yield module
 
     finally:
-        # Restore parameters to their original devices, ignoring new parameters
+        # Restore parameters to their original devices
         pin_memory = is_pin_memory_available()
+
+        def _to_cpu_safe(data: torch.Tensor) -> torch.Tensor:
+            """Copy NPU tensor to CPU, handling NZ format tensors.
+
+            npu_format_cast(format=29) produces FRACTAL_NZ tensors that
+            cannot be directly copy_ to CPU (AICPU Transpose may fail).
+            Convert to ND format first, then copy.
+            """
+            if data.device.type == "cpu":
+                return data
+            # Convert to ND format (ACL_FORMAT_ND = 2) before copying to CPU.
+            # For tensors already in ND format this is a no-op; for NZ
+            # tensors it performs the required format conversion on-NPU
+            # so the subsequent .cpu() does not hit the failing AICPU
+            # Transpose path.
+            try:
+                import torch_npu
+
+                data = torch_npu.npu_format_cast(data, 2)
+            except (ImportError, RuntimeError):
+                # torch_npu not available or conversion failed:
+                # fall through to plain .cpu() which handles standard tensors.
+                pass
+            return data.cpu()
+
         for name, p in module.named_parameters():
             if name in original_infos:
                 original_info = original_infos[name]
@@ -185,11 +210,10 @@ def device_loading_context(module: torch.nn.Module, target_device: torch.device)
                         device="cpu",
                         pin_memory=pin_memory,
                     )
-                    cpu_data.copy_(p.data)
+                    cpu_data.copy_(_to_cpu_safe(p.data))
                     p.data = cpu_data
                 else:
                     p.data = p.data.to(original_device)
-        # New parameters or parameters already on target device are untouched
 
 
 logger = logging.getLogger(__name__)
@@ -817,8 +841,73 @@ class DefaultModelLoader(BaseModelLoader):
                 # to be on the global target device. This scope is for the
                 # case where cpu offloading is used, where we will move the
                 # parameters onto device for processing and back off after.
-                with device_loading_context(module, target_device):
+                #
+                # Skip device_loading_context for FusedMoE when
+                # moe_dram_offload is enabled: weights are on CPU
+                # (via _force_cpu_allocation) and process_weights_after_loading
+                # skips NZ format cast, so it can run entirely on CPU.
+                # This avoids NPU→CPU round-trip and NZ format issues.
+                _skip_device_loading = getattr(
+                    module, "moe_dram_offload", False
+                ) and "FusedMoE" in type(module).__name__
+                if _skip_device_loading:
                     quant_method.process_weights_after_loading(module)
+                else:
+                    with device_loading_context(module, target_device):
+                        quant_method.process_weights_after_loading(module)
+
+        # MoE DRAM offload: after weight processing, copy expert weights
+        # to Host DRAM and enable on-demand loading
+        _maybe_enable_moe_dram_offload(model)
+
+
+def _maybe_enable_moe_dram_offload(model: nn.Module):
+    """Enable MoE expert weight offloading to Host DRAM if configured.
+
+    After process_weights_after_loading() completes, iterates over all
+    FusedMoE modules. If --moe-dram-offload is enabled, copies expert
+    weights to Host DRAM and enables on-demand loading.
+    """
+    from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+    from sglang.srt.server_args import get_global_server_args
+
+    server_args = get_global_server_args()
+    if not getattr(server_args, "moe_dram_offload", False):
+        return
+
+    from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
+
+    # Create shared ExpertWeightStore for all MoE layers
+    cache_layers = getattr(server_args, "moe_hbm_cache_layers", 0)
+    dram_pool_gb = getattr(server_args, "moe_dram_pool_size_gb", 1300.0)
+    use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
+    expert_store = ExpertWeightStore(
+        hbm_cache_layers=cache_layers,
+        dram_pool_size_gb=dram_pool_gb,
+        use_acc_offload=use_acc_offload,
+    )
+
+    moe_layer_count = 0
+    for _, module in model.named_modules():
+        if isinstance(module, FusedMoE):
+            module.enable_dram_offload(expert_store)
+            module.offload_expert_weights_to_dram()
+            moe_layer_count += 1
+
+    if moe_layer_count > 0:
+        dram_gb = expert_store.get_dram_usage_gb()
+        warmup_info = (
+            f", warmup layers: {cache_layers}" if cache_layers > 0 else ""
+        )
+        logger.info(
+            f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
+            f"Total DRAM usage: {dram_gb:.1f} GB{warmup_info}"
+        )
+        # Release HBM memory used during offload registration,
+        # then warmup: pre-load first N layers' experts into HBM
+        expert_store.release_hbm_weights()
+        if cache_layers > 0:
+            expert_store.warmup_hbm_cache(cache_layers)
 
 
 class LayeredModelLoader(DefaultModelLoader):
