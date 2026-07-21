@@ -877,12 +877,46 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
 
     from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
 
-    # Create shared ExpertWeightStore for all MoE layers
-    dram_pool_gb = getattr(server_args, "moe_dram_pool_size_gb", 1300.0)
+    # Calculate DRAM pool size from actual MoE weight sizes.
+    # In TP mode, each rank already holds 1/world_size of the experts,
+    # so summing the current rank's MoE weights gives the per-rank pool
+    # requirement. acc_offload's buddy allocator needs the pool to be
+    # backed by physical memory, so we must not over-allocate (default
+    # 1300GB/rank would exceed physical DRAM on multi-rank nodes).
     use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
+    user_pool_gb = getattr(server_args, "moe_dram_pool_size_gb", None)
+
+    if user_pool_gb is not None:
+        dram_pool_gb = user_pool_gb
+        logger.info(
+            f"[MoE DRAM Offload] Using user-specified pool size: "
+            f"{dram_pool_gb:.1f} GB/rank"
+        )
+    else:
+        # Auto-calculate: sum all MoE expert weights on this rank.
+        # TP slicing means this is already total / world_size.
+        total_moe_bytes = 0
+        for _, module in model.named_modules():
+            if isinstance(module, FusedMoE):
+                for name in module._get_expert_weight_names():
+                    param = getattr(module, name)
+                    total_moe_bytes += param.data.numel() * param.data.element_size()
+        # 1.2x safety margin for fragmentation
+        dram_pool_gb = (total_moe_bytes * 1.2) / (1024**3)
+        logger.info(
+            f"[MoE DRAM Offload] Auto-calculated pool size: "
+            f"{dram_pool_gb:.1f} GB/rank "
+            f"(MoE weights={total_moe_bytes / 1024**3:.1f} GB, "
+            f"with 1.2x safety margin)"
+        )
+
+    shared_buffer_max_gb = getattr(
+        server_args, "moe_shared_buffer_max_gb", 0
+    )
     expert_store = ExpertWeightStore(
         dram_pool_size_gb=dram_pool_gb,
         use_acc_offload=use_acc_offload,
+        shared_buffer_max_gb=shared_buffer_max_gb,
     )
 
     # Get HBM usage before offload starts
@@ -908,13 +942,8 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
             f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
             f"Total DRAM usage: {dram_gb:.1f} GB"
         )
-        # Release HBM memory freed by offload_expert_weights_to_dram's
-        # delattr. At this point LRU cache and shared buffers are still
-        # empty (not yet used), so this is just gc + empty_cache.
-        import gc
-        gc.collect()
-        if torch.npu.is_available():
-            torch.npu.empty_cache()
+        # Release HBM memory used during offload registration.
+        expert_store.release_hbm_weights()
 
         if torch.npu.is_available():
             alloc_end = torch.npu.memory_allocated() / 1024**3

@@ -68,6 +68,7 @@ class ExpertWeightStore:
         self,
         dram_pool_size_gb: float = 1300.0,
         use_acc_offload: bool = True,
+        shared_buffer_max_gb: float = 0,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
         # Per-layer LRU caches: {layer_id: OrderedDict[expert_id, weights]}
@@ -110,6 +111,9 @@ class ExpertWeightStore:
         # Key: weight_name, Value: HBM tensor of shape [num_experts, ...]
         self._shared_hbm_buffers: Dict[str, torch.Tensor] = {}
         self._shared_buffer_shapes: Dict[str, tuple] = {}
+        # Budget (in bytes) for shared HBM buffers. 0 disables shared buffers
+        # entirely — all layers use per-forward allocation.
+        self._shared_buffer_max_bytes = int(shared_buffer_max_gb * 1024**3)
 
         # Statistics
         self._stats = {"hbm_hit": 0, "dram_load": 0, "total_requests": 0}
@@ -161,29 +165,60 @@ class ExpertWeightStore:
             )
             self.use_acc_offload = False
 
+    def _check_shared_buffer_budget(self, name: str, nbytes: int) -> bool:
+        """Check if allocating a shared buffer of nbytes would fit the budget.
+
+        0 = shared buffer disabled; all layers use per-forward allocation
+        (lowest HBM footprint, higher allocation overhead per forward).
+        """
+        if self._shared_buffer_max_bytes <= 0:
+            return False
+        current = sum(t.nbytes for t in self._shared_hbm_buffers.values())
+        if current + nbytes > self._shared_buffer_max_bytes:
+            logger.warning(
+                f"[ExpertWeightStore] Shared buffer '{name}' "
+                f"({nbytes / 1024**2:.1f} MB) would exceed budget "
+                f"({self._shared_buffer_max_bytes / 1024**3:.1f} GB, "
+                f"current={current / 1024**2:.1f} MB). "
+                f"Skipping shared buffer; will use per-forward allocation."
+            )
+            return False
+        return True
+
     def get_shared_hbm_buffer(
         self, name: str, shape: tuple, dtype: torch.dtype
-    ) -> torch.Tensor:
+    ) -> Optional[torch.Tensor]:
         """Get or create a shared HBM buffer for a weight name.
 
         All MoE layers share the same buffer (same shape/dtype).
         Before each layer's forward, Top-K experts are loaded into it.
         This avoids allocating 80 separate HBM tensors (~160G total).
         Instead, only one buffer (~2G) is allocated and reused.
+
+        Returns None if the buffer would exceed the HBM budget.
         """
-        if name not in self._shared_hbm_buffers:
-            target_device = "npu" if torch.npu.is_available() else "cpu"
-            self._shared_hbm_buffers[name] = torch.empty(
-                shape, dtype=dtype, device=target_device
-            )
-            self._shared_buffer_shapes[name] = shape
-            alloc_now, reserved_now = _get_hbm_usage_gb()
-            logger.info(
-                f"[ExpertWeightStore] Allocated shared HBM buffer '{name}': "
-                f"shape={shape}, dtype={dtype}, "
-                f"size={self._shared_hbm_buffers[name].nbytes / 1024**2:.1f} MB. "
-                f"HBM now: alloc={alloc_now:.2f} GB, reserved={reserved_now:.2f} GB"
-            )
+        if name in self._shared_hbm_buffers:
+            return self._shared_hbm_buffers[name]
+
+        estimated_nbytes = (
+            int(torch.tensor(list(shape)).prod().item()) * dtype.itemsize
+            if shape else 0
+        )
+        if not self._check_shared_buffer_budget(name, estimated_nbytes):
+            return None
+
+        target_device = "npu" if torch.npu.is_available() else "cpu"
+        self._shared_hbm_buffers[name] = torch.empty(
+            shape, dtype=dtype, device=target_device
+        )
+        self._shared_buffer_shapes[name] = shape
+        alloc_now, reserved_now = _get_hbm_usage_gb()
+        logger.info(
+            f"[ExpertWeightStore] Allocated shared HBM buffer '{name}': "
+            f"shape={shape}, dtype={dtype}, "
+            f"size={self._shared_hbm_buffers[name].nbytes / 1024**2:.1f} MB. "
+            f"HBM now: alloc={alloc_now:.2f} GB, reserved={reserved_now:.2f} GB"
+        )
         return self._shared_hbm_buffers[name]
 
     def register_expert(
@@ -894,3 +929,41 @@ class ExpertWeightStore:
         for weights in self.dram_store.values():
             total += sum(t.nbytes for t in weights.values())
         return total / 1024**3
+
+    def release_hbm_weights(self):
+        """Release all HBM cached weights and shared buffers.
+
+        Called after offload registration to free HBM used during the
+        registration process. LRU cache and shared buffers should be
+        empty at this point (not yet used), so this is mostly gc +
+        empty_cache.
+        """
+        cache_count = sum(
+            len(lc) for lc in self._per_layer_caches.values()
+        )
+        cache_gb = self.hbm_cache_used_bytes / 1024**3
+        shared_buffer_count = len(self._shared_hbm_buffers)
+        shared_buffer_bytes = sum(
+            t.nbytes for t in self._shared_hbm_buffers.values()
+        )
+
+        # Clear LRU caches and shared buffers
+        for lc in self._per_layer_caches.values():
+            lc.clear()
+        self._per_layer_caches.clear()
+        self.hbm_cache_used_bytes = 0
+        self._shared_hbm_buffers.clear()
+        self._decode_buffers.clear()
+        self._decode_slot_maps.clear()
+
+        logger.info(
+            f"[ExpertWeightStore] release_hbm_weights: "
+            f"cleared {cache_count} LRU entries ({cache_gb:.2f} GB), "
+            f"{shared_buffer_count} shared buffers "
+            f"({shared_buffer_bytes / 1024**2:.1f} MB)"
+        )
+
+        import gc
+        gc.collect()
+        if torch.npu.is_available():
+            torch.npu.empty_cache()

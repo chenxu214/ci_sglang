@@ -1475,15 +1475,22 @@ class FusedMoE(torch.nn.Module):
 
         # Ensure shared HBM buffers exist (one per weight name).
         # All MoE layers share the same buffer (reused across forwards).
+        # If budget is exceeded, get_shared_hbm_buffer returns None and
+        # we fall back to a temporary per-forward allocation.
         shared_buffers = {}
         for name in weight_names:
             sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
             full_shape = (self.num_local_experts,) + sample_tensor.shape
             dtype = sample_tensor.dtype
-            shared_buffers[name] = self._expert_weight_store.get_shared_hbm_buffer(
+            buf = self._expert_weight_store.get_shared_hbm_buffer(
                 name, full_shape, dtype
             )
-            setattr(self, name, shared_buffers[name])
+            if buf is None:
+                # Budget exceeded: allocate temporary (non-cached) buffer.
+                target_device = "npu" if torch.npu.is_available() else "cpu"
+                buf = torch.empty(full_shape, dtype=dtype, device=target_device)
+            shared_buffers[name] = buf
+            setattr(self, name, buf)
 
         # Batch H2D directly into shared buffers (avoids extra HBM→HBM copy)
         self._expert_weight_store.batch_load_to_shared_buffer(

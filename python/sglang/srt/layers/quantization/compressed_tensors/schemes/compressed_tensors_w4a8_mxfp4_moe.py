@@ -135,21 +135,36 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         delattr(layer, "w2_weight_packed")
 
         # Skip NZ format cast when MoE DRAM offload is enabled.
-        # npu_format_cast(format=29) produces NZ layout incompatible with
-        # CPU round-trip (AICPU Transpose kernel fails with errorCode=0x2a).
-        # For offload, weights stay in ND format and are converted to NZ
-        # at forward time in w4a8_mxfp4_gmm_npu.
+        # NZ format is incompatible with CPU round-trip (clone/copy_/
+        # npu_format_cast(→0) all fail on internal format). For offload,
+        # weights are stored in ND format and converted to NZ at forward
+        # time in w4a8_mxfp4_gmm_npu (is_contiguous() check).
         _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
 
+        # If weights are on CPU (DRAM offload with _force_cpu_allocation),
+        # move to NPU first — npu_format_cast requires NPU backend.
         if not _skip_nz_cast:
+            if layer.w13_weight.data.device.type == "cpu":
+                layer.w13_weight.data = layer.w13_weight.data.npu()
+                layer.w2_weight.data = layer.w2_weight.data.npu()
+            if layer.w13_weight_scale.data.device.type == "cpu":
+                layer.w13_weight_scale.data = layer.w13_weight_scale.data.npu()
+                layer.w2_weight_scale.data = layer.w2_weight_scale.data.npu()
+
             layer.w13_weight.data = torch_npu.npu_format_cast(
                 layer.w13_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
             )
             layer.w2_weight.data = torch_npu.npu_format_cast(
                 layer.w2_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
             )
-        layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
-        layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
+            layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
+            layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
+        else:
+            # ND format: just transpose for offload storage.
+            # Forward will convert to NZ via is_contiguous() check.
+            layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2).contiguous()
+            layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2).contiguous()
+
         g, n, k = layer.w13_weight_scale.shape
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(g, n, k // 2, 2).transpose(-3, -2)
         g, n, k = layer.w2_weight_scale.shape
@@ -497,20 +512,18 @@ def w4a8_mxfp4_gmm_npu(
     else:
         x, x_scale = input, input_scale
 
-    # For ND-format weights (from DRAM offload), convert to NZ format at
-    # forward time. NZ format cannot be stored in DRAM (AICPU Transpose
-    # kernel fails on CPU transfer), so DRAM offload weights are stored
-    # in ND format and converted to NZ on NPU here.
+    # Weights from acc_offload path are NZ-format (stored via sparse_copy
+    # D2H that bypasses format conversion) — non-contiguous, skip conversion.
+    # Weights from fallback path (no acc_offload) are ND-format (stored as
+    # contiguous on CPU) — convert to NZ format for CANN kernel.
     #
-    # The is_contiguous() guard distinguishes the two paths:
-    #   - ND path (offload): contiguous after transpose → convert
-    #   - NZ path (non-offload): non-contiguous after NZ cast → skip
-    #
-    # CANN aclnnGroupedMatmulV4 in MX mode requires scale and weight to
-    # have the SAME transposition state. DRAM round-trip (.cpu() +
-    # .to("npu")) makes scale contiguous (transposed=false), so we
-    # restore its transposed state via reshape + transpose to match weight.
+    # Scales from DRAM offload lose their non-contiguous (transposed)
+    # state during round-trip (.copy_() flattens to C-order). Restore
+    # the transposed state to match NZ weights (CANN requires matching
+    # transposition in MX mode).
     if weight.is_contiguous():
+        # Fallback path (no acc_offload): weight is ND from DRAM.
+        # Convert to NZ format: undo transpose → cast to NZ → re-apply transpose.
         weight = torch_npu.npu_format_cast(
             weight.transpose(1, 2).contiguous().view(torch.uint8),
             29,
@@ -518,6 +531,7 @@ def w4a8_mxfp4_gmm_npu(
             input_dtype=torch_npu.float4_e2m1fn_x2,
         ).transpose(1, 2)
 
+    if weight_scale.is_contiguous():
         # Restore scale's transposed state to match weight (NZ).
         # process_weights_after_loading applied:
         #   reshape(E, N, K//2, 2).transpose(-3, -2) → [E, K//2, N, 2]
