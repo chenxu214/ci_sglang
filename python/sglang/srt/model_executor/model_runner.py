@@ -2391,8 +2391,16 @@ class ModelRunner(ModelRunnerKVCacheMixin):
     @property
     def kimi_linear_config(self):
         config = self.model_config.hf_config
+        # Multimodal K3 checkpoints wrap the language config in text_config.
+        # With trust_remote_code it is a checkpoint-defined KimiLinearConfig,
+        # so isinstance against SGLang's class is false even though the schema
+        # is identical. Convert it to the SGLang config used by the hybrid KDA
+        # backend and Mamba state-pool allocator.
+        config = getattr(config, "text_config", config)
         if isinstance(config, KimiLinearConfig):
             return config
+        if getattr(config, "model_type", None) == "kimi_linear":
+            return KimiLinearConfig(**config.to_dict())
         return None
 
     def _get_linear_attn_registry_result(self):
