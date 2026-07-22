@@ -203,7 +203,7 @@ def forward_mla_prepare_npu(
                 k_nope = m.kv_a_layernorm(k_nope).unsqueeze(1)
                 k_pe = latent_cache[..., m.kv_lora_rank :].unsqueeze(1)
             else:
-                if qkv_latent.shape[0] < 65536 and not dsa_use_prefill_cp(
+                if False and qkv_latent.shape[0] < 65536 and not dsa_use_prefill_cp(
                     forward_batch
                 ):
                     q, k_nope, k_pe = fused_split_qk_norm(
@@ -245,7 +245,8 @@ def forward_mla_prepare_npu(
 
         q_nope_out = q_nope_out.transpose(0, 1)
 
-        q_pe, k_pe = m.rotary_emb(positions, q_pe, k_pe)
+        if m.rotary_emb is not None:
+            q_pe, k_pe = m.rotary_emb(positions, q_pe, k_pe)
 
         if dsa_use_prefill_cp(forward_batch):
             # support allgather+rerrange
@@ -380,7 +381,7 @@ def forward_dsa_prepare_npu(
             if q_event is not None:
                 torch.npu.current_stream().wait_event(q_event)
         else:
-            if fused_qkv_a_proj_out.shape[0] < 65535 and not dsa_use_prefill_cp(
+            if False and fused_qkv_a_proj_out.shape[0] < 65535 and not dsa_use_prefill_cp(
                 forward_batch
             ):
                 q_lora, k_nope, k_pe = fused_split_qk_norm(
