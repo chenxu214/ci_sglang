@@ -6,6 +6,7 @@ from collections import deque
 from collections.abc import Iterable
 from typing import Optional
 
+import logging
 import torch
 from torch import nn
 from torch.nn.parameter import Parameter
@@ -55,8 +56,12 @@ from sglang.srt.utils.common import (
     BumpAllocator,
     add_prefix,
     get_int_env_var,
+    log_info_on_rank0,
     set_weight_attrs,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class _NoopRotaryEmbedding(nn.Module):
@@ -506,15 +511,25 @@ class KimiMoE(nn.Module):
                 )
         self._prefill_event = torch.cuda.Event()
         self._prefill_event.record(stream)
+        log_info_on_rank0(
+            logger,
+            f"KimiMoE prefill prefetch done (layer_idx={self.layer_idx}, stream={stream})",
+        )
 
     def wait_prefill(self) -> None:
         """Block the default stream until the prefetch H2D copy for this layer
         has completed. Marks the buffer as ready for kernel use.
         """
+        log_info_on_rank0(
+            logger, f"KimiMoE prefill wait start (layer_idx={self.layer_idx})"
+        )
         if self._prefill_event is not None:
             self._prefill_event.wait()
             self._prefill_event = None
         self._prefill_loaded = True
+        log_info_on_rank0(
+            logger, f"KimiMoE prefill wait done (layer_idx={self.layer_idx})"
+        )
 
     # ------------------------------------------------------------------ #
     # Decode-mode LRU swap-in (unchanged logic, slots from env var).
@@ -1333,7 +1348,7 @@ class KimiLinearModel(nn.Module):
         # buffers (full-112 prefill vs 20-slot decode cache).
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
-            if getattr(layer, "is_moe", False):
+            if hasattr(layer, "block_sparse_moe"):
                 layer.block_sparse_moe._current_mode = (
                     "prefill" if is_prefill else "decode"
                 )
@@ -1343,7 +1358,7 @@ class KimiLinearModel(nn.Module):
         if is_prefill and N > 0:
             for i in range(self.start_layer, self.end_layer):
                 layer = self.layers[i]
-                if not getattr(layer, "is_moe", False):
+                if not hasattr(layer, "block_sparse_moe"):
                     continue
                 if i - self.start_layer >= N:
                     break
@@ -1355,7 +1370,7 @@ class KimiLinearModel(nn.Module):
                 layer = self.layers[i]
                 moe = (
                     layer.block_sparse_moe
-                    if getattr(layer, "is_moe", False)
+                    if hasattr(layer, "block_sparse_moe")
                     else None
                 )
                 if is_prefill and N > 0 and moe is not None:
@@ -1367,7 +1382,7 @@ class KimiLinearModel(nn.Module):
                     if target_i < self.end_layer:
                         target_moe = (
                             self.layers[target_i].block_sparse_moe
-                            if getattr(self.layers[target_i], "is_moe", False)
+                            if hasattr(self.layers[target_i], "block_sparse_moe")
                             else None
                         )
                         if target_moe is not None:
@@ -1378,6 +1393,11 @@ class KimiLinearModel(nn.Module):
                     forward_batch=forward_batch,
                     residual=residual,
                     zero_allocator=zero_allocator,
+                )
+                log_info_on_rank0(
+                    logger,
+                    f"KimiMoE layer compute done (layer_idx={i}, "
+                    f"mode={'prefill' if is_prefill else 'decode'})",
                 )
                 # After prefill compute, free this layer's full-112 buffer to
                 # cap HBM usage at ~(N+1) concurrent buffers.
