@@ -294,6 +294,24 @@ class KimiMoE(nn.Module):
                 ),
             )
 
+    # ------------------------------------------------------------------ #
+    # Prefill prefetch delegation to the inner FusedMoE experts layer.
+    # KimiLinearModel calls these on KimiMoE; they forward to self.experts
+    # (a FusedMoE instance) which owns the ExpertWeightStore integration.
+    # ------------------------------------------------------------------ #
+
+    def start_prefill_prefetch(self):
+        if hasattr(self.experts, "start_prefill_prefetch"):
+            self.experts.start_prefill_prefetch()
+
+    def wait_prefill_prefetch(self):
+        if hasattr(self.experts, "wait_prefill_prefetch"):
+            self.experts.wait_prefill_prefetch()
+
+    def free_prefill_cache(self):
+        if hasattr(self.experts, "free_prefill_cache"):
+            self.experts.free_prefill_cache()
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_size = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_size)
@@ -921,12 +939,12 @@ class KimiLinearModel(nn.Module):
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
             if hasattr(layer, "block_sparse_moe"):
-                moe = layer.block_sparse_moe
+                experts = layer.block_sparse_moe.experts
                 if (
-                    getattr(moe, "_dram_offload_enabled", False)
-                    and moe._expert_weight_store is not None
+                    getattr(experts, "_dram_offload_enabled", False)
+                    and experts._expert_weight_store is not None
                 ):
-                    moe._expert_weight_store.set_cache_mode(is_prefill)
+                    experts._expert_weight_store.set_cache_mode(is_prefill)
 
         # Prefill prefetch coordination: pre-trigger async H2D copy of the
         # full expert set for the first N MoE layers so they start loading
