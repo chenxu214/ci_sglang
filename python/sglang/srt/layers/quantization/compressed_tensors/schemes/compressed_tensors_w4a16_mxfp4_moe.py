@@ -163,11 +163,6 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
             layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
             layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2).contiguous()
 
-        layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
-        layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
-        layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.bfloat16)
-        layer.w2_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w2_weight.data).contiguous()
-
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
         layer.w2_weight_scale.data = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
 
