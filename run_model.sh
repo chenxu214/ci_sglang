@@ -24,16 +24,19 @@ export HCCL_SOCKET_IFNAME=lo
 export GLOO_SOCKET_IFNAME=lo
 export STREAMS_PER_DEVICE=32
 
-export DEEP_NORMAL_MODE_USE_INT8_QUANT=1
+export DEEP_NORMAL_MODE_USE_INT8_QUANT=0
 
 export SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=64
 export HCCL_BUFFSIZE=1200
 export HCCL_OP_EXPANSION_MODE=AIV
 export ASCEND_USE_FIA=1
 export SGLANG_NPU_PROFILING=1
+export SGLANG_W4A8_MXFP4_MOE=1
 
 export PYTHONPATH=/home/chenxu/ci_sglang/python:$PYTHONPATH
-export ASCEND_LAUNCH_BLOCKING=1
+
+export ASCEND_RT_VISIBLE_DEVICES=4,5,6,7
+
 sglang serve \
     --model-path $MODEL_PATH \
     --trust-remote-code \
@@ -42,16 +45,19 @@ sglang serve \
     --device npu \
     --quantization compressed-tensors \
     --dtype bfloat16 \
-    --tp-size 8 \
-    --mem-fraction-static 0.8 \
+    --tp-size 4 \
+    --mem-fraction-static 0.5 \
     --max-total-tokens 65536 \
     --page-size 128 \
     --chunked-prefill-size -1 \
-    --disable-cuda-graph \
+    --disable-radix-cache \
     --host 0.0.0.0 \
     --port 8880 \
-    --disable-radix-cache \
-    --skip-server-warmup
+    --moe-a2a-backend deepep \
+    --deepep-mode auto \
+    --skip-server-warmup \
+    --disable-cuda-graph \
+    --cuda-graph-bs 2 4
 
 exit 1
 #    --moe-a2a-backend deepep \
