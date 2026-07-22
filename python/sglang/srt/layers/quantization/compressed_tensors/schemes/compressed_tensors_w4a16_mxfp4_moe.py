@@ -38,6 +38,21 @@ if TYPE_CHECKING:
     )
 
 
+# Unpack the weights to FP4 and return them in float32 format
+def unpack_uint8_to_fp4_return_float32(packed: torch.Tensor) -> torch.Tensor:
+    low = packed & 0x0F
+    high = packed // 16
+    # The high 4 bits and low 4 bits are arranged alternately, with the low 4 bits in front.
+    unpacked = torch.stack([low, high], dim=-1).reshape(*packed.shape[:-1], -1)
+    # A 4-digit integer is mapped to mxfp4 based on its value.
+    fp4_values = torch.tensor(
+        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0],
+        dtype=torch.float32,
+        device=packed.device,
+    )
+    return fp4_values[unpacked.to(torch.long)]
+
+
 class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
 
     def __init__(self):
@@ -90,7 +105,7 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
                 2 * intermediate_size_per_partition,
                 # 2 fp4 items are packed in the input dimension
                 hidden_size // self.group_size,
-                dtype=torch.float8_e8m0fnu,
+                dtype=torch.uint8,
             ),
             requires_grad=False,
         )
@@ -106,7 +121,7 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
                 hidden_size,
                 # 2 fp4 items are packed in the input dimension
                 intermediate_size_per_partition // self.group_size,
-                dtype=torch.float8_e8m0fnu,
+                dtype=torch.uint8,
             ),
             requires_grad=False,
         )
@@ -115,11 +130,6 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
             {"quant_method": FusedMoeWeightScaleSupported.GROUP.value}
         )
         set_weight_attrs(w2_weight_scale, extra_weight_attrs)
-
-        w13_weight_scale.format_ue8m0 = False
-        w2_weight_scale.format_ue8m0 = False
-        layer.register_parameter("w13_weight_scale_inv", w13_weight_scale)
-        layer.register_parameter("w2_weight_scale_inv", w2_weight_scale)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         # From packed to weight
@@ -133,23 +143,18 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        layer.w13_weight.data = torch_npu.npu_format_cast(
-            layer.w13_weight.data.view(torch.uint8),
-            29,
-        ).transpose(1, 2)
-        layer.w2_weight.data = torch_npu.npu_format_cast(
-            layer.w2_weight.data.view(torch.uint8),
-            29,
-        ).transpose(1, 2)
+        layer.w13_weight.data = unpack_uint8_to_fp4_return_float32(layer.w13_weight.data)
+        layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
+        layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29, customize_dtype=torch.bfloat16)
+        layer.w13_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w13_weight.data).contiguous()
 
-        layer.w13_weight_scale_inv = torch.nn.Parameter(
-            _reshape_mxfp4_scale_for_npu(layer.w13_weight_scale_inv.data),
-            requires_grad=False,
-        )
-        layer.w2_weight_scale_inv = torch.nn.Parameter(
-            _reshape_mxfp4_scale_for_npu(layer.w2_weight_scale_inv.data),
-            requires_grad=False,
-        )
+        layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
+        layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
+        layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.bfloat16)
+        layer.w2_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w2_weight.data).contiguous()
+
+        layer.w13_weight_scale.data = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
+        layer.w2_weight_scale.data = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
 
     def create_moe_runner(
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
@@ -179,9 +184,9 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         output = npu_fused_experts_w4a16_mxfp4(
             hidden_states,
             layer.w13_weight,
-            layer.w13_weight_scale_inv,
+            layer.w13_weight_scale,
             layer.w2_weight,
-            layer.w2_weight_scale_inv,
+            layer.w2_weight_scale,
             topk_weights,
             topk_ids,
             top_k,
@@ -204,9 +209,9 @@ def _reshape_mxfp4_scale_for_npu(scale: torch.Tensor) -> torch.Tensor:
 def npu_fused_experts_w4a16_mxfp4(
     hidden_states: torch.Tensor,
     w13: torch.Tensor,
-    w13_weight_scale_inv: torch.Tensor,
+    w13_weight_scale: torch.Tensor,
     w2: torch.Tensor,
-    w2_weight_scale_inv: torch.Tensor,
+    w2_weight_scale: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
     top_k: int,
@@ -216,9 +221,9 @@ def npu_fused_experts_w4a16_mxfp4(
         return npu_fused_experts_w4a16_mxfp4_decode(
             hidden_states=hidden_states,
             w13=w13,
-            w13_weight_scale_inv=w13_weight_scale_inv,
+            w13_weight_scale=w13_weight_scale,
             w2=w2,
-            w2_weight_scale_inv=w2_weight_scale_inv,
+            w2_weight_scale=w2_weight_scale,
             topk_weights=topk_weights,
             topk_ids=topk_ids,
             top_k=top_k,
@@ -260,7 +265,7 @@ def npu_fused_experts_w4a16_mxfp4(
         input=hidden_states,
         input_scale=None,
         weight=w13,
-        weight_scale=w13_weight_scale_inv,
+        weight_scale=w13_weight_scale,
         group_list_type=0,
         group_list=expert_tokens,
         output_dtype=original_dtype,
@@ -270,7 +275,7 @@ def npu_fused_experts_w4a16_mxfp4(
         input=hidden_states,
         input_scale=None,
         weight=w2,
-        weight_scale=w2_weight_scale_inv,
+        weight_scale=w2_weight_scale,
         group_list_type=0,
         group_list=expert_tokens,
         output_dtype=original_dtype,
@@ -296,9 +301,9 @@ def npu_fused_experts_w4a16_mxfp4(
 def npu_fused_experts_w4a16_mxfp4_decode(
     hidden_states: torch.Tensor,
     w13: torch.Tensor,
-    w13_weight_scale_inv: torch.Tensor,
+    w13_weight_scale: torch.Tensor,
     w2: torch.Tensor,
-    w2_weight_scale_inv: torch.Tensor,
+    w2_weight_scale: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
     top_k: int,
@@ -328,7 +333,7 @@ def npu_fused_experts_w4a16_mxfp4_decode(
         input=hidden_states,
         input_scale=None,
         weight=w13,
-        weight_scale=w13_weight_scale_inv,
+        weight_scale=w13_weight_scale,
         group_list_type=group_list_type,
         group_list=expert_tokens,
         output_dtype=original_dtype,
@@ -338,7 +343,7 @@ def npu_fused_experts_w4a16_mxfp4_decode(
         input=hidden_states,
         input_scale=None,
         weight=w2,
-        weight_scale=w2_weight_scale_inv,
+        weight_scale=w2_weight_scale,
         group_list_type=group_list_type,
         group_list=expert_tokens,
         output_dtype=original_dtype,
@@ -413,7 +418,7 @@ def npu_apply_without_routing_weights_w4a16_mxfp4(
         input=hidden_states,
         input_scale=hidden_states_scale,
         weight=layer.w13_weight,
-        weight_scale=layer.w13_weight_scale_inv,
+        weight_scale=layer.w13_weight_scale,
         group_list_type=group_list_type,
         group_list=group_list,
         output_dtype=output_dtype,
@@ -423,7 +428,7 @@ def npu_apply_without_routing_weights_w4a16_mxfp4(
         input=hidden_states,
         input_scale=None,
         weight=layer.w2_weight,
-        weight_scale=layer.w2_weight_scale_inv,
+        weight_scale=layer.w2_weight_scale,
         group_list_type=group_list_type,
         group_list=group_list,
         output_dtype=output_dtype,
@@ -442,41 +447,41 @@ def w4a16_mxfp4_gmm_npu(
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
 
-    # return torch.ops.npu.npu_grouped_matmul(
-    #     [input],
-    #     [weight],
-    #     antiquant_scale=[weight_scale],
-    #     split_item=2,
-    #     group_type=0,
-    #     group_list=group_list,
-    #     group_list_type=group_list_type,
-    #     output_dtype=output_dtype,
-    # )[0]
-
-    if input_scale is None:
-        x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
-            input,
-            axis=1,
-            round_mode="rint",
-            dst_type=torch_npu.float4_e2m1fn_x2,
-            block_size=32,
-            scale_alg=None,
-        )
-    else:
-        x, x_scale = input, input_scale
-
     return torch.ops.npu.npu_grouped_matmul(
-        [x],
+        [input],
         [weight],
-        scale=[weight_scale],
-        scale_dtype=torch_npu.float8_e8m0fnu,
-        per_token_scale=[x_scale],
+        antiquant_scale=[weight_scale],
         split_item=2,
         group_type=0,
         group_list=group_list,
         group_list_type=group_list_type,
         output_dtype=output_dtype,
-        x_dtype=torch_npu.float4_e2m1fn_x2,
-        weight_dtype=torch_npu.float4_e2m1fn_x2,
-        per_token_scale_dtype=torch_npu.float8_e8m0fnu,
     )[0]
+
+    # if input_scale is None:
+    #     x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
+    #         input,
+    #         axis=1,
+    #         round_mode="rint",
+    #         dst_type=torch_npu.float4_e2m1fn_x2,
+    #         block_size=32,
+    #         scale_alg=None,
+    #     )
+    # else:
+    #     x, x_scale = input, input_scale
+    #
+    # return torch.ops.npu.npu_grouped_matmul(
+    #     [x],
+    #     [weight],
+    #     scale=[weight_scale],
+    #     scale_dtype=torch_npu.float8_e8m0fnu,
+    #     per_token_scale=[x_scale],
+    #     split_item=2,
+    #     group_type=0,
+    #     group_list=group_list,
+    #     group_list_type=group_list_type,
+    #     output_dtype=output_dtype,
+    #     x_dtype=torch_npu.float4_e2m1fn_x2,
+    #     weight_dtype=torch_npu.float4_e2m1fn_x2,
+    #     per_token_scale_dtype=torch_npu.float8_e8m0fnu,
+    # )[0]
