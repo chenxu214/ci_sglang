@@ -891,12 +891,10 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
     import torch_npu  # noqa: F401  (ensures npu API available)
     if torch.npu.is_available():
         alloc_start = torch.npu.memory_allocated() / 1024**3
-        reserved_start = torch.npu.memory_reserved() / 1024**3
     else:
-        alloc_start = reserved_start = 0.0
+        alloc_start = 0.0
     logger.info(
-        f"[MoE DRAM Offload] HBM before offload: "
-        f"alloc={alloc_start:.2f} GB, reserved={reserved_start:.2f} GB"
+        f"[MoE DRAM Offload] HBM before offload: alloc={alloc_start:.2f} GB"
     )
 
     moe_layer_count = 0
@@ -921,12 +919,10 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
         if cache_layers > 0:
             expert_store.warmup_hbm_cache(cache_layers)
 
-        # Final HBM usage
         if torch.npu.is_available():
             alloc_end = torch.npu.memory_allocated() / 1024**3
-            reserved_end = torch.npu.memory_reserved() / 1024**3
         else:
-            alloc_end = reserved_end = 0.0
+            alloc_end = 0.0
         logger.info(
             f"[MoE DRAM Offload] After offload+warmup: "
             f"HBM alloc={alloc_end:.2f} GB "

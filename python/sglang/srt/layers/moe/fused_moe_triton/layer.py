@@ -1386,19 +1386,16 @@ class FusedMoE(torch.nn.Module):
 
         num_experts = self.num_local_experts
 
-        # Calculate total HBM bytes to be freed
         total_hbm_bytes = 0
         for expert_id in range(num_experts):
             for name in weight_names:
                 param = getattr(self, name)
                 total_hbm_bytes += param.data[expert_id].nbytes
 
-        # Get HBM usage before offload
         if torch.npu.is_available():
             alloc_before = torch.npu.memory_allocated() / 1024**3
-            reserved_before = torch.npu.memory_reserved() / 1024**3
         else:
-            alloc_before = reserved_before = 0.0
+            alloc_before = 0.0
 
         for expert_id in range(num_experts):
             expert_weights = {}
@@ -1412,19 +1409,17 @@ class FusedMoE(torch.nn.Module):
                 weights=expert_weights,
             )
 
-        # Free the original weight tensors entirely.
-        # During forward, shared HBM buffers will be used instead.
+        # Free the original weight tensors; shared HBM buffers will be
+        # used instead during forward.
         for name in weight_names:
             if hasattr(self, name):
                 delattr(self, name)
 
-        # Trigger GC and empty cache to actually release HBM
         import gc
         gc.collect()
         if torch.npu.is_available():
             torch.npu.empty_cache()
 
-        # Get HBM usage after offload + free
         if torch.npu.is_available():
             alloc_after = torch.npu.memory_allocated() / 1024**3
         else:
@@ -1438,15 +1433,7 @@ class FusedMoE(torch.nn.Module):
         )
 
     def _load_experts_on_demand(self, topk_output: TopKOutput):
-        """Load Top-K selected experts from DRAM to shared HBM buffer.
-
-        Uses ExpertWeightStore.get_shared_hbm_buffer() to obtain a shared
-        HBM tensor (same across all layers), then loads Top-K experts into
-        it. The shared buffer avoids allocating 80 separate HBM tensors.
-
-        Note: In EP mode, only local experts are loaded. Tokens requiring
-        remote experts are handled by the dispatcher (all-to-all).
-        """
+        """Load Top-K selected experts from DRAM to shared HBM buffer."""
         if not hasattr(topk_output, "topk_ids") or topk_output.topk_ids is None:
             return
 
@@ -1456,7 +1443,6 @@ class FusedMoE(torch.nn.Module):
         if not global_expert_ids:
             return
 
-        # Map global expert IDs to local expert IDs
         local_expert_ids = []
         for gid in global_expert_ids:
             lid = self._map_global_expert_id_to_local_expert_id(gid)
@@ -1466,11 +1452,9 @@ class FusedMoE(torch.nn.Module):
         if not local_expert_ids:
             return
 
-        # Snapshot HBM before DRAM→HBM load (only meaningful if there are misses)
         if torch.npu.is_available():
             alloc_before = torch.npu.memory_allocated() / 1024**3
 
-        # Batch load local experts from DRAM to HBM
         loaded_weights = self._expert_weight_store.batch_get_expert_weights(
             layer_id=self.layer_id,
             expert_ids=local_expert_ids,
@@ -1479,12 +1463,10 @@ class FusedMoE(torch.nn.Module):
         if not loaded_weights:
             return
 
-        # Get weight names from loaded data (attributes may be deleted after offload)
         sample_expert_weights = next(iter(loaded_weights.values()))
         weight_names = list(sample_expert_weights.keys())
 
-        # Get shared HBM buffers and write loaded expert data into them.
-        # The buffer shape is [num_local_experts, ...], same for all layers.
+        # Write loaded experts into shared HBM buffers (reused across layers).
         # Only Top-K entries are filled; the rest contain stale data but
         # are never accessed (kernel only reads Top-K indices from router).
         for name in weight_names:
@@ -1493,20 +1475,16 @@ class FusedMoE(torch.nn.Module):
             full_shape = (self.num_local_experts,) + sample_weight.shape
             dtype = sample_weight.dtype
 
-            # Get or create shared HBM buffer
             hbm_buffer = self._expert_weight_store.get_shared_hbm_buffer(
                 name, full_shape, dtype
             )
 
-            # Write loaded experts into the buffer
             for expert_id, weights in loaded_weights.items():
                 if name in weights:
                     hbm_buffer[expert_id].copy_(weights[name])
 
-            # Set as the layer's weight parameter for computation
             setattr(self, name, hbm_buffer)
 
-        # Log HBM usage change after loading experts for this layer
         if torch.npu.is_available():
             alloc_after = torch.npu.memory_allocated() / 1024**3
             stats = self._expert_weight_store.get_stats()
