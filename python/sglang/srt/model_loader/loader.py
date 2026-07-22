@@ -887,6 +887,18 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
         use_acc_offload=use_acc_offload,
     )
 
+    # Get HBM usage before offload starts
+    import torch_npu  # noqa: F401  (ensures npu API available)
+    if torch.npu.is_available():
+        alloc_start = torch.npu.memory_allocated() / 1024**3
+        reserved_start = torch.npu.memory_reserved() / 1024**3
+    else:
+        alloc_start = reserved_start = 0.0
+    logger.info(
+        f"[MoE DRAM Offload] HBM before offload: "
+        f"alloc={alloc_start:.2f} GB, reserved={reserved_start:.2f} GB"
+    )
+
     moe_layer_count = 0
     for _, module in model.named_modules():
         if isinstance(module, FusedMoE):
@@ -908,6 +920,18 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
         expert_store.release_hbm_weights()
         if cache_layers > 0:
             expert_store.warmup_hbm_cache(cache_layers)
+
+        # Final HBM usage
+        if torch.npu.is_available():
+            alloc_end = torch.npu.memory_allocated() / 1024**3
+            reserved_end = torch.npu.memory_reserved() / 1024**3
+        else:
+            alloc_end = reserved_end = 0.0
+        logger.info(
+            f"[MoE DRAM Offload] HBM after offload+warmup: "
+            f"alloc={alloc_end:.2f} GB, reserved={reserved_end:.2f} GB. "
+            f"Net HBM freed: {alloc_start - alloc_end:.2f} GB allocated"
+        )
 
 
 class LayeredModelLoader(DefaultModelLoader):

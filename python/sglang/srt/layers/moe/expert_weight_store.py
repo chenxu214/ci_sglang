@@ -22,6 +22,22 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+def _get_hbm_usage_gb() -> Tuple[float, float]:
+    """Get current HBM allocated/reserved memory in GB.
+
+    Returns:
+        (allocated_gb, reserved_gb)
+        - allocated: memory currently held by tensors
+        - reserved: total memory reserved by the caching allocator
+                    (closer to what system tools report)
+    """
+    if not torch.npu.is_available():
+        return 0.0, 0.0
+    allocated = torch.npu.memory_allocated() / 1024**3
+    reserved = torch.npu.memory_reserved() / 1024**3
+    return allocated, reserved
+
+
 class ExpertWeightStore:
     """Manages MoE expert weights across Host DRAM and HBM.
 
@@ -135,10 +151,12 @@ class ExpertWeightStore:
                 shape, dtype=dtype, device=target_device
             )
             self._shared_buffer_shapes[name] = shape
+            alloc_now, reserved_now = _get_hbm_usage_gb()
             logger.info(
                 f"[ExpertWeightStore] Allocated shared HBM buffer '{name}': "
                 f"shape={shape}, dtype={dtype}, "
-                f"size={self._shared_hbm_buffers[name].nbytes / 1024**2:.1f} MB"
+                f"size={self._shared_hbm_buffers[name].nbytes / 1024**2:.1f} MB. "
+                f"HBM now: alloc={alloc_now:.2f} GB, reserved={reserved_now:.2f} GB"
             )
         return self._shared_hbm_buffers[name]
 
@@ -164,6 +182,7 @@ class ExpertWeightStore:
         key = (layer_id, expert_id)
 
         cpu_weights = {}
+        total_bytes = 0
         for name, tensor in weights.items():
             if self.use_acc_offload and self._offload_initialized:
                 # Allocate from acc_offload DRAM pool
@@ -178,9 +197,15 @@ class ExpertWeightStore:
                 )
                 dram_tensor.copy_(tensor.cpu())
             cpu_weights[name] = dram_tensor
+            total_bytes += dram_tensor.nbytes
 
         self.dram_store[key] = cpu_weights
         self._registered_layers.add(layer_id)
+
+        logger.info(
+            f"[ExpertWeightStore] D2H layer_id={layer_id} expert_id={expert_id}: "
+            f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
+        )
 
     def get_expert_weights(
         self, layer_id: int, expert_id: int
@@ -218,6 +243,7 @@ class ExpertWeightStore:
         self._ensure_initialized()
         results = {}
         missing = []
+        hit_ids = []
 
         for eid in expert_ids:
             key = (layer_id, eid)
@@ -229,10 +255,20 @@ class ExpertWeightStore:
             if key in self.hbm_cache:
                 self.hbm_cache.move_to_end(key)  # LRU: mark as recently used
                 self._stats["hbm_hit"] += 1
+                hit_ids.append(eid)
                 results[eid] = self.hbm_cache[key]
             else:
                 self._stats["dram_load"] += 1
                 missing.append(key)
+
+        if missing:
+            miss_ids = [k[1] for k in missing]
+            logger.info(
+                f"[ExpertWeightStore batch_get] layer_id={layer_id}: "
+                f"requested={expert_ids}, hbm_hit={hit_ids} ({len(hit_ids)}), "
+                f"dram_load={miss_ids} ({len(miss_ids)}), "
+                f"backend={'acc_offload' if (self.use_acc_offload and self._offload_initialized) else 'pytorch_h2d'}"
+            )
 
         if not missing:
             return results
@@ -266,6 +302,9 @@ class ExpertWeightStore:
         dst_ptrs = []
         len_ptrs = []
         expert_results = {}
+        total_copy_bytes = 0
+
+        alloc_before, reserved_before = _get_hbm_usage_gb()
 
         # Collect all (src, dst, len) pairs for all missing experts
         for key in missing_keys:
@@ -286,6 +325,7 @@ class ExpertWeightStore:
                 src_ptrs.append(dram_tensor.data_ptr())
                 dst_ptrs.append(hbm_tensor.data_ptr())
                 len_ptrs.append(dram_tensor.nbytes)
+                total_copy_bytes += dram_tensor.nbytes
 
             expert_results[eid] = hbm_weights
             self._put_hbm_cache(key, hbm_weights)
@@ -317,6 +357,15 @@ class ExpertWeightStore:
         # Wait for sparse_copy to complete
         self._h2d_stream.synchronize()
 
+        alloc_after, reserved_after = _get_hbm_usage_gb()
+        logger.info(
+            f"[ExpertWeightStore sparse_copy] layer_id={layer_id}: "
+            f"loaded {len(missing_keys)} experts, {num_pairs} tensors, "
+            f"{total_copy_bytes / 1024**2:.1f} MB DRAM→HBM. "
+            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
+            f"(+{alloc_after - alloc_before:.2f} GB)"
+        )
+
         return expert_results
 
     # ------------------------------------------------------------------
@@ -328,17 +377,33 @@ class ExpertWeightStore:
     ) -> Dict[int, Dict[str, torch.Tensor]]:
         """Batch load experts using PyTorch H2D (fallback)."""
         results = {}
+        total_copy_bytes = 0
+        layer_id = missing_keys[0][0] if missing_keys else -1
+
+        alloc_before, _ = _get_hbm_usage_gb()
 
         with torch.npu.stream(self._h2d_stream):
             for key in missing_keys:
                 eid = key[1]
                 hbm_weights = self._load_to_hbm_unchecked(key)
                 results[eid] = hbm_weights
+                total_copy_bytes += sum(
+                    t.nbytes for t in hbm_weights.values()
+                )
                 # Put into HBM cache so hbm_cache_used_bytes is updated
                 # and subsequent lookups get cache hits.
                 self._put_hbm_cache(key, hbm_weights)
 
         self._h2d_stream.synchronize()
+
+        alloc_after, _ = _get_hbm_usage_gb()
+        logger.info(
+            f"[ExpertWeightStore pytorch_h2d] layer_id={layer_id}: "
+            f"loaded {len(missing_keys)} experts, "
+            f"{total_copy_bytes / 1024**2:.1f} MB DRAM→HBM. "
+            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
+            f"(+{alloc_after - alloc_before:.2f} GB)"
+        )
         return results
 
     def _load_to_hbm(
@@ -458,10 +523,14 @@ class ExpertWeightStore:
                     total_size += sum(t.nbytes for t in weights.values())
         # Add 20% headroom for on-demand loading of other layers' experts
         self.hbm_cache_size_bytes = int(total_size * 1.2)
+
+        alloc_before, reserved_before = _get_hbm_usage_gb()
         logger.info(
             f"[ExpertWeightStore] HBM cache sized: "
             f"{self.hbm_cache_size_bytes / 1024**3:.1f} GB "
-            f"for {len(layers_to_load)} layers"
+            f"for {len(layers_to_load)} layers. "
+            f"HBM before warmup: alloc={alloc_before:.2f} GB, "
+            f"reserved={reserved_before:.2f} GB"
         )
 
         # Batch load all experts from the first N layers into HBM
@@ -479,18 +548,47 @@ class ExpertWeightStore:
             self.batch_get_expert_weights(layer_id, expert_ids)
             loaded_count += len(expert_ids)
 
+        alloc_after, reserved_after = _get_hbm_usage_gb()
         logger.info(
             f"[ExpertWeightStore] Warmup complete: loaded {loaded_count} experts "
             f"from {len(layers_to_load)} layers into HBM cache "
-            f"({self.hbm_cache_used_bytes / 1024**3:.1f} GB used)"
+            f"({self.hbm_cache_used_bytes / 1024**3:.1f} GB used). "
+            f"HBM after warmup: alloc={alloc_after:.2f} GB "
+            f"(+{alloc_after - alloc_before:.2f} GB), "
+            f"reserved={reserved_after:.2f} GB"
         )
 
     def release_hbm_weights(self):
         """Release all HBM cached weights and shared buffers (free HBM memory)."""
+        cache_count = len(self.hbm_cache)
+        cache_gb = self.hbm_cache_used_bytes / 1024**3
+        shared_buffer_count = len(self._shared_hbm_buffers)
+        shared_buffer_bytes = sum(t.nbytes for t in self._shared_hbm_buffers.values())
+
+        alloc_before, reserved_before = _get_hbm_usage_gb()
+
         self.hbm_cache.clear()
         self.hbm_cache_used_bytes = 0
         self._shared_hbm_buffers.clear()
         self._shared_buffer_shapes.clear()
+
+        # Trigger Python GC and empty NPU cache to actually release memory
+        import gc
+        gc.collect()
+        if torch.npu.is_available():
+            torch.npu.empty_cache()
+
+        alloc_after, reserved_after = _get_hbm_usage_gb()
+
+        logger.info(
+            f"[ExpertWeightStore] release_hbm_weights: "
+            f"cleared hbm_cache({cache_count} experts, {cache_gb:.2f} GB) "
+            f"+ shared_buffers({shared_buffer_count} tensors, "
+            f"{shared_buffer_bytes / 1024**2:.1f} MB). "
+            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
+            f"(freed {alloc_before - alloc_after:.2f} GB), "
+            f"reserved {reserved_before:.2f}→{reserved_after:.2f} GB"
+        )
 
     def uninitialize(self):
         """Cleanup acc_offload resources."""

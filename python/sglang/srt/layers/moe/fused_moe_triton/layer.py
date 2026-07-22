@@ -1385,6 +1385,20 @@ class FusedMoE(torch.nn.Module):
 
         num_experts = self.num_local_experts
 
+        # Calculate total HBM bytes to be freed
+        total_hbm_bytes = 0
+        for expert_id in range(num_experts):
+            for name in weight_names:
+                param = getattr(self, name)
+                total_hbm_bytes += param.data[expert_id].nbytes
+
+        # Get HBM usage before offload
+        if torch.npu.is_available():
+            alloc_before = torch.npu.memory_allocated() / 1024**3
+            reserved_before = torch.npu.memory_reserved() / 1024**3
+        else:
+            alloc_before = reserved_before = 0.0
+
         for expert_id in range(num_experts):
             expert_weights = {}
             for name in weight_names:
@@ -1403,10 +1417,26 @@ class FusedMoE(torch.nn.Module):
             if hasattr(self, name):
                 delattr(self, name)
 
+        # Trigger GC and empty cache to actually release HBM
+        import gc
+        gc.collect()
+        if torch.npu.is_available():
+            torch.npu.empty_cache()
+
+        # Get HBM usage after offload + free
+        if torch.npu.is_available():
+            alloc_after = torch.npu.memory_allocated() / 1024**3
+            reserved_after = torch.npu.memory_reserved() / 1024**3
+        else:
+            alloc_after = reserved_after = 0.0
+
         logger.info(
             f"[FusedMoE] Layer {self.layer_id}: Offloaded {num_experts} experts "
-            f"to Host DRAM ({len(weight_names)} weight tensors per expert), "
-            f"original tensors freed"
+            f"({len(weight_names)} tensors/expert, "
+            f"{total_hbm_bytes / 1024**3:.2f} GB) to Host DRAM. "
+            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
+            f"(freed {alloc_before - alloc_after:.2f} GB), "
+            f"reserved {reserved_before:.2f}→{reserved_after:.2f} GB"
         )
 
     def _load_experts_on_demand(self, topk_output: TopKOutput):
@@ -1437,6 +1467,10 @@ class FusedMoE(torch.nn.Module):
 
         if not local_expert_ids:
             return
+
+        # Snapshot HBM before DRAM→HBM load (only meaningful if there are misses)
+        if torch.npu.is_available():
+            alloc_before = torch.npu.memory_allocated() / 1024**3
 
         # Batch load local experts from DRAM to HBM
         loaded_weights = self._expert_weight_store.batch_get_expert_weights(
@@ -1473,6 +1507,21 @@ class FusedMoE(torch.nn.Module):
 
             # Set as the layer's weight parameter for computation
             setattr(self, name, hbm_buffer)
+
+        # Print HBM usage change after loading experts for this layer
+        if torch.npu.is_available():
+            alloc_after = torch.npu.memory_allocated() / 1024**3
+            stats = self._expert_weight_store.get_stats()
+            logger.info(
+                f"[FusedMoE _load_experts_on_demand] layer_id={self.layer_id}, "
+                f"local_expert_ids={local_expert_ids}, "
+                f"loaded={len(loaded_weights)}/{len(local_expert_ids)} experts, "
+                f"hbm_hit_rate={stats['hbm_hit_rate']:.2%}, "
+                f"hbm_cache_used={stats['hbm_cache_used_gb']:.2f} GB "
+                f"({stats['hbm_cache_count']} experts cached). "
+                f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
+                f"(+{alloc_after - alloc_before:.2f} GB)"
+            )
 
         # Async prefetch: predict next layer's experts using router logits
         if hasattr(topk_output, "router_logits") and topk_output.router_logits is not None:
