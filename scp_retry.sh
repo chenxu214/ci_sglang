@@ -31,7 +31,6 @@ fi
 SRC="$1"
 DST="$2"
 MAX_RETRY="${3:-10}"          # 默认重试 10 次
-SLEEP_BASE=2                   # 退避起始秒数
 SSH_OPTS=(-o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 
 # rsync 通过 ssh 传输, 并启用断点续传相关选项
@@ -123,11 +122,9 @@ while [ "$attempt" -lt "$MAX_RETRY" ]; do
         fail "rsync 退出码 $?, 本轮失败"
     fi
 
-    # 退避后重试
-    sleep_sec=$(( SLEEP_BASE * attempt ))
-    [ "$sleep_sec" -gt 60 ] && sleep_sec=60
-    log "本轮未完成, ${sleep_sec}s 后重试..."
-    sleep "$sleep_sec"
+    # 固定等待 3s 后重试
+    log "本轮未完成, 3s 后重试..."
+    sleep 3
 done
 
 fail "已达到最大重试次数 $MAX_RETRY, 仍有文件未拷贝完成"
