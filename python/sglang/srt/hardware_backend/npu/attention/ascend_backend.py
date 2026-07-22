@@ -2764,8 +2764,7 @@ class AscendAttnBackend(AttentionBackend):
                     block_size=self.page_size,
                     actual_seq_lengths_kv=self.forward_metadata.seq_lens_cpu_int,
                 )
-                if (layer.tp_q_head_num & (layer.tp_q_head_num - 1)) != 0:
-                    attn_output = attn_output[:,:,:layer.tp_q_head_num,:]
+                attn_output = attn_output[:,:,:layer.tp_q_head_num,:]
             else:
                 assert (
                     self.graph_mode == False
