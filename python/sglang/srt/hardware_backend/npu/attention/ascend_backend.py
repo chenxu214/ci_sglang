@@ -48,6 +48,13 @@ def _reshape_kv_for_fia_nz(
     """Reshapes a tensor for FIA NZ format."""
     return tensor.view(-1, 1, num_heads * head_dim // 16, page_size, 16)
 
+import math
+
+def next_power_of_2(n):
+    if n <= 0:
+        return 1
+    return 1 << (n - 1).bit_length()
+
 
 @dataclass
 class ForwardMetadata:
@@ -2720,13 +2727,32 @@ class AscendAttnBackend(AttentionBackend):
                     layer.tp_q_head_num,
                     self.qk_rope_head_dim,
                 )
+                if (layer.tp_q_head_num & (layer.tp_q_head_num - 1)) != 0:
+                    power_of_2_head = next_power_of_2(layer.tp_q_head_num)
+                    padding_head = power_of_2_head - layer.tp_q_head_num
+                    q_padding_tensor = torch.empty(
+                        [num_tokens, q.shape[1], padding_head, q.shape[-1]],
+                        dtype=q.dtype,
+                        device=q.device,
+                    )
+                    q = torch.cat((q, q_padding_tensor), dim=-2)
+                    q_rope_padding_tensor = torch.empty(
+                        [num_tokens, q_rope.shape[1], padding_head, q_rope.shape[-1]],
+                        dtype=q_rope.dtype,
+                        device=q_rope.device,
+                    )
+                    q_rope = torch.cat((q_rope, q_rope_padding_tensor), dim=-2)
+                    tp_q_head_num = power_of_2_head
+                else:
+                    tp_q_head_num = layer.tp_q_head_num
+
                 attn_output, _ = torch.ops.npu.npu_fused_infer_attention_score(
                     q,
                     kv_c,
                     kv_c,
                     query_rope=q_rope,
                     key_rope=k_pe,
-                    num_heads=layer.tp_q_head_num,
+                    num_heads=tp_q_head_num,
                     num_key_value_heads=layer.tp_k_head_num,
                     input_layout="BSND",
                     atten_mask=None,
@@ -2738,6 +2764,8 @@ class AscendAttnBackend(AttentionBackend):
                     block_size=self.page_size,
                     actual_seq_lengths_kv=self.forward_metadata.seq_lens_cpu_int,
                 )
+                if (layer.tp_q_head_num & (layer.tp_q_head_num - 1)) != 0:
+                    attn_output = attn_output[:,:,:layer.tp_q_head_num,:]
             else:
                 assert (
                     self.graph_mode == False

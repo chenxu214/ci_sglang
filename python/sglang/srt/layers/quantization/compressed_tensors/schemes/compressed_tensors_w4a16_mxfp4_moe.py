@@ -133,14 +133,14 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        # layer.w13_weight.data = torch_npu.npu_format_cast(
-        #     layer.w13_weight.data.view(torch.uint8),
-        #     29,
-        # ).transpose(1, 2)
-        # layer.w2_weight.data = torch_npu.npu_format_cast(
-        #     layer.w2_weight.data.view(torch.uint8),
-        #     29,
-        # ).transpose(1, 2)
+        layer.w13_weight.data = torch_npu.npu_format_cast(
+            layer.w13_weight.data.view(torch.uint8),
+            29,
+        ).transpose(1, 2)
+        layer.w2_weight.data = torch_npu.npu_format_cast(
+            layer.w2_weight.data.view(torch.uint8),
+            29,
+        ).transpose(1, 2)
 
         layer.w13_weight_scale_inv = torch.nn.Parameter(
             _reshape_mxfp4_scale_for_npu(layer.w13_weight_scale_inv.data),
@@ -441,29 +441,42 @@ def w4a16_mxfp4_gmm_npu(
     output_dtype=torch.bfloat16,
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
-    # if input_scale is None:
-    #     x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
-    #         input,
-    #         axis=1,
-    #         round_mode="rint",
-    #         dst_type=torch_npu.float4_e2m1fn_x2,
-    #         block_size=32,
-    #         scale_alg=None,
-    #     )
-    # else:
-    #     x, x_scale = input, input_scale
+
+    # return torch.ops.npu.npu_grouped_matmul(
+    #     [input],
+    #     [weight],
+    #     antiquant_scale=[weight_scale],
+    #     split_item=2,
+    #     group_type=0,
+    #     group_list=group_list,
+    #     group_list_type=group_list_type,
+    #     output_dtype=output_dtype,
+    # )[0]
+
+    if input_scale is None:
+        x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
+            input,
+            axis=1,
+            round_mode="rint",
+            dst_type=torch_npu.float4_e2m1fn_x2,
+            block_size=32,
+            scale_alg=None,
+        )
+    else:
+        x, x_scale = input, input_scale
 
     return torch.ops.npu.npu_grouped_matmul(
-        [input],
+        [x],
         [weight],
         scale=[weight_scale],
         scale_dtype=torch_npu.float8_e8m0fnu,
+        per_token_scale=[x_scale],
         split_item=2,
         group_type=0,
         group_list=group_list,
         group_list_type=group_list_type,
         output_dtype=output_dtype,
-        x_dtype=torch_npu.bfloat16,
+        x_dtype=torch_npu.float4_e2m1fn_x2,
         weight_dtype=torch_npu.float4_e2m1fn_x2,
         per_token_scale_dtype=torch_npu.float8_e8m0fnu,
     )[0]
