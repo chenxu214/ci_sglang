@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
-from typing import TYPE_CHECKING
+from typing import Optional, Callable, TYPE_CHECKING
 
 import torch
 
@@ -27,6 +26,8 @@ from sglang.srt.utils import next_power_of_2, set_weight_attrs
 
 import torch_npu
 
+from python.sglang.srt.layers.activation import SituAndMul
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["NPUCompressedTensorsW4A8mxfp4MoE"]
@@ -38,10 +39,15 @@ if TYPE_CHECKING:
     )
 
 
+def _npu_swiglu(x: torch.Tensor) -> torch.Tensor:
+    return torch.ops.npu.npu_swiglu(x)
+
+
 class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
 
     def __init__(self):
         self.group_size = 32
+        self.act_fn: Callable = _npu_swiglu
 
     def create_weights(
         self,
@@ -145,13 +151,18 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
     ):
         self.moe_runner_config = moe_runner_config
+        if self.moe_runner_config.activation == "situ":
+            self.act_fn = SituAndMul(
+                beta=self.moe_runner_config.activation_situ_beta,
+                linear_beta=self.moe_runner_config.activation_situ_linear_beta,
+            )
 
     def apply_weights(
         self,
         layer: torch.nn.Module,
         dispatch_output: StandardDispatchOutput,
     ) -> CombineInput:
-        combine_input = npu_apply_w4a8_mxfp4_moe_deepep(layer, dispatch_output)
+        combine_input = npu_apply_w4a8_mxfp4_moe_deepep(layer, dispatch_output, act_fn=self.act_fn)
         if combine_input is not None:
             return combine_input
 
@@ -175,6 +186,7 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             topk_weights,
             topk_ids,
             top_k,
+            act_fn=self.act_fn,
         )
         return StandardCombineInput(hidden_states=output)
 
@@ -200,7 +212,7 @@ def npu_fused_experts_w4a8_mxfp4(
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
     top_k: int,
-    **kwargs,
+    act_fn: Callable = _npu_swiglu,
 ):
     if torch.npu.is_current_stream_capturing():
         return npu_fused_experts_w4a8_mxfp4_decode(
@@ -212,7 +224,7 @@ def npu_fused_experts_w4a8_mxfp4(
             topk_weights=topk_weights,
             topk_ids=topk_ids,
             top_k=top_k,
-            **kwargs,
+            act_fn=act_fn,
         )
 
     original_shape = hidden_states.shape
@@ -255,7 +267,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = torch.ops.npu.npu_swiglu(hidden_states)
+    hidden_states = act_fn(hidden_states)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -292,7 +304,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
     top_k: int,
-    **kwargs,
+    act_fn: Callable = _npu_swiglu,
 ):
     num_tokens = hidden_states.shape[:-1].numel()
     global_num_experts = w13.shape[0]
@@ -323,7 +335,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = torch.ops.npu.npu_swiglu(hidden_states)
+    hidden_states = act_fn(hidden_states)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -348,6 +360,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
 def npu_apply_w4a8_mxfp4_moe_deepep(
     layer: torch.nn.Module,
     dispatch_output: "DispatchOutput",
+    act_fn: Callable = _npu_swiglu,
 ) -> Optional["CombineInput"]:
     from sglang.srt.layers.moe.token_dispatcher import (
         DeepEPLLCombineInput,
@@ -383,6 +396,7 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         group_list_type,
         group_list,
         output_dtype,
+        act_fn=act_fn,
     )
     return combine_cls(
         hidden_states=hidden_states,
@@ -398,6 +412,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
     group_list_type,
     group_list,
     output_dtype,
+    act_fn: Callable = _npu_swiglu,
 ):
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
@@ -408,7 +423,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         group_list=group_list,
         output_dtype=output_dtype,
     )
-    hidden_states = torch.ops.npu.npu_swiglu(hidden_states)
+    hidden_states = act_fn(hidden_states)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
