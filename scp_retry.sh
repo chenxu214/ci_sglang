@@ -30,7 +30,7 @@ fi
 
 SRC="$1"
 DST="$2"
-MAX_RETRY="${3:-10}"          # 默认重试 10 次
+MAX_RETRY="${3:-1000}"          # 默认重试 1000 次
 SSH_OPTS=(-o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 
 # rsync 通过 ssh 传输, 并启用断点续传相关选项
