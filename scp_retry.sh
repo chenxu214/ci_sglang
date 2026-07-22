@@ -3,11 +3,12 @@
 # scp_retry.sh — 基于 rsync 的断点续传 + 失败重试拷贝脚本
 #
 # 用法:
-#   ./scp_retry.sh <本地源> <远程目标> [最大重试次数]
+#   ./scp_retry.sh <本地源> <远程目标> [最大重试次数] [文件名前缀列表]
 #
 # 示例:
 #   ./scp_retry.sh /data/logs/  user@host:/data/logs/
 #   ./scp_retry.sh /data/big.tar user@host:/data/ 5
+#   ./scp_retry.sh /data/logs/  user@host:/data/logs/ 10 "log-,err-,access_"
 #
 # 说明:
 #   - 用 rsync 替代 scp, 原生支持断点续传:
@@ -15,22 +16,25 @@
 #       * --append-verify  : 续传前先校验远端已有部分与本地前缀是否一致, 防止脏追加
 #       * --inplace        : 原地写入, 配合 --partial 才能真正续传
 #       * --size-only      : 跳过大小已一致的文件(快速判断, 不校验内容)
-#   - 每轮 rsync 失败后, 指数退避重试, 最多 MAX_RETRY 次
+#   - 每轮 rsync 失败后, 固定等待 3s 重试, 最多 MAX_RETRY 次
 #   - 每轮结束后对每个文件做大小校验, 残缺的会在下一轮继续补传
 #   - 跳过点开头的隐藏目录(如 .git/.ssh/.cache)
+#   - 可选第 4 个参数: 文件名前缀列表(逗号分隔), 仅拷贝文件名匹配任一前缀的文件;
+#     不传则拷贝全部
 #   - 需要 ssh 免密登录或 ssh-agent
 
 set -u
 
 # ---------- 参数解析 ----------
 if [ $# -lt 2 ]; then
-    echo "用法: $0 <本地源> <远程目标> [最大重试次数]" >&2
+    echo "用法: $0 <本地源> <远程目标> [最大重试次数] [文件名前缀列表]" >&2
     exit 2
 fi
 
 SRC="$1"
 DST="$2"
 MAX_RETRY="${3:-1000}"          # 默认重试 1000 次
+PREFIXES="${4:-}"               # 可选: 文件名前缀列表, 逗号分隔, 如 "log-,err-"
 SSH_OPTS=(-o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 
 # rsync 通过 ssh 传输, 并启用断点续传相关选项
@@ -42,6 +46,18 @@ RSYNC_OPTS=(
     --exclude='.*/'             # 跳过点开头的隐藏目录及其内容
     -e "ssh ${SSH_OPTS[*]}"
 )
+
+# 若指定了文件名前缀, 构造 rsync 过滤规则: 先放行目录以便递归, 再按前缀 include, 最后排除其余
+# rsync 过滤为 first-match-wins, 顺序很关键
+if [ -n "$PREFIXES" ]; then
+    RSYNC_OPTS+=(--include='*/')        # 允许递归进入子目录
+    IFS=',' read -ra _prefs <<< "$PREFIXES"
+    for p in "${_prefs[@]}"; do
+        # 跳过空前缀(连续逗号或末尾逗号)
+        [ -n "$p" ] && RSYNC_OPTS+=(--include="${p}*")
+    done
+    RSYNC_OPTS+=(--exclude='*')         # 排除所有未匹配前缀的文件
+fi
 
 log()  { echo "[$(date '+%F %T')] $*"; }
 fail() { log "错误: $*" >&2; }
@@ -74,12 +90,47 @@ remote_size() {
     remote_exec "stat -c %s '$rf' 2>/dev/null || stat -f %z '$rf' 2>/dev/null"
 }
 
+# 构造 find 的文件名过滤参数(与 rsync include 规则保持一致)
+# 有前缀: \( -name 'p1*' -o -name 'p2*' \); 无前缀: 空数组
+FIND_NAME=()
+if [ -n "$PREFIXES" ]; then
+    _first=1
+    IFS=',' read -ra _prefs <<< "$PREFIXES"
+    for p in "${_prefs[@]}"; do
+        [ -z "$p" ] && continue
+        if [ "$_first" -eq 1 ]; then
+            FIND_NAME+=(-name "${p}*")
+            _first=0
+        else
+            FIND_NAME+=(-o -name "${p}*")
+        fi
+    done
+fi
+
+# 检查文件名是否匹配任一前缀; 未指定前缀时总是匹配
+# 返回 0=匹配 1=不匹配
+match_prefix() {
+    local fname="$1"
+    [ -z "$PREFIXES" ] && return 0
+    local p
+    IFS=',' read -ra _prefs <<< "$PREFIXES"
+    for p in "${_prefs[@]}"; do
+        [ -z "$p" ] && continue
+        [[ "$fname" == "${p}"* ]] && return 0
+    done
+    return 1
+}
+
 # ---------- 主重试循环 ----------
 attempt=0
 while [ "$attempt" -lt "$MAX_RETRY" ]; do
     attempt=$((attempt + 1))
     log "===== 第 $attempt/$MAX_RETRY 次尝试 ====="
-    log "rsync $SRC -> $DST"
+    if [ -n "$PREFIXES" ]; then
+        log "rsync $SRC -> $DST (前缀过滤: $PREFIXES)"
+    else
+        log "rsync $SRC -> $DST"
+    fi
 
     # rsync 单次执行即处理整个源(目录或文件)
     # --partial + --inplace + --append-verify 保证中断后下次能续传
@@ -90,6 +141,12 @@ while [ "$attempt" -lt "$MAX_RETRY" ]; do
 
         if [ -d "$SRC" ]; then
             src_dir="${SRC%/}/"
+            # 有前缀过滤时, find 只列出匹配任一前缀的文件; 无前缀时列出全部
+            if [ ${#FIND_NAME[@]} -gt 0 ]; then
+                _find_cmd=(find "$src_dir" -type f \( "${FIND_NAME[@]}" \) -not -path '*/.*' -print0)
+            else
+                _find_cmd=(find "$src_dir" -type f -not -path '*/.*' -print0)
+            fi
             while IFS= read -r -d '' f; do
                 rel="${f#$src_dir}"
                 lf="$f"
@@ -100,16 +157,21 @@ while [ "$attempt" -lt "$MAX_RETRY" ]; do
                     fail "校验失败: $rel (本地=${lsize:-?} 远端=${rsize:-空})"
                     bad=1
                 fi
-            done < <(find "$src_dir" -type f -not -path '*/.*' -print0)
+            done < <("${_find_cmd[@]}")
         else
             lf="$SRC"
-            rf="${RPATH%/}/$(basename "$SRC")"
-            # 若目标本身是目录路径, basename 不适用; 但 rsync 已保证布局, 这里仅尽力校验
-            lsize=$(stat -c %s "$lf" 2>/dev/null || stat -f %z "$lf" 2>/dev/null)
-            rsize=$(remote_size "$rf")
-            if [ -z "$rsize" ] || [ "$rsize" != "$lsize" ]; then
-                fail "校验失败: $lf (本地=${lsize:-?} 远端=${rsize:-空})"
-                bad=1
+            fname=$(basename "$SRC")
+            if ! match_prefix "$fname"; then
+                log "文件 $fname 不匹配前缀, 跳过"
+            else
+                rf="${RPATH%/}/$(basename "$SRC")"
+                # 若目标本身是目录路径, basename 不适用; 但 rsync 已保证布局, 这里仅尽力校验
+                lsize=$(stat -c %s "$lf" 2>/dev/null || stat -f %z "$lf" 2>/dev/null)
+                rsize=$(remote_size "$rf")
+                if [ -z "$rsize" ] || [ "$rsize" != "$lsize" ]; then
+                    fail "校验失败: $lf (本地=${lsize:-?} 远端=${rsize:-空})"
+                    bad=1
+                fi
             fi
         fi
 
