@@ -143,15 +143,76 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        layer.w13_weight.data = unpack_uint8_to_fp4_return_float32(layer.w13_weight.data)
-        layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
-        layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29, customize_dtype=torch.bfloat16)
-        layer.w13_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w13_weight.data).contiguous()
+        # Original implementation (commented out) - processes all experts at once,
+        # causing memory spike to 4x of uint8 storage (float32 intermediate)
+        # layer.w13_weight.data = unpack_uint8_to_fp4_return_float32(layer.w13_weight.data)
+        # layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
+        # layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29, customize_dtype=torch.bfloat16)
+        # layer.w13_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w13_weight.data).contiguous()
+        #
+        # layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
+        # layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
+        # layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.bfloat16)
+        # layer.w2_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w2_weight.data).contiguous()
 
-        layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
-        layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
-        layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.bfloat16)
-        layer.w2_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w2_weight.data).contiguous()
+        # Optimized implementation: Process weights expert-by-expert to minimize peak memory
+        # Two-phase approach:
+        # Phase 1: Per-expert processing with ONLY unpack + transpose + int4pack
+        #          (no npu_format_cast to avoid internal format issues with copy_())
+        # Phase 2: Apply npu_format_cast on the FULL tensor at the end
+        # This avoids silent data corruption from copying internal format tensors
+        # Peak memory: only holds one expert's float32 intermediate at a time (~1/N of original)
+        num_experts = layer.w13_weight.shape[0]
+
+        # Process w13_weight
+        first_expert = unpack_uint8_to_fp4_return_float32(
+            layer.w13_weight.data[0:1]
+        ).transpose(1, 2).contiguous()
+        first_expert = torch_npu.npu_convert_weight_to_int4pack(first_expert).contiguous()
+        output_shape = (num_experts,) + first_expert.shape[1:]
+
+        w13_out = torch.empty(
+            output_shape,
+            dtype=first_expert.dtype,
+            device=first_expert.device,
+        )
+        w13_out[0:1].copy_(first_expert)
+
+        for i in range(1, num_experts):
+            expert = unpack_uint8_to_fp4_return_float32(
+                layer.w13_weight.data[i:i+1]
+            ).transpose(1, 2).contiguous()
+            expert = torch_npu.npu_convert_weight_to_int4pack(expert).contiguous()
+            w13_out[i:i+1].copy_(expert)
+
+        delattr(layer, "w13_weight")
+        w13_out = torch_npu.npu_format_cast(w13_out, 29, customize_dtype=torch.bfloat16)
+        layer.w13_weight = torch.nn.Parameter(w13_out, requires_grad=False)
+
+        # Process w2_weight
+        first_expert = unpack_uint8_to_fp4_return_float32(
+            layer.w2_weight.data[0:1]
+        ).transpose(1, 2).contiguous()
+        first_expert = torch_npu.npu_convert_weight_to_int4pack(first_expert).contiguous()
+        output_shape = (num_experts,) + first_expert.shape[1:]
+
+        w2_out = torch.empty(
+            output_shape,
+            dtype=first_expert.dtype,
+            device=first_expert.device,
+        )
+        w2_out[0:1].copy_(first_expert)
+
+        for i in range(1, num_experts):
+            expert = unpack_uint8_to_fp4_return_float32(
+                layer.w2_weight.data[i:i+1]
+            ).transpose(1, 2).contiguous()
+            expert = torch_npu.npu_convert_weight_to_int4pack(expert).contiguous()
+            w2_out[i:i+1].copy_(expert)
+
+        delattr(layer, "w2_weight")
+        w2_out = torch_npu.npu_format_cast(w2_out, 29, customize_dtype=torch.bfloat16)
+        layer.w2_weight = torch.nn.Parameter(w2_out, requires_grad=False)
 
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
         layer.w2_weight_scale.data = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
