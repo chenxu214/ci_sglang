@@ -928,9 +928,9 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
         else:
             alloc_end = reserved_end = 0.0
         logger.info(
-            f"[MoE DRAM Offload] HBM after offload+warmup: "
-            f"alloc={alloc_end:.2f} GB, reserved={reserved_end:.2f} GB. "
-            f"Net HBM freed: {alloc_start - alloc_end:.2f} GB allocated"
+            f"[MoE DRAM Offload] After offload+warmup: "
+            f"HBM alloc={alloc_end:.2f} GB "
+            f"(freed {alloc_start - alloc_end:.2f} GB)"
         )
 
 

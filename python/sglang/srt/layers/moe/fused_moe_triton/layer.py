@@ -1427,17 +1427,14 @@ class FusedMoE(torch.nn.Module):
         # Get HBM usage after offload + free
         if torch.npu.is_available():
             alloc_after = torch.npu.memory_allocated() / 1024**3
-            reserved_after = torch.npu.memory_reserved() / 1024**3
         else:
-            alloc_after = reserved_after = 0.0
+            alloc_after = 0.0
 
         logger.info(
             f"[FusedMoE] Layer {self.layer_id}: Offloaded {num_experts} experts "
-            f"({len(weight_names)} tensors/expert, "
-            f"{total_hbm_bytes / 1024**3:.2f} GB) to Host DRAM. "
-            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
-            f"(freed {alloc_before - alloc_after:.2f} GB), "
-            f"reserved {reserved_before:.2f}→{reserved_after:.2f} GB"
+            f"({total_hbm_bytes / 1024**3:.2f} GB) to DRAM. "
+            f"HBM {alloc_before:.2f}→{alloc_after:.2f} GB "
+            f"(freed {alloc_before - alloc_after:.2f} GB)"
         )
 
     def _load_experts_on_demand(self, topk_output: TopKOutput):
@@ -1509,19 +1506,16 @@ class FusedMoE(torch.nn.Module):
             # Set as the layer's weight parameter for computation
             setattr(self, name, hbm_buffer)
 
-        # Print HBM usage change after loading experts for this layer
+        # Log HBM usage change after loading experts for this layer
         if torch.npu.is_available():
             alloc_after = torch.npu.memory_allocated() / 1024**3
             stats = self._expert_weight_store.get_stats()
-            logger.info(
-                f"[FusedMoE _load_experts_on_demand] layer_id={self.layer_id}, "
-                f"local_expert_ids={local_expert_ids}, "
-                f"loaded={len(loaded_weights)}/{len(local_expert_ids)} experts, "
-                f"hbm_hit_rate={stats['hbm_hit_rate']:.2%}, "
-                f"hbm_cache_used={stats['hbm_cache_used_gb']:.2f} GB "
-                f"({stats['hbm_cache_count']} experts cached). "
-                f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
-                f"(+{alloc_after - alloc_before:.2f} GB)"
+            logger.debug(
+                f"[FusedMoE] load_on_demand layer={self.layer_id}: "
+                f"{len(loaded_weights)}/{len(local_expert_ids)} experts, "
+                f"hit_rate={stats['hbm_hit_rate']:.0%}, "
+                f"cache={stats['hbm_cache_used_gb']:.1f} GB, "
+                f"HBM {alloc_before:.2f}→{alloc_after:.2f} GB"
             )
 
         # Async prefetch: predict next layer's experts using router logits
