@@ -24,9 +24,11 @@ if is_npu():
     from sgl_kernel_npu.mamba.causal_conv1d import (
         causal_conv1d_fn_npu,
         torch_causal_conv1d_update_npu,
+        causal_conv1d_update_npu,
     )
 
     causal_conv1d_fn = causal_conv1d_fn_npu
+    causal_conv1d_update = causal_conv1d_update_npu
 elif is_cpu():
     from sgl_kernel.mamba import causal_conv1d_update_cpu
 
@@ -192,6 +194,133 @@ class KDAKernelDispatcher:
             **kwargs,
         )
 
+from torch.nn import functional as F
+
+def causal_conv1d_fn_native(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor] = None,
+    initial_states: Optional[torch.Tensor] = None,
+    return_final_states: bool = False,
+    final_states_out: Optional[torch.Tensor] = None,
+    activation: Optional[str] = "silu",
+):
+    """
+    x: (batch, dim, seqlen)
+    weight: (dim, width)
+    bias: (dim,)
+    initial_states: (batch, dim, width - 1)
+    final_states_out: (batch, dim, width - 1)
+
+    out: (batch, dim, seqlen)
+    """
+    if activation not in [None, "silu", "swish"]:
+        raise NotImplementedError("activation must be None, silu, or swish")
+    dtype_in = x.dtype
+    x = x.to(weight.dtype)
+    seqlen = x.shape[-1]
+    dim, width = weight.shape
+
+    if initial_states is None:
+        out = F.conv1d(x, weight.unsqueeze(1), bias, padding=width - 1, groups=dim)
+    else:
+        if x.ndim == 2:
+            x = x.unsqueeze(0)
+        x = torch.cat([initial_states, x], dim=-1)
+        out = F.conv1d(x, weight.unsqueeze(1), bias, padding=0, groups=dim)
+        if out.ndim == 3:
+            out = out.squeeze(0)
+    out = out[..., :seqlen]
+    if return_final_states:
+        final_states = F.pad(x, (width - 1 - x.shape[-1], 0)).to(
+            dtype_in
+        )  # (batch, dim, width - 1)
+        if final_states_out is not None:
+            final_states_out.copy_(final_states)
+        else:
+            final_states_out = final_states
+    out = (out if activation is None else F.silu(out)).to(dtype=dtype_in)
+    return (out, None) if not return_final_states else (out, final_states_out)
+
+
+
+def causal_conv1d_fn_npu_old(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor] = None,
+    query_start_loc: Optional[torch.Tensor] = None,
+    cache_indices: Optional[torch.Tensor] = None,
+    has_initial_state: Optional[torch.Tensor] = None,
+    conv_states: Optional[torch.Tensor] = None,
+    activation: Optional[str] = "silu",
+    pad_slot_id: int = -1,
+    **kwargs,
+):
+    """
+    x: (batch, dim, seqlen) or (dim,cu_seq_len) for varlen
+        sequences are concatenated from left to right for varlen
+    weight: (dim, width)
+    bias: (dim,)
+    query_start_loc: (batch + 1) int32
+        The cumulative sequence lengths of the sequences in
+        the batch, used to index into sequence. prepended by 0.
+        for example: query_start_loc = torch.Tensor([0,10,16,17]),
+        x.shape=(dim,17)
+    cache_indices: (batch)  int32
+        indicates the corresponding state index,
+        like so: conv_state = conv_states[cache_indices[batch_id]]
+    has_initial_state: (batch) bool
+        indicates whether should the kernel take the current state as initial
+        state for the calculations
+    conv_states: (...,dim,width - 1) itype
+        updated inplace if provided
+    activation: either None or "silu" or "swish"
+    pad_slot_id: int
+            if cache_indices is passed, lets the kernel identify padded
+            entries that will not be processed,
+            for example: cache_indices = [pad_slot_id, 1, 20, pad_slot_id]
+            in this case, the kernel will not process entries at
+            indices 0 and 3
+
+
+    out: (batch, dim, seqlen)
+    """
+    if activation not in [None, "silu", "swish"]:
+        raise NotImplementedError("activation must be None, silu, or swish")
+    if x.stride(-1) != 1:
+        x = x.contiguous()
+    bias = bias.contiguous() if bias is not None else None
+
+    out_ref_b = []
+    assert query_start_loc[-1] <= x.shape[-1], f"{query_start_loc=}, {x.shape=}"
+    for i in range(query_start_loc.numel() - 1):
+        out_ref_b.append(
+            causal_conv1d_fn_native(
+                x[..., query_start_loc[i] : query_start_loc[i + 1]],
+                weight,
+                bias,
+                activation=activation,
+                return_final_states=True,
+                final_states_out=conv_states[cache_indices[i]].unsqueeze(0),
+                initial_states=(
+                    conv_states[cache_indices[i]].unsqueeze(0)
+                    if has_initial_state[i]
+                    else None
+                ),
+            )
+        )
+    out_ref_tensor = torch.cat([t[0] for t in out_ref_b], dim=-1)
+    if x.shape[-1] > query_start_loc[-1]:
+        pad_seqlen = x.shape[-1] - query_start_loc[-1]
+        out_ref_tensor = torch.cat(
+            [
+                out_ref_tensor,
+                out_ref_tensor.new_zeros([*out_ref_tensor.shape[:-1], pad_seqlen]),
+            ],
+            dim=-1,
+        )
+    return out_ref_tensor
+
 
 class KDAAttnBackend(MambaAttnBackendBase):
     """Attention backend for KDA (Kimi Delta Attention) linear attention."""
@@ -308,8 +437,8 @@ class KDAAttnBackend(MambaAttnBackendBase):
         q = q.unflatten(-1, (-1, layer.head_q_dim)).unsqueeze(0)  # n (h d) -> 1 n h d
         k = k.unflatten(-1, (-1, layer.head_k_dim)).unsqueeze(0)  # n (h d) -> 1 n h d
         v = v.unflatten(-1, (-1, layer.head_v_dim)).unsqueeze(0)  # n (h d) -> 1 n h d
-
-        return self.kernel_dispatcher.decode(
+        
+        ret = self.kernel_dispatcher.decode(
             q=q,
             k=k,
             v=v,
@@ -321,6 +450,8 @@ class KDAAttnBackend(MambaAttnBackendBase):
             cache_indices=cache_indices,
             query_start_loc=query_start_loc,
         )
+        # print(f"decode {torch.distributed.get_rank()=}: {layer.layer_id=}, KDA extend: q={torch.sum(q)=}, {torch.sum(conv_states)=}, {torch.sum(ret)=}", flush=True)
+        return ret
 
     def forward_extend(
         self,
@@ -353,9 +484,14 @@ class KDAAttnBackend(MambaAttnBackendBase):
             q_bias, k_bias, v_bias = None, None, None
 
         def run_conv(x, weight, bias, state):
+            # Note: at this point x is [C, T] (channel-first from
+            # mixed_qkv.transpose(0,1).split).  causal_conv1d_fn expects
+            # [C, T] channel-first input.  The output is transposed back to
+            # [T, C] for downstream consumers.
+
             if is_npu():
                 # The Ascend varlen wrapper creates its padding buffer in the
-                # weight dtype. K3 stores conv weights in FP32 and activations /
+                # weight dtype.  K3 stores conv weights in FP32 and activations /
                 # cache in BF16, so adapt both inputs through a small active-row
                 # FP32 state and explicitly cast the results back.
                 local_indices = torch.arange(
@@ -419,5 +555,4 @@ class KDAAttnBackend(MambaAttnBackendBase):
                 or forward_batch.forward_mode.is_draft_extend_v2()
             ),
         )
-
         return core_attn_out
