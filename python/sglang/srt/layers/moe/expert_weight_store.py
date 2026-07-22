@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
+from sglang.srt.utils.common import get_int_env_var
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,6 +72,14 @@ class ExpertWeightStore:
         self.hbm_cache_size_bytes = 0  # Auto-calculated during warmup
         self.hbm_cache_used_bytes = 0
         self.hbm_cache_layers = hbm_cache_layers
+
+        # Slot-count limit for decode LRU (env-tunable). When > 0, evict by
+        # entry count in addition to byte-size. Set to 0 (unlimited) during
+        # prefill via set_cache_mode().
+        self._decode_cache_slots = get_int_env_var(
+            "SGLANG_KIMI_DECODE_CACHE_SLOTS", 20
+        )
+        self.hbm_cache_max_slots = self._decode_cache_slots
 
         # Dedicated stream for H2D transfers (separate from compute stream)
         self._h2d_stream = None
@@ -434,21 +444,37 @@ class ExpertWeightStore:
     ):
         """Put expert weights into HBM LRU cache, evicting if needed.
 
-        LRU eviction: When cache is full, removes the least recently used
-        entry (head of OrderedDict) until there's space for the new entry.
+        Eviction policy (two limits, whichever triggers first):
+        1. Slot count: evict LRU while len(hbm_cache) >= hbm_cache_max_slots
+           (decode default 20; set to 0 via set_cache_mode for prefill).
+        2. Byte size: evict LRU while bytes exceed hbm_cache_size_bytes
+           (set during warmup; 0 = skip byte-size check).
         """
         weight_size = sum(t.nbytes for t in weights.values())
 
-        # Evict LRU entries until we have space
-        while (
-            self.hbm_cache_used_bytes + weight_size > self.hbm_cache_size_bytes
-            and len(self.hbm_cache) > 0
-        ):
-            evicted_key, evicted_weights = self.hbm_cache.popitem(last=False)
-            self.hbm_cache_used_bytes -= sum(
-                t.nbytes for t in evicted_weights.values()
-            )
-            del evicted_weights
+        # Slot-count eviction (decode LRU: 20 experts max)
+        if self.hbm_cache_max_slots > 0:
+            while (
+                len(self.hbm_cache) >= self.hbm_cache_max_slots
+                and len(self.hbm_cache) > 0
+            ):
+                evicted_key, evicted_weights = self.hbm_cache.popitem(last=False)
+                self.hbm_cache_used_bytes -= sum(
+                    t.nbytes for t in evicted_weights.values()
+                )
+                del evicted_weights
+
+        # Byte-size eviction (warmup-based; 0 = skip)
+        if self.hbm_cache_size_bytes > 0:
+            while (
+                self.hbm_cache_used_bytes + weight_size > self.hbm_cache_size_bytes
+                and len(self.hbm_cache) > 0
+            ):
+                evicted_key, evicted_weights = self.hbm_cache.popitem(last=False)
+                self.hbm_cache_used_bytes -= sum(
+                    t.nbytes for t in evicted_weights.values()
+                )
+                del evicted_weights
 
         self.hbm_cache[key] = weights
         self.hbm_cache_used_bytes += weight_size
@@ -485,6 +511,53 @@ class ExpertWeightStore:
                 for key in missing:
                     hbm_weights = self._load_to_hbm_unchecked(key)
                     self._put_hbm_cache(key, hbm_weights)
+
+    # ------------------------------------------------------------------
+    # Prefill full-layer prefetch + cache mode management
+    # ------------------------------------------------------------------ #
+
+    def set_cache_mode(self, is_prefill: bool):
+        """Toggle between prefill (unlimited slots) and decode (20-slot LRU)."""
+        if is_prefill:
+            self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
+        else:
+            self.hbm_cache_max_slots = self._decode_cache_slots
+
+    def prefetch_full_layer(self, layer_id: int, num_experts: int):
+        """Async prefetch ALL experts for a layer on the h2d_stream.
+
+        Used during prefill: while layer L computes, layer L+N's full expert
+        set is loaded into HBM cache. Call sync_prefetch() before using.
+        """
+        self.async_prefetch(layer_id, list(range(num_experts)))
+
+    def sync_prefetch(self):
+        """Block until all pending h2d_stream operations complete."""
+        self._ensure_initialized()
+        if self._h2d_stream is not None:
+            self._h2d_stream.synchronize()
+
+    def release_layer_hbm_cache(self, layer_id: int):
+        """Remove all HBM cache entries for a given layer.
+
+        Called after prefill compute for a layer to cap HBM usage at ~(N+1)
+        concurrent layers' worth of cached experts.
+        """
+        evicted = 0
+        freed_bytes = 0
+        keys_to_remove = [k for k in self.hbm_cache if k[0] == layer_id]
+        for key in keys_to_remove:
+            weights = self.hbm_cache.pop(key)
+            freed_bytes += sum(t.nbytes for t in weights.values())
+            evicted += 1
+            del weights
+        self.hbm_cache_used_bytes -= freed_bytes
+        if evicted > 0:
+            logger.info(
+                f"[ExpertWeightStore release_layer] layer_id={layer_id}: "
+                f"released {evicted} experts, "
+                f"{freed_bytes / 1024**2:.1f} MB freed"
+            )
 
     def warmup_hbm_cache(self, num_layers: int = 0):
         """Pre-populate HBM cache with experts from the first N layers.

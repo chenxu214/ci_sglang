@@ -1544,6 +1544,47 @@ class FusedMoE(torch.nn.Module):
             except Exception:
                 pass  # Prefetch is best-effort
 
+    # ------------------------------------------------------------------ #
+    # Prefill full-layer prefetch wrappers (called by KimiLinearModel).
+    # ------------------------------------------------------------------ #
+
+    def start_prefill_prefetch(self):
+        """Async prefetch ALL local experts for this layer on h2d_stream.
+
+        Called by KimiLinearModel during prefill to overlap layer L+N's H2D
+        copy with layer L's compute. Call wait_prefill_prefetch() before
+        the layer's forward to ensure the copy is complete.
+        """
+        if (
+            not self._dram_offload_enabled
+            or self._expert_weight_store is None
+        ):
+            return
+        self._expert_weight_store.prefetch_full_layer(
+            self.layer_id, self.num_local_experts
+        )
+
+    def wait_prefill_prefetch(self):
+        """Block default stream until this layer's prefetch H2D copy completes."""
+        if (
+            not self._dram_offload_enabled
+            or self._expert_weight_store is None
+        ):
+            return
+        self._expert_weight_store.sync_prefetch()
+
+    def free_prefill_cache(self):
+        """Release this layer's HBM cache entries after prefill compute.
+
+        Caps HBM at ~(N+1) concurrent layers' worth of cached experts.
+        """
+        if (
+            not self._dram_offload_enabled
+            or self._expert_weight_store is None
+        ):
+            return
+        self._expert_weight_store.release_layer_hbm_cache(self.layer_id)
+
     @classmethod
     def make_expert_params_mapping(
         cls,

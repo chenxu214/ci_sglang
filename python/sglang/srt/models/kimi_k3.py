@@ -2,14 +2,12 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Adapted from: https://github.com/vllm-project/vllm/blob/0384aa7150c4c9778efca041ffd1beb3ad2bd694/vllm/model_executor/models/kimi_linear.py
 
-from collections import deque
 from collections.abc import Iterable
 from typing import Optional
 
 import logging
 import torch
 from torch import nn
-from torch.nn.parameter import Parameter
 
 from sglang.srt.configs.kimi_linear import KimiLinearConfig
 from sglang.srt.distributed import (
@@ -296,432 +294,9 @@ class KimiMoE(nn.Module):
                 ),
             )
 
-        # Host-offloaded expert weights: two modes.
-        #
-        # Decode: 20-slot (default, env-tunable) HBM LRU cache per layer. Sync
-        # swap-in of topk-selected experts; topk_ids remapped to slot ids;
-        # group_list + hidden_states rebuilt to slot order; kernel output
-        # unpermuted back to dispatch order before combine.
-        #
-        # Prefill: full num_local_experts HBM buffer per layer. Async prefetch
-        # of layer+N's full expert set on a side stream while the current layer
-        # computes. After compute, the layer's buffer is freed immediately.
-        self._offload_inited = False
-        self._decode_cache_slots = get_int_env_var(
-            "SGLANG_KIMI_DECODE_CACHE_SLOTS", 20
-        )
-        self._prefetch_layers = get_int_env_var("SGLANG_KIMI_PREFETCH_LAYERS", 10)
-        self._expert_weight_names = (
-            "w13_weight",
-            "w2_weight",
-            "w13_weight_scale_inv",
-            "w2_weight_scale_inv",
-        )
-        self._host_weights = {}
-        self._orig_attrs = {}
-        # Decode-mode state (allocated lazily in _switch_mode)
-        self._decode_cache = {}
-        self._slot_to_expert = [-1] * self._decode_cache_slots
-        self._expert_to_slot = {}
-        self._lru_deque = deque()
-        # Prefill-mode state (allocated lazily in start_prefill)
-        self._prefill_buffer = {}
-        self._prefill_event = None
-        self._prefill_loaded = False
-        # Mode tracking: _mode is the persistent current mode; _current_mode
-        # is set per-forward by KimiLinearModel before calling this layer.
-        self._mode = None
-        self._current_mode = None
-
-    def _init_host_offload(self) -> None:
-        """Pin host-resident expert weights and promote ``self.experts`` to a
-        cache-aware subclass. Does NOT allocate HBM buffers; those are created
-        lazily in ``_switch_mode``. Must run after ``process_weights_after_loading``.
-        """
-        target_device = torch.device("cuda", torch.cuda.current_device())
-        for name in self._expert_weight_names:
-            param = getattr(self.experts, name, None)
-            if param is None:
-                raise AttributeError(
-                    f"experts layer has no weight '{name}'; cannot init host offload"
-                )
-            host_data = param.data
-            if host_data.device.type != "cpu":
-                raise RuntimeError(
-                    f"KimiMoE host-offload expects expert weight '{name}' to "
-                    f"be on CPU initially, but found device {host_data.device}. "
-                    f"Ensure the weight loader keeps expert weights on CPU."
-                )
-            if not host_data.is_pinned():
-                host_data = host_data.pin_memory()
-            self._host_weights[name] = host_data
-            self._orig_attrs[name] = param
-        orig_params = {
-            name: self._orig_attrs[name] for name in self._expert_weight_names
-        }
-        orig_num = self.experts.num_local_experts
-        orig_ep = self.experts.moe_ep_rank
-
-        # Build a cache-aware subclass inline (closure-scoped, no module-level
-        # symbol). Properties gate num_local_experts / moe_ep_rank / each weight
-        # on ``self._active_mode`` (None / "prefill" / "decode") so reads return
-        # the right buffer without mutating instance attrs.
-        base_cls = type(self.experts)
-        weight_names = self._expert_weight_names
-
-        def _weight_property(name: str):
-            def getter(s):
-                mode = getattr(s, "_active_mode", None)
-                if mode == "prefill":
-                    return s._prefill_buffer[name]
-                elif mode == "decode":
-                    return s._decode_cache[name]
-                return s._orig_params[name]
-            return property(getter)
-
-        namespace = {
-            "num_local_experts": property(
-                lambda s: s._decode_cache_slots
-                if getattr(s, "_active_mode", None) == "decode"
-                else s._orig_num_local_experts
-            ),
-            "moe_ep_rank": property(
-                lambda s: 0
-                if getattr(s, "_active_mode", None) == "decode"
-                else s._orig_moe_ep_rank
-            ),
-        }
-        for name in weight_names:
-            namespace[name] = _weight_property(name)
-
-        cache_aware_cls = type(
-            f"{base_cls.__name__}_KimiCacheAware",
-            (base_cls,),
-            namespace,
-        )
-        self.experts.__class__ = cache_aware_cls
-        self.experts._active_mode = None
-        self.experts._orig_params = orig_params
-        self.experts._orig_num_local_experts = orig_num
-        self.experts._orig_moe_ep_rank = orig_ep
-        self.experts._decode_cache_slots = self._decode_cache_slots
-        # _prefill_buffer / _decode_cache dicts are set lazily by _switch_mode;
-        # initialize empty dicts so property getters don't KeyError on the
-        # "else" (None) branch before the first mode switch.
-        self.experts._prefill_buffer = {}
-        self.experts._decode_cache = {}
-
-        # Drop shadowing instance attrs so class-level properties take effect.
-        self.experts.__dict__.pop("num_local_experts", None)
-        self.experts.__dict__.pop("moe_ep_rank", None)
-
-        self._orig_attrs["num_local_experts"] = orig_num
-        self._orig_attrs["moe_ep_rank"] = orig_ep
-        self._offload_inited = True
-
-    # ------------------------------------------------------------------ #
-    # Mode switching: allocate / free HBM buffers when mode changes.
-    # ------------------------------------------------------------------ #
-
-    def _switch_mode(self, new_mode: Optional[str]) -> None:
-        """Switch between prefill (full-112 HBM buffer) and decode (20-slot
-        LRU cache). Frees the old buffer and allocates the new one. No-op if
-        ``new_mode`` equals the current ``self._mode``.
-        """
-        if self._mode == new_mode:
-            return
-        # Free old buffer.
-        if self._mode == "prefill":
-            self._free_prefill_buffer()
-        elif self._mode == "decode":
-            self._free_decode_cache()
-        # Allocate new buffer (lazy: prefill buffer is filled by start_prefill;
-        # decode cache is populated on-demand by _ensure_experts_cached).
-        if new_mode == "prefill":
-            self._alloc_prefill_buffer()
-        elif new_mode == "decode":
-            self._alloc_decode_cache()
-        self._mode = new_mode
-
-    def _alloc_decode_cache(self) -> None:
-        target_device = torch.device("cuda", torch.cuda.current_device())
-        for name in self._expert_weight_names:
-            param = self._orig_attrs[name]
-            cache = torch.empty(
-                (self._decode_cache_slots, *param.data.shape[1:]),
-                dtype=param.data.dtype,
-                device=target_device,
-            )
-            self._decode_cache[name] = Parameter(cache, requires_grad=False)
-        self.experts._decode_cache = self._decode_cache
-        # Reset LRU bookkeeping.
-        self._slot_to_expert = [-1] * self._decode_cache_slots
-        self._expert_to_slot = {}
-        self._lru_deque.clear()
-
-    def _free_decode_cache(self) -> None:
-        self._decode_cache.clear()
-        self.experts._decode_cache = {}
-        self._slot_to_expert = [-1] * self._decode_cache_slots
-        self._expert_to_slot = {}
-        self._lru_deque.clear()
-
-    def _alloc_prefill_buffer(self) -> None:
-        if self._prefill_buffer:
-            return  # already allocated (e.g., by start_prefill)
-        target_device = torch.device("cuda", torch.cuda.current_device())
-        for name in self._expert_weight_names:
-            param = self._orig_attrs[name]
-            buf = torch.empty_like(param.data, device=target_device)
-            self._prefill_buffer[name] = Parameter(buf, requires_grad=False)
-        self.experts._prefill_buffer = self._prefill_buffer
-        self._prefill_loaded = False
-        self._prefill_event = None
-
-    def _free_prefill_buffer(self) -> None:
-        self._prefill_buffer.clear()
-        self.experts._prefill_buffer = {}
-        self._prefill_loaded = False
-        self._prefill_event = None
-
-    def free_prefill_buffer(self) -> None:
-        """Public entry: free this layer's full-112 HBM buffer after prefill
-        compute completes. Called by KimiLinearModel.forward per layer.
-        """
-        self._free_prefill_buffer()
-
-    # ------------------------------------------------------------------ #
-    # Prefill async prefetch (called by KimiLinearModel).
-    # ------------------------------------------------------------------ #
-
-    def start_prefill(self, stream: torch.cuda.Stream) -> None:
-        """Async H2D copy of all num_local_experts weights for this layer on
-        ``stream``. Records an event for later ``wait_prefill`` synchronization.
-        """
-        if not self._offload_inited:
-            self._init_host_offload()
-        if not self._prefill_buffer:
-            self._alloc_prefill_buffer()
-        if self._prefill_loaded:
-            return
-        with torch.cuda.stream(stream):
-            for name in self._expert_weight_names:
-                self._prefill_buffer[name].data.copy_(
-                    self._host_weights[name], non_blocking=True
-                )
-        self._prefill_event = torch.cuda.Event()
-        self._prefill_event.record(stream)
-        log_info_on_rank0(
-            logger,
-            f"KimiMoE prefill prefetch done (layer_idx={self.layer_idx}, stream={stream})",
-        )
-
-    def wait_prefill(self) -> None:
-        """Block the default stream until the prefetch H2D copy for this layer
-        has completed. Marks the buffer as ready for kernel use.
-        """
-        log_info_on_rank0(
-            logger, f"KimiMoE prefill wait start (layer_idx={self.layer_idx})"
-        )
-        if self._prefill_event is not None:
-            self._prefill_event.wait()
-            self._prefill_event = None
-        self._prefill_loaded = True
-        log_info_on_rank0(
-            logger, f"KimiMoE prefill wait done (layer_idx={self.layer_idx})"
-        )
-
-    # ------------------------------------------------------------------ #
-    # Decode-mode LRU swap-in (unchanged logic, slots from env var).
-    # ------------------------------------------------------------------ #
-
-    def _ensure_experts_cached(self, local_topk_ids: torch.Tensor) -> torch.Tensor:
-        """LRU swap-in: ensure unique local experts in ``local_topk_ids`` are
-        in the HBM cache. Returns a remap tensor mapping local_expert_id -> slot_id
-        (-1 for unmapped).
-        """
-        ids_cpu = local_topk_ids.view(-1).to("cpu", dtype=torch.int64).tolist()
-        unique_ids = {int(x) for x in ids_cpu if x >= 0}
-        if len(unique_ids) > self._decode_cache_slots:
-            raise RuntimeError(
-                f"KimiMoE host-offload cache: batch requests {len(unique_ids)} "
-                f"unique experts but only {self._decode_cache_slots} slots exist. "
-                f"batch_size=1 decode (16 unique experts) is the supported config."
-            )
-        for eid in unique_ids:
-            if eid in self._expert_to_slot:
-                slot = self._expert_to_slot[eid]
-                self._lru_deque.remove(slot)
-                self._lru_deque.appendleft(slot)
-            else:
-                free_slot = next(
-                    (i for i, v in enumerate(self._slot_to_expert) if v == -1),
-                    None,
-                )
-                if free_slot is None:
-                    free_slot = self._lru_deque.pop()
-                    old_eid = self._slot_to_expert[free_slot]
-                    del self._expert_to_slot[old_eid]
-                    self._slot_to_expert[free_slot] = -1
-                for name in self._expert_weight_names:
-                    self._decode_cache[name].data[free_slot].copy_(
-                        self._host_weights[name][eid], non_blocking=False
-                    )
-                self._slot_to_expert[free_slot] = eid
-                self._expert_to_slot[eid] = free_slot
-                self._lru_deque.appendleft(free_slot)
-        num_local_experts = self._orig_attrs["num_local_experts"]
-        remap = torch.full(
-            (num_local_experts,),
-            -1,
-            dtype=torch.int32,
-            device=local_topk_ids.device,
-        )
-        for eid, slot in self._expert_to_slot.items():
-            remap[eid] = slot
-        return remap
-
-    # ------------------------------------------------------------------ #
-    # Decode-mode dispatch rebuild (group_list + hidden_states reorder).
-    # ------------------------------------------------------------------ #
-
-    def _rebuild_dispatch_for_slots(self, dispatch_output, remap: torch.Tensor):
-        """Rebuild a DeepEPNormalDispatchOutput for the decode HBM cache.
-
-        NPU ``npu_grouped_matmul`` iterates experts via ``group_list`` and
-        indexes ``weight[expert_id]``. Our decode cache has limited slots, so we
-        must:
-        - Rebuild ``num_recv_tokens_per_expert`` to slot-ordered counts
-        - Reorder ``hidden_states`` (and its scale) from original-local-id order
-          to slot order
-        - Remap ``topk_ids`` to slot ids (metadata for combine_input)
-
-        Returns ``(new_dispatch, slot_perm)`` where ``slot_perm`` maps
-        new_row_index (slot order) -> old_row_index (dispatch order); used to
-        unpermute the kernel output before combine.
-        """
-        num_recv_per_expert = getattr(
-            dispatch_output, "num_recv_tokens_per_expert", None
-        )
-        if num_recv_per_expert is None:
-            old_ids = dispatch_output.topk_ids
-            safe_ids = torch.where(old_ids == -1, 0, old_ids)
-            new_ids = torch.where(
-                old_ids == -1,
-                old_ids,
-                remap[safe_ids].to(old_ids.dtype),
-            )
-            return dispatch_output._replace(topk_ids=new_ids), None
-
-        num_local = len(num_recv_per_expert)
-        offsets = [0] * (num_local + 1)
-        for i in range(num_local):
-            offsets[i + 1] = offsets[i] + num_recv_per_expert[i]
-
-        new_num_recv = [0] * self._decode_cache_slots
-        perm_indices: list = []
-        for slot_id in range(self._decode_cache_slots):
-            orig_id = self._slot_to_expert[slot_id]
-            if 0 <= orig_id < num_local:
-                count = num_recv_per_expert[orig_id]
-                new_num_recv[slot_id] = count
-                start = offsets[orig_id]
-                perm_indices.extend(range(start, start + count))
-
-        device = dispatch_output.hidden_states.device
-        slot_perm = torch.tensor(perm_indices, dtype=torch.int64, device=device)
-
-        if slot_perm.numel() > 0:
-            new_hidden_states = dispatch_output.hidden_states[slot_perm]
-            old_scale = dispatch_output.hidden_states_scale
-            new_scale = old_scale[slot_perm] if old_scale is not None else None
-        else:
-            new_hidden_states = dispatch_output.hidden_states[:0]
-            old_scale = dispatch_output.hidden_states_scale
-            new_scale = old_scale[:0] if old_scale is not None else None
-
-        old_ids = dispatch_output.topk_ids
-        safe_ids = torch.where(old_ids == -1, 0, old_ids)
-        new_ids = torch.where(
-            old_ids == -1,
-            old_ids,
-            remap[safe_ids].to(old_ids.dtype),
-        )
-
-        new_dispatch = dispatch_output._replace(
-            hidden_states=new_hidden_states,
-            hidden_states_scale=new_scale,
-            topk_ids=new_ids,
-            num_recv_tokens_per_expert=new_num_recv,
-        )
-        return new_dispatch, slot_perm
-
-    # ------------------------------------------------------------------ #
-    # Experts forward: prefill (full buffer, no remap) vs decode (cache).
-    # ------------------------------------------------------------------ #
-
-    def _experts_forward_prefill(
-        self, routed_hidden_states: torch.Tensor, topk_output
-    ) -> torch.Tensor:
-        """Prefill path: full num_local_experts buffer already loaded by async
-        prefetch. No remap, no rebuild, no unpermute — kernel sees the original
-        full weight tensor + original topk_ids + original group_list.
-        """
-        if not self._offload_inited:
-            self._init_host_offload()
-        self.wait_prefill()
-        self.experts._active_mode = "prefill"
-        dispatch_output = self.experts.dispatcher.dispatch(
-            hidden_states=routed_hidden_states, topk_output=topk_output
-        )
-        try:
-            combine_input = self.experts.run_moe_core(dispatch_output)
-        finally:
-            self.experts._active_mode = None
-        return self.experts.dispatcher.combine(combine_input=combine_input)
-
-    def _experts_forward_decode(
-        self, routed_hidden_states: torch.Tensor, topk_output
-    ) -> torch.Tensor:
-        """Decode path: limited-slot LRU cache, sync swap-in, rebuild dispatch
-        output to slot order, kernel run on cache weights, unpermute output back
-        to dispatch order before combine.
-        """
-        dispatch_output = self.experts.dispatcher.dispatch(
-            hidden_states=routed_hidden_states, topk_output=topk_output
-        )
-        old_ids = dispatch_output.topk_ids
-        remap = self._ensure_experts_cached(old_ids)
-        remapped_dispatch, slot_perm = self._rebuild_dispatch_for_slots(
-            dispatch_output, remap
-        )
-        self.experts._active_mode = "decode"
-        try:
-            combine_input = self.experts.run_moe_core(remapped_dispatch)
-        finally:
-            self.experts._active_mode = None
-        if slot_perm is not None and slot_perm.numel() > 0:
-            kernel_output = combine_input.hidden_states
-            unpermuted = torch.empty_like(kernel_output)
-            unpermuted[slot_perm] = kernel_output
-            combine_input = combine_input._replace(hidden_states=unpermuted)
-        return self.experts.dispatcher.combine(combine_input=combine_input)
-
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_size = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_size)
-
-        # Lazy init + mode switch (mode is set by KimiLinearModel per-forward).
-        if not self._offload_inited:
-            self._init_host_offload()
-        if self._current_mode != self._mode:
-            self._switch_mode(self._current_mode)
-
-        experts_fn = (
-            self._experts_forward_prefill
-            if self._current_mode == "prefill"
-            else self._experts_forward_decode
-        )
 
         shared_output = None
         routed_hidden_states = hidden_states
@@ -742,9 +317,7 @@ class KimiMoE(nn.Module):
             with torch.cuda.stream(self.alt_stream):
                 router_logits, _ = self.gate(hidden_states)
                 topk_output = self.topk(hidden_states, router_logits)
-                final_hidden_states = experts_fn(
-                    routed_hidden_states, topk_output
-                )
+                final_hidden_states = self.experts(routed_hidden_states, topk_output)
 
             current_stream.wait_stream(self.alt_stream)
         else:
@@ -752,9 +325,7 @@ class KimiMoE(nn.Module):
                 shared_output = self.shared_experts(hidden_states)
             router_logits, _ = self.gate(hidden_states)
             topk_output = self.topk(hidden_states, router_logits)
-            final_hidden_states = experts_fn(
-                routed_hidden_states, topk_output
-            )
+            final_hidden_states = self.experts(routed_hidden_states, topk_output)
 
         if self.routed_expert_hidden_size is not None:
             final_hidden_states = self.routed_expert_norm(final_hidden_states)
@@ -1267,8 +838,9 @@ class KimiLinearModel(nn.Module):
             self.embed_tokens = PPMissingLayer()
 
         self.alt_stream = torch.cuda.Stream()
-        self._prefetch_layers = get_int_env_var("SGLANG_KIMI_PREFETCH_LAYERS", 10)
-        self._prefetch_stream = torch.cuda.Stream()
+        self._prefetch_layers = get_int_env_var(
+            "SGLANG_KIMI_PREFETCH_LAYERS", 10
+        )
 
         self.layers, self.start_layer, self.end_layer = make_layers(
             config.num_hidden_layers,
@@ -1344,17 +916,22 @@ class KimiLinearModel(nn.Module):
         is_prefill = forward_batch.forward_mode.is_prefill()
         N = self._prefetch_layers if is_prefill else 0
 
-        # Set _current_mode on every MoE layer so KimiMoE.forward can switch
-        # buffers (full-112 prefill vs 20-slot decode cache).
+        # Toggle ExpertWeightStore LRU slot limit: unlimited during prefill
+        # (loads all 112 experts per layer), 20-slot LRU during decode.
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
             if hasattr(layer, "block_sparse_moe"):
-                layer.block_sparse_moe._current_mode = (
-                    "prefill" if is_prefill else "decode"
-                )
+                moe = layer.block_sparse_moe
+                if (
+                    getattr(moe, "_dram_offload_enabled", False)
+                    and moe._expert_weight_store is not None
+                ):
+                    moe._expert_weight_store.set_cache_mode(is_prefill)
 
-        # Pre-trigger async prefetch for the first N MoE layers so their
-        # full-112 expert sets start loading before the compute loop begins.
+        # Prefill prefetch coordination: pre-trigger async H2D copy of the
+        # full expert set for the first N MoE layers so they start loading
+        # before the compute loop begins. The ExpertWeightStore (created by
+        # --moe-dram-offload) handles the actual DRAM→HBM copy on its h2d_stream.
         if is_prefill and N > 0:
             for i in range(self.start_layer, self.end_layer):
                 layer = self.layers[i]
@@ -1362,7 +939,7 @@ class KimiLinearModel(nn.Module):
                     continue
                 if i - self.start_layer >= N:
                     break
-                layer.block_sparse_moe.start_prefill(self._prefetch_stream)
+                layer.block_sparse_moe.start_prefill_prefetch()
 
         for i in range(self.start_layer, self.end_layer):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
@@ -1375,7 +952,7 @@ class KimiLinearModel(nn.Module):
                 )
                 if is_prefill and N > 0 and moe is not None:
                     # Wait for this layer's prefetch to finish before compute.
-                    moe.wait_prefill()
+                    moe.wait_prefill_prefetch()
                     # Trigger prefetch for layer i+N so its H2D copy overlaps
                     # with this layer's compute.
                     target_i = i + N
@@ -1386,7 +963,7 @@ class KimiLinearModel(nn.Module):
                             else None
                         )
                         if target_moe is not None:
-                            target_moe.start_prefill(self._prefetch_stream)
+                            target_moe.start_prefill_prefetch()
                 hidden_states, residual = layer(
                     positions=positions,
                     hidden_states=hidden_states,
@@ -1399,10 +976,10 @@ class KimiLinearModel(nn.Module):
                     f"KimiMoE layer compute done (layer_idx={i}, "
                     f"mode={'prefill' if is_prefill else 'decode'})",
                 )
-                # After prefill compute, free this layer's full-112 buffer to
-                # cap HBM usage at ~(N+1) concurrent buffers.
+                # After prefill compute, free this layer's HBM cache entries
+                # to cap HBM at ~(N+1) concurrent layers' worth of experts.
                 if is_prefill and moe is not None:
-                    moe.free_prefill_buffer()
+                    moe.free_prefill_cache()
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(
