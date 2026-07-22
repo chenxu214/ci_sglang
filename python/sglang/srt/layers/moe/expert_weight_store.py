@@ -48,13 +48,16 @@ class ExpertWeightStore:
     only Top-K selected experts are loaded from DRAM to HBM.
 
     LRU implementation:
-        self.hbm_cache is an OrderedDict. On cache hit, move_to_end()
-        moves the entry to the tail (most recently used). On eviction,
-        popitem(last=False) removes the head (least recently used).
+        self._per_layer_caches is a dict of OrderedDicts, one per layer_id.
+        Each layer's cache is an OrderedDict[expert_id, weights]. On cache
+        hit, move_to_end() moves the entry to the tail (most recently used).
+        On eviction, popitem(last=False) removes the head (least recently
+        used). The slot-count limit (20 for decode) is applied per-layer
+        so that cross-layer eviction does not occur during decode.
 
     Attributes:
         dram_store: {(layer_id, expert_id): {weight_name: cpu_tensor}}
-        hbm_cache: LRU cache {(layer_id, expert_id): {weight_name: hbm_tensor}}
+        _per_layer_caches: {layer_id: OrderedDict[expert_id, {name: hbm_tensor}]}
         h2d_stream: Dedicated NPU stream for H2D transfers
         use_acc_offload: Whether to use acc_offload sparse_copy
     """
@@ -66,9 +69,10 @@ class ExpertWeightStore:
         use_acc_offload: bool = True,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
-        self.hbm_cache: OrderedDict[Tuple[int, int], Dict[str, torch.Tensor]] = (
-            OrderedDict()
-        )
+        # Per-layer LRU caches: {layer_id: OrderedDict[expert_id, weights]}
+        # Each layer has its own slot-count limit (20 for decode, unlimited
+        # for prefill). This prevents cross-layer eviction during decode.
+        self._per_layer_caches: Dict[int, OrderedDict] = {}
         self.hbm_cache_size_bytes = 0  # Auto-calculated during warmup
         self.hbm_cache_used_bytes = 0
         self.hbm_cache_layers = hbm_cache_layers
@@ -114,6 +118,12 @@ class ExpertWeightStore:
                     self._init_acc_offload()
 
             self._initialized = True
+
+    def _get_layer_cache(self, layer_id: int) -> OrderedDict:
+        """Get (or create) the per-layer LRU OrderedDict."""
+        if layer_id not in self._per_layer_caches:
+            self._per_layer_caches[layer_id] = OrderedDict()
+        return self._per_layer_caches[layer_id]
 
     def _init_acc_offload(self):
         """Initialize MemFabric acc_offload DRAM pool."""
@@ -231,11 +241,12 @@ class ExpertWeightStore:
         if key not in self.dram_store:
             return None
 
-        # Check HBM LRU cache
-        if key in self.hbm_cache:
-            self.hbm_cache.move_to_end(key)  # LRU: mark as recently used
+        # Check per-layer HBM LRU cache
+        lc = self._get_layer_cache(layer_id)
+        if expert_id in lc:
+            lc.move_to_end(expert_id)  # LRU: mark as recently used
             self._stats["hbm_hit"] += 1
-            return self.hbm_cache[key]
+            return lc[expert_id]
 
         # Load from DRAM to HBM
         self._stats["dram_load"] += 1
@@ -255,6 +266,7 @@ class ExpertWeightStore:
         missing = []
         hit_ids = []
 
+        lc = self._get_layer_cache(layer_id)
         for eid in expert_ids:
             key = (layer_id, eid)
             self._stats["total_requests"] += 1
@@ -262,11 +274,11 @@ class ExpertWeightStore:
             if key not in self.dram_store:
                 continue
 
-            if key in self.hbm_cache:
-                self.hbm_cache.move_to_end(key)  # LRU: mark as recently used
+            if eid in lc:
+                lc.move_to_end(eid)  # LRU: mark as recently used
                 self._stats["hbm_hit"] += 1
                 hit_ids.append(eid)
-                results[eid] = self.hbm_cache[key]
+                results[eid] = lc[eid]
             else:
                 self._stats["dram_load"] += 1
                 missing.append(key)
@@ -442,41 +454,42 @@ class ExpertWeightStore:
     def _put_hbm_cache(
         self, key: Tuple[int, int], weights: Dict[str, torch.Tensor]
     ):
-        """Put expert weights into HBM LRU cache, evicting if needed.
+        """Put expert weights into per-layer HBM LRU cache, evicting if needed.
 
-        Eviction policy (two limits, whichever triggers first):
-        1. Slot count: evict LRU while len(hbm_cache) >= hbm_cache_max_slots
-           (decode default 20; set to 0 via set_cache_mode for prefill).
-        2. Byte size: evict LRU while bytes exceed hbm_cache_size_bytes
-           (set during warmup; 0 = skip byte-size check).
+        Eviction is per-layer: each layer's cache has its own slot-count limit
+        (20 for decode, unlimited for prefill). This prevents cross-layer
+        eviction during decode so that layer i's cached experts survive
+        while layers i+1..i+91 are processed.
+
+        Byte-size eviction is global (across all layers) as a safety net.
         """
+        layer_id, expert_id = key
+        lc = self._get_layer_cache(layer_id)
         weight_size = sum(t.nbytes for t in weights.values())
 
-        # Slot-count eviction (decode LRU: 20 experts max)
+        # Per-layer slot-count eviction (decode LRU: 20 experts max per layer)
         if self.hbm_cache_max_slots > 0:
             while (
-                len(self.hbm_cache) >= self.hbm_cache_max_slots
-                and len(self.hbm_cache) > 0
+                len(lc) >= self.hbm_cache_max_slots
+                and len(lc) > 0
             ):
-                evicted_key, evicted_weights = self.hbm_cache.popitem(last=False)
-                self.hbm_cache_used_bytes -= sum(
-                    t.nbytes for t in evicted_weights.values()
-                )
+                evicted_eid, evicted_weights = lc.popitem(last=False)
+                evicted_size = sum(t.nbytes for t in evicted_weights.values())
+                self.hbm_cache_used_bytes -= evicted_size
                 del evicted_weights
 
-        # Byte-size eviction (warmup-based; 0 = skip)
+        # Global byte-size eviction (warmup-based; 0 = skip)
         if self.hbm_cache_size_bytes > 0:
             while (
                 self.hbm_cache_used_bytes + weight_size > self.hbm_cache_size_bytes
-                and len(self.hbm_cache) > 0
+                and len(lc) > 0
             ):
-                evicted_key, evicted_weights = self.hbm_cache.popitem(last=False)
-                self.hbm_cache_used_bytes -= sum(
-                    t.nbytes for t in evicted_weights.values()
-                )
+                evicted_eid, evicted_weights = lc.popitem(last=False)
+                evicted_size = sum(t.nbytes for t in evicted_weights.values())
+                self.hbm_cache_used_bytes -= evicted_size
                 del evicted_weights
 
-        self.hbm_cache[key] = weights
+        lc[expert_id] = weights
         self.hbm_cache_used_bytes += weight_size
 
     def async_prefetch(self, layer_id: int, expert_ids: List[int]):
@@ -491,9 +504,10 @@ class ExpertWeightStore:
 
         # Collect missing experts that need prefetching
         missing = []
+        lc = self._get_layer_cache(layer_id)
         for eid in expert_ids:
             key = (layer_id, eid)
-            if key not in self.dram_store or key in self.hbm_cache:
+            if key not in self.dram_store or eid in lc:
                 continue
             missing.append(key)
 
@@ -543,15 +557,15 @@ class ExpertWeightStore:
         Called after prefill compute for a layer to cap HBM usage at ~(N+1)
         concurrent layers' worth of cached experts.
         """
-        evicted = 0
-        freed_bytes = 0
-        keys_to_remove = [k for k in self.hbm_cache if k[0] == layer_id]
-        for key in keys_to_remove:
-            weights = self.hbm_cache.pop(key)
-            freed_bytes += sum(t.nbytes for t in weights.values())
-            evicted += 1
-            del weights
+        if layer_id not in self._per_layer_caches:
+            return
+        lc = self._per_layer_caches.pop(layer_id)
+        freed_bytes = sum(
+            sum(t.nbytes for t in w.values()) for w in lc.values()
+        )
         self.hbm_cache_used_bytes -= freed_bytes
+        evicted = len(lc)
+        del lc
         if evicted > 0:
             logger.info(
                 f"[ExpertWeightStore release_layer] layer_id={layer_id}: "
@@ -633,14 +647,14 @@ class ExpertWeightStore:
 
     def release_hbm_weights(self):
         """Release all HBM cached weights and shared buffers (free HBM memory)."""
-        cache_count = len(self.hbm_cache)
+        cache_count = sum(len(lc) for lc in self._per_layer_caches.values())
         cache_gb = self.hbm_cache_used_bytes / 1024**3
         shared_buffer_count = len(self._shared_hbm_buffers)
         shared_buffer_bytes = sum(t.nbytes for t in self._shared_hbm_buffers.values())
 
         alloc_before, reserved_before = _get_hbm_usage_gb()
 
-        self.hbm_cache.clear()
+        self._per_layer_caches.clear()
         self.hbm_cache_used_bytes = 0
         self._shared_hbm_buffers.clear()
         self._shared_buffer_shapes.clear()
@@ -674,10 +688,11 @@ class ExpertWeightStore:
 
     def get_stats(self) -> dict:
         total = max(self._stats["total_requests"], 1)
+        cache_count = sum(len(lc) for lc in self._per_layer_caches.values())
         return {
             "hbm_hit_rate": self._stats["hbm_hit"] / total,
             "dram_load_count": self._stats["dram_load"],
-            "hbm_cache_count": len(self.hbm_cache),
+            "hbm_cache_count": cache_count,
             "hbm_cache_used_gb": self.hbm_cache_used_bytes / 1024**3,
             "dram_total_experts": len(self.dram_store),
             "backend": "acc_offload" if self.use_acc_offload else "pytorch_h2d",
