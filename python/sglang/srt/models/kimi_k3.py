@@ -121,23 +121,6 @@ class KimiMLAAttention(DeepseekV2AttentionMLA):
             attn_tp_context.clear_attn_inputs()
 
 
-class SituAndMul(nn.Module):
-    def __init__(self, beta: float, linear_beta: Optional[float]) -> None:
-        super().__init__()
-        self.beta = beta
-        self.linear_beta = linear_beta
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate, up = x.chunk(2, dim=-1)
-        output_dtype = x.dtype
-        gate = gate.float()
-        up = up.float()
-        gate = self.beta * torch.tanh(gate / self.beta) * torch.sigmoid(gate)
-        if self.linear_beta is not None:
-            up = self.linear_beta * torch.tanh(up / self.linear_beta)
-        return (gate * up).to(output_dtype)
-
-
 class KimiMLP(nn.Module):
     def __init__(
         self,
@@ -167,6 +150,8 @@ class KimiMLP(nn.Module):
             reduce_results=reduce_results,
         )
         if hidden_act == "situ":
+            from sglang.srt.layers.activation import SituAndMul
+
             self.act_fn = SituAndMul(
                 beta=activation_situ_beta,
                 linear_beta=activation_situ_linear_beta,
@@ -230,6 +215,10 @@ class KimiMoE(nn.Module):
             routed_scaling_factor=self.routed_scaling_factor,
             activation=config.hidden_act,
             prefix=add_prefix("experts", prefix),
+            activation_situ_beta=getattr(config, "activation_situ_beta", 1.0),
+            activation_situ_linear_beta=getattr(
+                config, "activation_situ_linear_beta", None
+            ),
         )
 
         self.routed_expert_hidden_size = getattr(
