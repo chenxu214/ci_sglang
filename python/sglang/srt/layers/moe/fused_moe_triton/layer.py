@@ -77,6 +77,7 @@ from sglang.srt.utils import (
     print_info_once,
     round_up,
 )
+from sglang.srt.utils.common import log_info_on_rank0
 from sglang.srt.utils.custom_op import register_custom_op
 
 _is_hip = is_hip()
@@ -1560,6 +1561,11 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
+            f"num_experts={self.num_local_experts}",
+        )
         self._expert_weight_store.prefetch_full_layer(
             self.layer_id, self.num_local_experts
         )
@@ -1571,7 +1577,15 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] wait_prefill_prefetch start layer_id={self.layer_id}",
+        )
         self._expert_weight_store.sync_prefetch()
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id}",
+        )
 
     def free_prefill_cache(self):
         """Release this layer's HBM cache entries after prefill compute.
@@ -1583,6 +1597,10 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] free_prefill_cache layer_id={self.layer_id}",
+        )
         self._expert_weight_store.release_layer_hbm_cache(self.layer_id)
 
     @classmethod

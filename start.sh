@@ -10,7 +10,7 @@ export SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS=1
 MODEL_PATH=/home/w00802660/weights/
 tp=$1
 export SGLANG_KIMI_DECODE_CACHE_SLOTS=20
-export SGLANG_KIMI_PREFETCH_LAYERS=10
+export SGLANG_KIMI_PREFETCH_LAYERS=2
 
 unset https_proxy
 unset http_proxy
@@ -54,6 +54,7 @@ sglang serve \
     --port 8880 \
     --moe-a2a-backend deepep \
     --deepep-mode auto \
+    --moe-dram-offload \
     --skip-server-warmup \
     --disable-cuda-graph \
     --cuda-graph-bs 2 4
