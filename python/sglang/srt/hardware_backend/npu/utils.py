@@ -176,8 +176,10 @@ def situ_and_mul(
 
 @triton.jit
 def _apply_attn_res_kernel(
-    v_ptr,
-    score_weight_ptr,
+    block_residual_ptr,
+    prefix_sum_ptr,
+    norm_w_ptr,
+    proj_w_ptr,
     out_ptr,
     N: tl.constexpr,
     H: tl.constexpr,
@@ -195,13 +197,22 @@ def _apply_attn_res_kernel(
 
     cols = tl.arange(0, H)                                   # full-row (non-pow2 OK on Ascend)
     s_idx = tl.arange(0, NB)                                 # padded stream-index block
-    w = tl.load(score_weight_ptr + cols).to(tl.float32)      # [H] score_weight, resident
+
+    # Fused mul: score_weight = norm_w * proj_w (computed once, resident)
+    norm_w = tl.load(norm_w_ptr + cols).to(tl.float32)
+    proj_w = tl.load(proj_w_ptr + cols).to(tl.float32)
+    w = norm_w * proj_w
+
+    br_stride = B * H  # block_residual row stride
 
     for tok in range(tok0, tok1):
         # ---- pass 1: per stream, one full-row load; MS + vw; score = rstd * vw ----
         scores = tl.full([NB], -float("inf"), dtype=tl.float32)
         for s in range(B + 1):
-            v = tl.load(v_ptr + tok * (B + 1) * H + s * H + cols).to(tl.float32)
+            if s < B:
+                v = tl.load(block_residual_ptr + tok * br_stride + s * H + cols).to(tl.float32)
+            else:
+                v = tl.load(prefix_sum_ptr + tok * H + cols).to(tl.float32)
             ms = tl.sum(v * v) / H
             rstd = tl.rsqrt(ms + EPS)
             k = v * rstd  # normalize first (matches reference FP32 path exactly)
@@ -215,7 +226,10 @@ def _apply_attn_res_kernel(
         # ---- pass 2: weighted sum of raw streams (full-row reload) ----
         out = tl.zeros([H], dtype=tl.float32)
         for s in range(B + 1):
-            v = tl.load(v_ptr + tok * (B + 1) * H + s * H + cols).to(tl.float32)
+            if s < B:
+                v = tl.load(block_residual_ptr + tok * br_stride + s * H + cols).to(tl.float32)
+            else:
+                v = tl.load(prefix_sum_ptr + tok * H + cols).to(tl.float32)
             w_s = tl.sum(tl.where(s_idx == s, weights, 0.0))
             out += w_s * v
 
@@ -224,6 +238,10 @@ def _apply_attn_res_kernel(
 
 def apply_attn_res(prefix_sum, block_residual, proj, norm):
     """K3 learned attn-residual: softmax-mix B+1 residual streams per token.
+
+    Fused operations (no host-side temporaries):
+      - score_weight = norm_w * proj_w  (mul inside kernel)
+      - v = cat(block_residual, prefix_sum.unsqueeze(1))  (two-pointer read inside kernel)
 
     Args:
         prefix_sum: [N, H] BF16 (current running sum).
@@ -239,19 +257,16 @@ def apply_attn_res(prefix_sum, block_residual, proj, norm):
     proj_w = proj.weight.squeeze(0)
     norm_w = norm.weight
     eps = norm.variance_epsilon
-    score_weight = (norm_w * proj_w).float()
-
-    # Cat into single [N, B+1, H] — kernel reads from one pointer
-    # (Triton-Ascend can't select between two different-source pointers in-kernel).
-    v = torch.cat([block_residual, prefix_sum.unsqueeze(1)], dim=1)
 
     out = torch.empty((N, H), dtype=prefix_sum.dtype, device=prefix_sum.device)
     NB = triton.next_power_of_2(B + 1)
 
     _, num_vectorcore = get_device_properties()
     _apply_attn_res_kernel[(num_vectorcore,)](
-        v,
-        score_weight,
+        block_residual,
+        prefix_sum,
+        norm_w,
+        proj_w,
         out,
         N=N,
         H=H,
