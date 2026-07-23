@@ -430,6 +430,57 @@ class ExpertWeightStore:
 
         return results
 
+    def build_active_weight_tensors(
+        self,
+        layer_id: int,
+        active_expert_ids: List[int],
+        weight_names: List[str],
+    ) -> Dict[str, torch.Tensor]:
+        """Build compact [num_active, ...] weight tensors for active experts.
+
+        Called after dispatch (decode only) when we know which experts
+        received tokens. Checks LRU cache first (HBM→HBM copy on hit),
+        loads from DRAM on miss. Replaces the shared [224, ...] buffer
+        with a smaller [num_active, ...] tensor.
+
+        Args:
+            layer_id: Layer index
+            active_expert_ids: Sorted list of expert IDs with tokens
+            weight_names: List of weight parameter names
+
+        Returns:
+            {weight_name: tensor of shape [num_active, ...]}
+        """
+        self._ensure_initialized()
+
+        num_active = len(active_expert_ids)
+        lc = self._get_layer_cache(layer_id)
+
+        # Collect cache misses
+        missing_keys = []
+        for eid in active_expert_ids:
+            self._stats["total_requests"] += 1
+            if eid in lc:
+                self._stats["hbm_hit"] += 1
+            else:
+                self._stats["dram_load"] += 1
+                missing_keys.append((layer_id, eid))
+
+        # Load misses from DRAM into LRU cache
+        if missing_keys:
+            if self.use_acc_offload and self._offload_initialized:
+                self._sparse_copy_batch(layer_id, missing_keys)
+            else:
+                self._pytorch_h2d_batch(missing_keys)
+
+        # Build compact tensors from LRU cache entries
+        result = {}
+        for name in weight_names:
+            tensors = [lc[eid][name] for eid in active_expert_ids]
+            result[name] = torch.stack(tensors, dim=0)
+
+        return result
+
     # ------------------------------------------------------------------
     # acc_offload sparse_copy backend
     # ------------------------------------------------------------------

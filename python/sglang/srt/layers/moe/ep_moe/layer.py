@@ -152,7 +152,11 @@ class DeepEPMoE(FusedMoE):
         hidden_states: torch.Tensor,
         topk_output: TopKOutput,
     ):
-        if self._dram_offload_enabled and self._expert_weight_store is not None:
+        if (
+            self._dram_offload_enabled
+            and self._expert_weight_store is not None
+            and self._expert_weight_store.hbm_cache_max_slots == 0
+        ):
             self._load_experts_on_demand(topk_output)
 
         if is_in_tc_piecewise_cuda_graph():
