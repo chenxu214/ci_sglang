@@ -115,6 +115,14 @@ class ExpertWeightStore:
         # coverage = |prefetch ∩ needed| / |needed|
         self._prefetch_stats: Dict[int, dict] = {}
 
+        # Eviction waste tracking.
+        # A fixed-size FIFO watchlist of recently evicted (layer_id, eid).
+        # If a reload finds its eviction still in the watchlist, it's "waste".
+        self._eviction_watchlist: OrderedDict = OrderedDict()
+        self._eviction_watchlist_max_size = 2000
+        self._eviction_total = 0
+        self._stats["eviction_waste"] = 0
+
     def _ensure_initialized(self):
         if not self._initialized:
             if torch.npu.is_available():
@@ -299,6 +307,10 @@ class ExpertWeightStore:
             else:
                 self._stats["dram_load"] += 1
                 missing.append(key)
+                # Check if this was recently evicted (waste).
+                if key in self._eviction_watchlist:
+                    self._stats["eviction_waste"] += 1
+                    del self._eviction_watchlist[key]
 
         # --- Prefetch accuracy/coverage metrics ---
         needed_set = set(e for e in expert_ids if (layer_id, e) in self.dram_store)
@@ -595,6 +607,16 @@ class ExpertWeightStore:
             hbm_weights[name] = hbm_tensor
         return hbm_weights
 
+    def _record_eviction(self, layer_id: int, evicted_eid: int):
+        """Record eviction in the watchlist for waste tracking."""
+        self._eviction_total += 1
+        key = (layer_id, evicted_eid)
+        # Move to end so popitem(last=False) trims oldest entries
+        self._eviction_watchlist[key] = None
+        self._eviction_watchlist.move_to_end(key)
+        while len(self._eviction_watchlist) > self._eviction_watchlist_max_size:
+            self._eviction_watchlist.popitem(last=False)
+
     def _put_hbm_cache(self, key: Tuple[int, int], weights: Dict[str, torch.Tensor]):
         """Put expert weights into per-layer HBM LRU cache, evicting if needed.
 
@@ -615,6 +637,7 @@ class ExpertWeightStore:
                 evicted_eid, evicted_weights = lc.popitem(last=False)
                 evicted_size = sum(t.nbytes for t in evicted_weights.values())
                 self.hbm_cache_used_bytes -= evicted_size
+                self._record_eviction(layer_id, evicted_eid)
                 del evicted_weights
 
         # Global byte-size eviction (warmup-based; 0 = skip)
@@ -626,6 +649,7 @@ class ExpertWeightStore:
                 evicted_eid, evicted_weights = lc.popitem(last=False)
                 evicted_size = sum(t.nbytes for t in evicted_weights.values())
                 self.hbm_cache_used_bytes -= evicted_size
+                self._record_eviction(layer_id, evicted_eid)
                 del evicted_weights
 
         lc[expert_id] = weights
@@ -874,9 +898,22 @@ class ExpertWeightStore:
             "hbm_cache_used_gb": self.hbm_cache_used_bytes / 1024**3,
             "dram_total_experts": len(self.dram_store),
             "backend": "acc_offload" if self.use_acc_offload else "pytorch_h2d",
+            # Prefetch metrics: spatial prefetch (layer_i logits → layer_{i+1} top-k).
+            # accuracy  = (prefetched ∩ needed) / prefetched  — 预取的 expert 有多少用上了
+            # coverage  = (prefetched ∩ needed) / needed      — 实际需要的 expert 有多少被预取命中
+            # measurements = 测量次数
             "prefetch_accuracy": acc_sum / max(cnt, 1),
             "prefetch_coverage": cov_sum / max(cnt, 1),
             "prefetch_measurements": cnt,
+            # Eviction waste metrics.
+            # waste_rate = waste / total — evict 后被很快 reload 的比例。
+            # watchlist_max_size=2000 固定 FIFO，等价于近 2000 次 eviction 窗口。
+            # waste_rate >30% 说明纯 LRU 不适合该路由模式，需 hints-guided eviction.
+            "eviction_total": self._eviction_total,
+            "eviction_waste": self._stats["eviction_waste"],
+            "eviction_waste_rate": self._stats["eviction_waste"]
+            / max(self._eviction_total, 1),
+            "eviction_watchlist_size": len(self._eviction_watchlist),
         }
 
     def get_dram_usage_gb(self) -> float:
