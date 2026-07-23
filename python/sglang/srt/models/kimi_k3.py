@@ -980,11 +980,6 @@ class KimiLinearModel(nn.Module):
                     residual=residual,
                     zero_allocator=zero_allocator,
                 )
-                log_info_on_rank0(
-                    logger,
-                    f"KimiMoE layer compute done (layer_idx={i}, "
-                    f"mode={'prefill' if is_prefill else 'decode'})",
-                )
                 # After prefill compute, free this layer's HBM cache entries
                 # to cap HBM at ~(N+1) concurrent layers' worth of experts.
                 if is_prefill and moe is not None:
