@@ -750,7 +750,15 @@ class ExpertWeightStore:
         """
         if is_prefill:
             self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
-            # Free decode buffers (not needed during prefill)
+            # Free decode buffers (not needed during prefill).
+            # record_stream: layer weight views may still reference buffer
+            # storage; this prevents caching allocator from reusing the
+            # memory before pending decode kernels complete.
+            if torch.npu.is_available():
+                current_stream = torch.npu.current_stream()
+                for buffers in self._decode_buffers.values():
+                    for tensor in buffers.values():
+                        tensor.record_stream(current_stream)
             self._decode_buffers.clear()
         else:
             self.hbm_cache_max_slots = self._decode_cache_slots
