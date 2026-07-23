@@ -1517,6 +1517,8 @@ class FusedMoE(torch.nn.Module):
                 f"prefetch(acc={stats['prefetch_accuracy']:.0%}, "
                 f"cov={stats['prefetch_coverage']:.0%}, "
                 f"n={stats['prefetch_measurements']}), "
+                f"eviction(waste={stats['eviction_waste_rate']:.0%}, "
+                f"total={stats['eviction_total']}), "
                 f"HBM {alloc_before:.2f}→{alloc_after:.2f} GB"
             )
 
