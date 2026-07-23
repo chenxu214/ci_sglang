@@ -169,13 +169,16 @@ class ExpertWeightStore:
         total_bytes = 0
         for name, tensor in weights.items():
             # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
-            # copy_() - NPU raises "do not support internal format".
-            # Force-convert to ND (ACL_FORMAT_ND=2) then move to CPU before D2H.
+            # copy_() or .cpu() — NPU raises "do not support internal format".
+            # npu_format_cast to ND may only change metadata without
+            # reformatting storage, so .contiguous() forces a real ND copy.
             if tensor.device.type != "cpu":
                 try:
-                    tensor = torch_npu.npu_format_cast(tensor, 2)
+                    tensor = torch_npu.npu_format_cast(tensor, 2).contiguous()
                 except Exception:
-                    pass  # Already ND or conversion not needed
+                    # Fallback: .contiguous() alone may still convert NZ
+                    # storage to ND by creating a new contiguous copy
+                    tensor = tensor.contiguous()
                 tensor = tensor.cpu()
 
             if self.use_acc_offload and self._offload_initialized:
