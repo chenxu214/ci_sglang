@@ -742,6 +742,60 @@ class ExpertWeightStore:
         if self._h2d_stream is not None:
             self._h2d_stream.synchronize()
 
+    def prefetch_layer_to_buffer(
+        self, layer_id: int, num_experts: int
+    ) -> Dict[str, torch.Tensor]:
+        """Prefetch ALL experts for a layer into per-layer HBM buffers.
+
+        Allocates [num_experts, ...] tensors and loads from DRAM on
+        h2d_stream (async, no sync). Does NOT use LRU cache. Caller must
+        call sync_prefetch() before using the buffers, and free_layer_buffers()
+        after compute to release HBM.
+
+        Returns:
+            {weight_name: hbm_tensor of shape [num_experts, ...]}
+        """
+        self._ensure_initialized()
+
+        sample_key = (layer_id, 0)
+        weight_names = list(self.dram_store[sample_key].keys())
+
+        buffers = {}
+        for name in weight_names:
+            sample_tensor = self.dram_store[sample_key][name]
+            full_shape = (num_experts,) + sample_tensor.shape
+            buffers[name] = torch.empty(
+                full_shape, dtype=sample_tensor.dtype, device="npu"
+            )
+
+        expert_ids = list(range(num_experts))
+
+        with torch.npu.stream(self._h2d_stream):
+            for eid in expert_ids:
+                key = (layer_id, eid)
+                dram_weights = self.dram_store[key]
+                for name, dram_tensor in dram_weights.items():
+                    if name in buffers:
+                        buffers[name][eid].copy_(
+                            dram_tensor, non_blocking=True
+                        )
+
+        return buffers
+
+    def free_layer_buffers(self, buffers: Dict[str, torch.Tensor]):
+        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer."""
+        if not buffers:
+            return
+        freed_mb = sum(t.nbytes for t in buffers.values()) / 1024**2
+        buffers.clear()
+        import gc
+        gc.collect()
+        if torch.npu.is_available():
+            torch.npu.empty_cache()
+        logger.info(
+            f"[ExpertWeightStore] free_layer_buffers: freed {freed_mb:.1f} MB"
+        )
+
     def release_layer_hbm_cache(self, layer_id: int):
         """Remove all HBM cache entries for a given layer.
 
