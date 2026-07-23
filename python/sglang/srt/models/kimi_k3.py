@@ -387,6 +387,7 @@ class KimiDeltaAttention(nn.Module):
         quant_config: Optional[QuantizationConfig] = None,
         rms_norm_eps: float = 1e-5,
         prefix: str = "",
+        alt_stream: Optional[torch.cuda.Stream] = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -402,6 +403,7 @@ class KimiDeltaAttention(nn.Module):
         self.head_v_dim = config.v_head_dim
         self.layer_idx = layer_idx
         self.prefix = prefix
+        self.alt_stream = alt_stream
         assert self.num_heads % self.attn_tp_size == 0
         self.local_num_heads = divide(self.num_heads, self.attn_tp_size)
 
@@ -590,10 +592,19 @@ class KimiDeltaAttention(nn.Module):
         # Compute beta, forget_gate, and g_proj_states
         beta = self.b_proj(hidden_states)[0]
         forget_gate = self.f_b_proj(self.f_a_proj(hidden_states)[0])[0]
-        if self.use_full_rank_gate:
-            g_proj_states = self.g_proj(hidden_states)[0]
+        if self.alt_stream is not None:
+            current_stream = torch.cuda.current_stream()
+            self.alt_stream.wait_stream(current_stream)
+            with torch.cuda.stream(self.alt_stream):
+                if self.use_full_rank_gate:
+                    g_proj_states = self.g_proj(hidden_states)[0]
+                else:
+                    g_proj_states = self.g_b_proj(self.g_a_proj(hidden_states)[0])[0]
         else:
-            g_proj_states = self.g_b_proj(self.g_a_proj(hidden_states)[0])[0]
+            if self.use_full_rank_gate:
+                g_proj_states = self.g_proj(hidden_states)[0]
+            else:
+                g_proj_states = self.g_b_proj(self.g_a_proj(hidden_states)[0])[0]
 
         return (
             qkv,
@@ -661,7 +672,9 @@ class KimiDeltaAttention(nn.Module):
             a=forget_gate,
             b=beta,
         )
-
+        if self.alt_stream is not None:
+            current_stream = torch.cuda.current_stream()
+            current_stream.wait_stream(self.alt_stream)
         norm_gate = g_proj_states.unflatten(
             -1, (-1, self.head_dim)
         )  # ... (h d) -> ... h d
@@ -694,6 +707,7 @@ class KimiDecoderLayer(nn.Module):
                 config=config,
                 quant_config=quant_config,
                 prefix=f"{prefix}.self_attn",
+                alt_stream=self.alt_stream,
             )
         else:
             self.self_attn = KimiMLAAttention(
