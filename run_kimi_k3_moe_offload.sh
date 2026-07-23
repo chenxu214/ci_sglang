@@ -21,7 +21,11 @@ export SGLANG_W4A8_MXFP4_MOE=1
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
 
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+# NOTE: expandable_segments:True causes PyTorch caching allocator to use
+# virtual address mapping (e.g. 0x4082...), which AICore's DataCopyPad
+# cannot access (requires physical HBM addresses 0x1200...). This breaks
+# acc_offload sparse_copy. Disabled for MoE DRAM offload.
+# export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_SOCKET_IFNAME=lo
 export GLOO_SOCKET_IFNAME=lo
 export STREAMS_PER_DEVICE=32
@@ -51,6 +55,7 @@ sglang serve \
     --host 0.0.0.0 \
     --port 8880 \
     --moe-dram-offload \
+    --moe-dram-pool-size-gb 20 \
     --disable-radix-cache \
     --skip-server-warmup
 

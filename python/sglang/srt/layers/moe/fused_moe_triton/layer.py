@@ -1410,6 +1410,7 @@ class FusedMoE(torch.nn.Module):
                 layer_id=self.layer_id,
                 expert_id=expert_id,
                 weights=expert_weights,
+                nz_weight_names=getattr(self, "_nz_weight_names", None),
             )
 
         # Free the original weight tensors; shared HBM buffers will be
@@ -1467,18 +1468,47 @@ class FusedMoE(torch.nn.Module):
         )
 
         # Ensure shared HBM buffers exist (one per weight name).
-        # All MoE layers share the same buffer (reused across forwards).
+        # NZ-format buffers are only used with acc_offload (sparse_copy can
+        # write NZ bytes directly). Without acc_offload, ND-format buffers
+        # are used and forward converts to NZ (copy_ can't handle NZ format).
+        nz_names = getattr(self._expert_weight_store, "_nz_weight_names", set())
+        nz_direct = (
+            getattr(self._expert_weight_store, "use_acc_offload", False)
+            and getattr(self._expert_weight_store, "_offload_initialized", False)
+        )
         shared_buffers = {}
+        use_shared = True
         for name in weight_names:
             sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
             full_shape = (self.num_local_experts,) + sample_tensor.shape
             dtype = sample_tensor.dtype
-            shared_buffers[name] = self._expert_weight_store.get_shared_hbm_buffer(
-                name, full_shape, dtype
+            nz_format = nz_direct and name in nz_names
+            buf = self._expert_weight_store.get_shared_hbm_buffer(
+                name, full_shape, dtype, nz_format=nz_format
             )
-            setattr(self, name, shared_buffers[name])
+            if buf is None:
+                use_shared = False
+                break
+            shared_buffers[name] = buf
+            setattr(self, name, buf)
 
-        # Batch H2D directly into shared buffers (avoids extra HBM→HBM copy)
+        if not use_shared:
+            # Budget exceeded: allocate temporary (non-cached) buffers.
+            # Freed on next forward when the attribute is reassigned,
+            # so only one layer's buffer is alive at a time.
+            shared_buffers = {}
+            for name in weight_names:
+                sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
+                full_shape = (self.num_local_experts,) + sample_tensor.shape
+                dtype = sample_tensor.dtype
+                nz_format = nz_direct and name in nz_names
+                buf = self._expert_weight_store.allocate_temp_hbm_buffer(
+                    full_shape, dtype, nz_format=nz_format
+                )
+                shared_buffers[name] = buf
+                setattr(self, name, buf)
+
+        # Batch H2D directly into shared/temp buffers (avoids extra HBM→HBM copy)
         self._expert_weight_store.batch_load_to_shared_buffer(
             layer_id=self.layer_id,
             expert_ids=local_expert_ids,

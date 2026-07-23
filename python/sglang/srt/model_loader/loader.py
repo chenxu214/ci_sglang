@@ -910,9 +910,13 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
             f"with 1.2x safety margin)"
         )
 
+    shared_buffer_max_gb = getattr(
+        server_args, "moe_shared_buffer_max_gb", 0
+    )
     expert_store = ExpertWeightStore(
         dram_pool_size_gb=dram_pool_gb,
         use_acc_offload=use_acc_offload,
+        shared_buffer_max_gb=shared_buffer_max_gb,
     )
 
     # Get HBM usage before offload starts
