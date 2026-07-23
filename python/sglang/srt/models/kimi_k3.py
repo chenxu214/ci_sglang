@@ -15,6 +15,7 @@ from transformers.activations import PytorchGELUTanh
 from sglang.srt.configs.kimi_k3 import KimiK3Config, KimiK3VisionConfig
 from sglang.srt.configs.kimi_linear import KimiLinearConfig
 from sglang.srt.distributed import (
+    attention_tensor_model_parallel_all_reduce,
     divide,
     get_pp_group,
     tensor_model_parallel_all_reduce,
@@ -95,7 +96,12 @@ class KimiMLAAttention(DeepseekV2AttentionMLA):
 
     def __init__(self, *args, config: KimiLinearConfig, prefix: str = "", **kwargs):
         super().__init__(*args, config=config, prefix=prefix, **kwargs)
-        self.o_proj.use_dp_attention_reduce = is_dp_attention_enabled()
+        # o_proj does not all-reduce; the caller (KimiDecoderLayer) handles
+        # the reduce at the correct point for either the attn_residual path
+        # (manual attention_tensor_model_parallel_all_reduce) or the standard
+        # LayerCommunicator path.
+        self.o_proj.reduce_results = False
+        self.o_proj.use_dp_attention_reduce = False
         if is_npu() and self.rotary_emb is None:
             self.rotary_emb = _NoopRotaryEmbedding()
         self.use_output_gate = getattr(config, "mla_use_output_gate", False)
@@ -190,10 +196,9 @@ class KimiMLP(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=add_prefix("down_proj", prefix),
-            reduce_results=reduce_results,
+            reduce_results=False,
             tp_rank=tp_rank,
             tp_size=tp_size,
-            use_dp_attention_reduce=is_dp_attention_enabled(),
         )
         if hidden_act == "situ":
             from sglang.srt.layers.activation import SituAndMul
@@ -314,7 +319,7 @@ class KimiMoE(nn.Module):
                 intermediate_size=intermediate_size,
                 hidden_act=config.hidden_act,
                 quant_config=quant_config,
-                reduce_results=is_dp_attention_enabled(),
+                reduce_results=False,
                 prefix=add_prefix("shared_experts", prefix),
                 activation_situ_beta=getattr(config, "activation_situ_beta", 1.0),
                 activation_situ_linear_beta=getattr(
@@ -371,6 +376,17 @@ class KimiMoE(nn.Module):
             final_hidden_states = hidden_states.new_empty((0, hidden_size))
 
         if shared_output is not None:
+            # shared_experts has reduce_results=False, so shared_output is a
+            # partial sum across attn_tp ranks.  All-reduce it in the attn_tp
+            # group to get the complete shared output.
+            # DeepEP combine already produces a complete routed output, so
+            # after this addition the final hidden states are complete and
+            # must NOT be all-reduced again (that would amplify the DeepEP
+            # part by attn_tp_size).
+            if is_dp_attention_enabled():
+                shared_output = attention_tensor_model_parallel_all_reduce(
+                    shared_output
+                )
             final_hidden_states = final_hidden_states + shared_output
 
         if self.tp_size > 1 and not is_dp_attention_enabled():
@@ -566,7 +582,7 @@ class KimiDeltaAttention(nn.Module):
             prefix=f"{prefix}.o_proj",
             tp_rank=self.attn_tp_rank,
             tp_size=self.attn_tp_size,
-            use_dp_attention_reduce=is_dp_attention_enabled(),
+            reduce_results=False,
         )
 
         conv_weights = self.qkv_conv1d.weight.squeeze(1)
@@ -815,10 +831,22 @@ class KimiDecoderLayer(nn.Module):
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
+        # o_proj has reduce_results=False; all-reduce in attn_tp to get the
+        # complete attention output before the layernorm+residual fusion.
+        if is_dp_attention_enabled():
+            hidden_states = attention_tensor_model_parallel_all_reduce(
+                hidden_states
+            )
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
+        # Dense MLP down_proj has reduce_results=False; all-reduce in attn_tp.
+        # MoE output is already complete (DeepEP + shared all-reduced).
+        if is_dp_attention_enabled() and not isinstance(self.mlp, KimiMoE):
+            hidden_states = attention_tensor_model_parallel_all_reduce(
+                hidden_states
+            )
         return hidden_states, residual
 
     def _forward_attn_residual(
@@ -856,6 +884,14 @@ class KimiDecoderLayer(nn.Module):
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
+        # o_proj has reduce_results=False, so the attention output is a partial
+        # sum across attn_tp ranks.  All-reduce to get the complete output so
+        # that prefix_sum accumulation and apply_attn_res mixing see the
+        # correct scale.
+        if is_dp_attention_enabled():
+            hidden_states = attention_tensor_model_parallel_all_reduce(
+                hidden_states
+            )
         prefix_sum = hidden_states if prefix_sum is None else prefix_sum + hidden_states
 
         hidden_states = apply_attn_res(
@@ -866,6 +902,16 @@ class KimiDecoderLayer(nn.Module):
         )
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
+        # For dense MLP (KimiMLP), down_proj has reduce_results=False, so the
+        # output is a partial sum — all-reduce in attn_tp to get the complete
+        # output.
+        # For MoE (KimiMoE), the output is already complete: DeepEP combine
+        # produces the complete routed output and shared_experts is
+        # all-reduced inside KimiMoE.forward, so no extra all-reduce here.
+        if is_dp_attention_enabled() and not isinstance(self.mlp, KimiMoE):
+            hidden_states = attention_tensor_model_parallel_all_reduce(
+                hidden_states
+            )
         prefix_sum = prefix_sum + hidden_states
         return prefix_sum, block_residual
 
