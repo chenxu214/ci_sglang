@@ -2,12 +2,17 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Adapted from: https://github.com/vllm-project/vllm/blob/0384aa7150c4c9778efca041ffd1beb3ad2bd694/vllm/model_executor/models/kimi_linear.py
 
+import logging
 from collections.abc import Iterable
-from typing import Optional
+from copy import deepcopy
+from typing import List, Optional, Sequence
 
 import torch
+import torch.nn.functional as F
 from torch import nn
+from transformers.activations import PytorchGELUTanh
 
+from sglang.srt.configs.kimi_k3 import KimiK3Config, KimiK3VisionConfig
 from sglang.srt.configs.kimi_linear import KimiLinearConfig
 from sglang.srt.distributed import (
     divide,
@@ -16,8 +21,13 @@ from sglang.srt.distributed import (
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.layers.attention.fla.fused_norm_gate import FusedRMSNormGated
+<<<<<<< HEAD
 from sglang.srt.layers.attention.fla.kda import fused_kda_gate
+=======
+from sglang.srt.layers.attention.vision import VisionAttention
+>>>>>>> 7fe1a1aa9 (support image_url input)
 from sglang.srt.layers.communicator import AttentionInputs, get_attn_tp_context
+from sglang.srt.layers.conv import Conv2dLayer
 from sglang.srt.layers.dp_attention import is_dp_attention_enabled
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import (
@@ -34,12 +44,22 @@ from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
 from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.moe.topk import TopK, TopKOutputFormat
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
+from sglang.srt.layers.quantization.modelslim.modelslim import ModelSlimConfig
 from sglang.srt.layers.radix_linear_attention import RadixLinearAttention
 from sglang.srt.layers.utils import PPMissingLayer
 from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
     get_embedding_tp_kwargs,
+)
+from sglang.srt.managers.mm_utils import (
+    MultiModalityDataPaddingPatternMultimodalTokens,
+    general_mm_embed_routine,
+)
+from sglang.srt.managers.schedule_batch import (
+    Modality,
+    MultimodalDataItem,
+    MultimodalInputs,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
 from sglang.srt.model_executor.runner import get_is_capture_mode
@@ -48,11 +68,22 @@ from sglang.srt.model_loader.weight_utils import (
     maybe_remap_kv_scale_name,
 )
 from sglang.srt.models.deepseek_v2 import DeepseekV2AttentionMLA
+from sglang.srt.models.kimi_k3_vision_utils import (
+    KimiK3Learnable2DInterpPosEmb,
+    KimiK3Rope2DPosEmbRepeated,
+    apply_rope,
+    tpool_patch_merger,
+)
+from sglang.srt.models.kimi_vl_moonvit import MLP2
+from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
 from sglang.srt.models.transformers import maybe_prefix
 from sglang.srt.runtime_context import get_parallel
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import is_npu, make_layers
 from sglang.srt.utils.common import BumpAllocator, add_prefix, set_weight_attrs
 from sglang.srt.hardware_backend.npu.utils import situ_and_mul, apply_attn_res
+
+logger = logging.getLogger(__name__)
 
 
 class _NoopRotaryEmbedding(nn.Module):
@@ -1004,7 +1035,7 @@ class KimiLinearModel(nn.Module):
         return hidden_states, aux_hidden_states
 
 
-class KimiK3ForConditionalGeneration(nn.Module):
+class KimiK3ForCausalLM(nn.Module):
     def __init__(
         self,
         config: KimiLinearConfig,
@@ -1012,28 +1043,6 @@ class KimiK3ForConditionalGeneration(nn.Module):
         prefix: str = "",
     ) -> None:
         super().__init__()
-        # Hugging Face exposes Kimi-K3 as a multimodal wrapper whose language
-        # configuration lives under ``text_config``.  SRT only instantiates the
-        # language model here, so unwrap it before constructing any layers.
-        config = getattr(config, "text_config", config)
-        if quant_config is not None and hasattr(quant_config, "quant_description"):
-            # ModelSlim looks up schemes with SRT's language-only prefixes
-            # (``model.*`` / ``lm_head``), while official K3 descriptions keep
-            # the multimodal wrapper's ``language_model.*`` prefix. Normalize
-            # those keys in memory; reduced debug descriptions are unchanged.
-            quant_description = quant_config.quant_description
-            if any(
-                isinstance(name, str) and name.startswith("language_model.")
-                for name in quant_description
-            ):
-                quant_config.quant_description = {
-                    (
-                        name.removeprefix("language_model.")
-                        if isinstance(name, str)
-                        else name
-                    ): value
-                    for name, value in quant_description.items()
-                }
         self.config = config
         self.quant_config = quant_config
         self.model = KimiLinearModel(
@@ -1053,20 +1062,45 @@ class KimiK3ForConditionalGeneration(nn.Module):
         logit_scale = getattr(self.config, "logit_scale", 1.0)
         self.logits_processor = LogitsProcessor(config=config, logit_scale=logit_scale)
 
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+
+    @property
+    def start_layer(self) -> int:
+        return self.model.start_layer
+
+    @property
+    def end_layer(self) -> int:
+        return self.model.end_layer
+
     @torch.no_grad()
     def forward(
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
         forward_batch: ForwardBatch,
+        input_embeds: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
+        mm_input_embeds = getattr(forward_batch, "mm_input_embeds", None)
+
+        if mm_input_embeds is not None:
+            logger.warning(
+                "[K3_CAUSAL_MM_FORWARD] mode=%s, "
+                "input_embeds_shape=%s, mm_input_embeds_shape=%s, same_object=%s",
+                forward_batch.forward_mode,
+                tuple(input_embeds.shape) if input_embeds is not None else None,
+                tuple(mm_input_embeds.shape),
+                input_embeds is mm_input_embeds,
+            )
+        if input_embeds is None:
+            input_embeds = inputs_embeds
         hidden_states = self.model(
             input_ids,
             positions,
             forward_batch,
-            inputs_embeds,
+            input_embeds,
             pp_proxy_tensors,
         )
         if self.pp_group.is_last_rank:
@@ -1255,6 +1289,506 @@ class KimiK3ForConditionalGeneration(nn.Module):
             self_attn.w_vc = w_vc.contiguous().transpose(1, 2)
             if hasattr(self_attn.kv_b_proj, "weight_scale"):
                 self_attn.w_scale = self_attn.kv_b_proj.weight_scale
+
+
+class KimiK3VisionEncoderLayer(nn.Module):
+    """K3 MoonViT block with 1024-wide residuals and 1536-wide QKV."""
+
+    def __init__(
+        self,
+        num_heads: int,
+        hidden_dim: int,
+        qkv_hidden_size: int,
+        mlp_dim: int,
+        *,
+        activation=F.gelu,
+        attn_bias: bool = False,
+        linear_bias: bool = False,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+        use_data_parallel: bool = False,
+    ) -> None:
+        super().__init__()
+        self.norm0 = nn.RMSNorm(hidden_dim)
+        self.norm1 = nn.RMSNorm(hidden_dim)
+        self.mlp = MLP2(
+            [hidden_dim, mlp_dim, hidden_dim],
+            activation,
+            bias=linear_bias,
+            quant_config=quant_config,
+            prefix=add_prefix("mlp", prefix),
+        )
+        self.attn = VisionAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_heads,
+            projection_size=qkv_hidden_size,
+            head_dim=qkv_hidden_size // num_heads,
+            use_qkv_parallel=True,
+            qkv_bias=attn_bias,
+            proj_bias=attn_bias,
+            flatten_batch=True,
+            quant_config=quant_config,
+            prefix=add_prefix("attn", prefix),
+            use_data_parallel=use_data_parallel,
+            customized_position_embedding_applier=apply_rope,
+            use_dp_attention_reduce=is_dp_attention_enabled(),
+        )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rope_freqs_cis: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        residual = hidden_states
+        hidden_states = self.attn(
+            self.norm0(hidden_states),
+            cu_seqlens=cu_seqlens,
+            position_embeddings=rope_freqs_cis,
+        )
+        hidden_states = residual + hidden_states
+        return hidden_states + self.mlp(self.norm1(hidden_states))
+
+
+class KimiK3VisionPatchEmbed(nn.Module):
+    def __init__(
+        self,
+        out_dim: int,
+        patch_size: int | Sequence = 14,
+        pos_emb_height: int = 64,
+        pos_emb_width: int = 64,
+        pos_emb_time: int = 4,
+        interpolation_mode: str = "bilinear",
+    ) -> None:
+        super().__init__()
+        if isinstance(patch_size, int):
+            patch_size = (patch_size, patch_size)
+        self.patch_size = tuple(patch_size)
+        self.proj = Conv2dLayer(
+            3,
+            out_dim,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+            bias=False,
+        )
+        self.pos_emb = KimiK3Learnable2DInterpPosEmb(
+            height=pos_emb_height,
+            width=pos_emb_width,
+            num_frames=pos_emb_time,
+            dim=out_dim,
+            interpolation_mode=interpolation_mode,
+        )
+
+    def forward(
+        self, pixel_values: torch.Tensor, grid_thws: torch.Tensor
+    ) -> torch.Tensor:
+        hidden_states = self.proj(pixel_values).view(pixel_values.size(0), -1)
+        return self.pos_emb(hidden_states, grid_thws)
+
+
+class KimiK3VisionEncoder(nn.Module):
+    def __init__(
+        self,
+        config: KimiK3VisionConfig,
+        *,
+        use_data_parallel: bool,
+        quant_config: Optional[QuantizationConfig],
+        prefix: str,
+    ) -> None:
+        super().__init__()
+        hidden_size = config.vt_hidden_size
+        qkv_hidden_size = config.qkv_hidden_size
+        num_heads = config.vt_num_attention_heads
+        self.rope_2d = KimiK3Rope2DPosEmbRepeated(
+            qkv_hidden_size // num_heads, 512, 512
+        )
+        self.blocks = nn.ModuleList(
+            [
+                KimiK3VisionEncoderLayer(
+                    num_heads=num_heads,
+                    hidden_dim=hidden_size,
+                    qkv_hidden_size=qkv_hidden_size,
+                    mlp_dim=config.vt_intermediate_size,
+                    activation=PytorchGELUTanh(),
+                    attn_bias=config.attn_bias,
+                    linear_bias=config.linear_bias,
+                    quant_config=quant_config,
+                    prefix=add_prefix(f"blocks.{layer_idx}", prefix),
+                    use_data_parallel=use_data_parallel,
+                )
+                for layer_idx in range(config.vt_num_hidden_layers)
+            ]
+        )
+        self.final_layernorm = nn.RMSNorm(hidden_size)
+
+    def forward(
+        self, hidden_states: torch.Tensor, grid_thws: torch.Tensor
+    ) -> torch.Tensor:
+        rope_freqs_cis = self.rope_2d.get_freqs_cis(
+            grid_thws=grid_thws, device=hidden_states.device
+        )
+        lengths = torch.cat(
+            (
+                torch.zeros(
+                    1, dtype=grid_thws.dtype, device=grid_thws.device
+                ),
+                grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2],
+            )
+        )
+        cu_seqlens = lengths.cumsum(dim=0, dtype=torch.int32)
+        for block in self.blocks:
+            hidden_states = block(
+                hidden_states,
+                cu_seqlens=cu_seqlens,
+                rope_freqs_cis=rope_freqs_cis,
+            )
+        return self.final_layernorm(hidden_states)
+
+
+class KimiK3VisionTower(nn.Module):
+    def __init__(
+        self,
+        config: KimiK3VisionConfig,
+        *,
+        use_data_parallel: bool = False,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "vision_tower",
+    ) -> None:
+        super().__init__()
+        config = deepcopy(config)
+        self.config = config
+        self.merge_kernel_size = config.merge_kernel_size
+        self.patch_size = config.patch_size
+        self.merge_type = config.merge_type
+        if config.pos_emb_type != "divided_fixed":
+            raise ValueError(
+                f"Unsupported K3 vision pos_emb_type: {config.pos_emb_type}"
+            )
+        if self.merge_type != "sd2_tpool":
+            raise ValueError(
+                f"Unsupported K3 vision merge_type: {self.merge_type}"
+            )
+        if config.norm_type != "rmsnorm":
+            raise ValueError(
+                f"Unsupported K3 vision norm_type: {config.norm_type}"
+            )
+        if config.mlp_type != "mlp2":
+            raise ValueError(
+                f"Unsupported K3 vision mlp_type: {config.mlp_type}"
+            )
+        if config.patch_embed_proj_bias:
+            raise ValueError("K3 vision patch embedding bias is not supported")
+        if config.qkv_hidden_size % config.vt_num_attention_heads != 0:
+            raise ValueError(
+                "qkv_hidden_size must be divisible by vt_num_attention_heads"
+            )
+        self.patch_embed = KimiK3VisionPatchEmbed(
+            out_dim=config.vt_hidden_size,
+            patch_size=config.patch_size,
+            pos_emb_height=config.init_pos_emb_height,
+            pos_emb_width=config.init_pos_emb_width,
+            pos_emb_time=config.init_pos_emb_time,
+            interpolation_mode=config.pos_emb_interpolation_mode,
+        )
+        self.encoder = KimiK3VisionEncoder(
+            config,
+            use_data_parallel=use_data_parallel,
+            quant_config=quant_config,
+            prefix=add_prefix("encoder", prefix),
+        )
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return self.patch_embed.proj.weight.dtype
+
+    @property
+    def device(self) -> torch.device:
+        return self.patch_embed.proj.weight.device
+
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        grid_thws: Optional[torch.Tensor] = None,
+        grid_thw: Optional[torch.Tensor] = None,
+    ) -> list[torch.Tensor]:
+        if grid_thws is None:
+            grid_thws = grid_thw
+        if grid_thws is None:
+            raise ValueError("K3 vision forward requires grid_thws")
+        if grid_thws.ndim != 2 or grid_thws.size(1) != 3:
+            raise ValueError(f"Expected grid_thws with shape [N, 3]: {grid_thws}")
+        hidden_states = self.patch_embed(pixel_values, grid_thws)
+        hidden_states = self.encoder(hidden_states, grid_thws).squeeze(0)
+        return tpool_patch_merger(
+            hidden_states,
+            grid_thws,
+            merge_kernel_size=self.merge_kernel_size,
+        )
+
+
+class KimiK3MultiModalProjector(nn.Module):
+    """K3 PatchMergerMLPV2 projector with checkpoint-compatible names."""
+
+    def __init__(
+        self,
+        config: KimiK3VisionConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "mm_projector",
+    ) -> None:
+        super().__init__()
+        merge_h, merge_w = config.merge_kernel_size
+        vision_hidden_size = getattr(config, "mm_hidden_size", None)
+        if vision_hidden_size is None:
+            vision_hidden_size = getattr(
+                config, "hidden_size", getattr(config, "vt_hidden_size")
+            )
+        text_hidden_size = config.text_hidden_size
+        self.hidden_size = vision_hidden_size * merge_h * merge_w
+        projector_quant_config = (
+            quant_config if isinstance(quant_config, ModelSlimConfig) else None
+        )
+        self.proj = nn.ModuleList(
+            [
+                ReplicatedLinear(
+                    self.hidden_size,
+                    self.hidden_size,
+                    bias=False,
+                    quant_config=projector_quant_config,
+                    prefix=add_prefix("proj.0", prefix),
+                ),
+                nn.GELU(),
+                ReplicatedLinear(
+                    self.hidden_size,
+                    text_hidden_size,
+                    bias=False,
+                    quant_config=projector_quant_config,
+                    prefix=add_prefix("proj.2", prefix),
+                ),
+            ]
+        )
+        self.post_norm = nn.RMSNorm(
+            text_hidden_size, eps=getattr(config, "projector_ln_eps", 1e-5)
+        )
+
+    def forward(self, image_features: torch.Tensor) -> torch.Tensor:
+        hidden_states = image_features.reshape(-1, self.hidden_size)
+        hidden_states, _ = self.proj[0](hidden_states)
+        hidden_states = self.proj[1](hidden_states)
+        hidden_states, _ = self.proj[2](hidden_states)
+        return self.post_norm(hidden_states)
+
+
+class KimiK3ForConditionalGeneration(nn.Module):
+    """Kimi-K3 multimodal wrapper.
+
+    The image embedding merge is intentionally added separately; this wrapper
+    establishes the native module hierarchy and complete checkpoint loading.
+    """
+
+    def __init__(
+        self,
+        config: KimiK3Config,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.quant_config = quant_config
+        text_config = getattr(config, "text_config", config)
+        vision_config = getattr(config, "vision_config", None)
+        quant_description = getattr(quant_config, "quant_description", {})
+        uses_wrapper_quant_prefix = any(
+            isinstance(name, str) and name.startswith("language_model.")
+            for name in quant_description
+        )
+        language_prefix = (
+            maybe_prefix(prefix, "language_model")
+            if uses_wrapper_quant_prefix
+            else prefix
+        )
+        self.language_model = KimiK3ForCausalLM(
+            text_config,
+            quant_config,
+            prefix=language_prefix,
+        )
+        self.pp_group = self.language_model.pp_group
+
+        self.vision_tower = None
+        self.mm_projector = None
+        self.use_data_parallel = False
+        server_args = get_global_server_args()
+        multimodal_enabled = bool(
+            server_args is not None and server_args.enable_multimodal
+        )
+        if (
+            vision_config is not None
+            and multimodal_enabled
+            and not getattr(config, "language_only", False)
+        ):
+            use_data_parallel = bool(
+                server_args is not None and server_args.mm_enable_dp_encoder
+            )
+            self.use_data_parallel = use_data_parallel
+            self.vision_tower = KimiK3VisionTower(
+                vision_config,
+                use_data_parallel=use_data_parallel,
+                quant_config=(
+                    quant_config
+                    if isinstance(quant_config, ModelSlimConfig)
+                    else None
+                ),
+                prefix=maybe_prefix(prefix, "vision_tower"),
+            )
+            self.mm_projector = KimiK3MultiModalProjector(
+                vision_config,
+                quant_config=quant_config,
+                prefix=maybe_prefix(prefix, "mm_projector"),
+            )
+
+    @property
+    def model(self):
+        return self.language_model
+
+    def __setattr__(self, name, value):
+        if name == "model":
+            return
+        super().__setattr__(name, value)
+
+    @property
+    def lm_head(self):
+        return self.language_model.lm_head
+
+    @property
+    def start_layer(self) -> int:
+        return self.language_model.start_layer
+
+    @property
+    def end_layer(self) -> int:
+        return self.language_model.end_layer
+
+    def get_input_embeddings(self):
+        return self.language_model.get_input_embeddings()
+
+    def get_image_feature(
+        self, items: List[MultimodalDataItem]
+    ) -> torch.Tensor:
+        if self.vision_tower is None or self.mm_projector is None:
+            raise RuntimeError(
+                "Kimi-K3 vision modules are not initialized; "
+                "start the server with --enable-multimodal"
+            )
+        device = self.vision_tower.device
+        target_dtype = self.vision_tower.dtype
+        pixel_values = torch.cat(
+            [item.feature for item in items], dim=0
+        ).to(device=device, dtype=target_dtype)
+        image_grid_thws = []
+        for item in items:
+            grid_thw = item.model_specific_data.get("image_grid_thw")
+            if grid_thw is None:
+                grid_thw = item.model_specific_data.get("grid_thws")
+            if grid_thw is None:
+                raise ValueError("Kimi-K3 image item is missing grid_thws")
+            image_grid_thws.append(grid_thw)
+        grid_thws = torch.cat(image_grid_thws, dim=0).to(device)
+
+        if self.use_data_parallel:
+            image_embeds = run_dp_sharded_mrope_vision_model(
+                self.vision_tower,
+                pixel_values,
+                grid_thws.tolist(),
+                rope_type="rope_2d",
+            )
+        else:
+            image_embeds = torch.cat(
+                self.vision_tower(pixel_values, grid_thws), dim=0
+            )
+        image_features = self.mm_projector(image_embeds)
+        logger.debug(f"Kimi-K3 image features: {image_features.shape}, "
+              f"grid_thws: {grid_thws.tolist()}")
+        return image_features
+
+    def pad_input_ids(
+        self, input_ids: List[int], mm_inputs: MultimodalInputs
+    ):
+        pattern = MultiModalityDataPaddingPatternMultimodalTokens()
+        return pattern.pad_input_tokens(input_ids, mm_inputs)
+
+    @torch.no_grad()
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        get_embedding: bool = False,
+        pp_proxy_tensors: Optional[PPProxyTensors] = None,
+    ) -> torch.Tensor:
+        return general_mm_embed_routine(
+            input_ids=input_ids,
+            forward_batch=forward_batch,
+            language_model=self.language_model,
+            data_embedding_funcs={Modality.IMAGE: self.get_image_feature},
+            positions=positions,
+            pp_proxy_tensors=pp_proxy_tensors,
+        )
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+        """Load multimodal tensors inline and stream text tensors to the LM."""
+        multimodal_params = dict(self.named_parameters(remove_duplicate=False))
+        loaded_multimodal_params: set[str] = set()
+
+        def stream_language_weights():
+            for args in weights:
+                name, loaded_weight = args[:2]
+                kwargs = args[2] if len(args) > 2 else {}
+                if name.startswith(("vision_tower.", "mm_projector.")):
+                    if self.vision_tower is None or self.mm_projector is None:
+                        continue
+                    target_name = (
+                        name.replace(".wqkv.", ".attn.qkv_proj.")
+                        .replace(".wo.", ".attn.proj.")
+                    )
+                    if target_name not in multimodal_params:
+                        raise ValueError(
+                            "Kimi-K3 multimodal weight has no target parameter: "
+                            f"source={name}, target={target_name}"
+                        )
+                    param = multimodal_params[target_name]
+                    weight_loader = getattr(
+                        param, "weight_loader", default_weight_loader
+                    )
+                    weight_loader(param, loaded_weight, **kwargs)
+                    loaded_multimodal_params.add(target_name)
+                    continue
+
+                language_name = name.removeprefix("language_model.")
+                if len(args) > 2:
+                    yield language_name, loaded_weight, kwargs
+                else:
+                    yield language_name, loaded_weight
+
+        self.language_model.load_weights(stream_language_weights())
+
+        if self.vision_tower is not None and self.mm_projector is not None:
+            expected_multimodal_params = {
+                name
+                for name in multimodal_params
+                if name.startswith(("vision_tower.", "mm_projector."))
+            }
+            missing = sorted(
+                expected_multimodal_params - loaded_multimodal_params
+            )
+            logger.info(
+                "Kimi-K3 multimodal weight load: loaded=%d expected=%d missing=%d",
+                len(loaded_multimodal_params),
+                len(expected_multimodal_params),
+                len(missing),
+            )
+            if missing:
+                logger.warning(
+                    "Kimi-K3 multimodal parameters without checkpoint weights: %s",
+                    missing[:100],
+                )
 
 
 EntryClass = KimiK3ForConditionalGeneration

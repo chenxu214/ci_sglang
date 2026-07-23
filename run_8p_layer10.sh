@@ -15,6 +15,7 @@ unset HTTPS_PROXY
 unset HTTP_PROXY
 unset ASCEND_LAUNCH_BLOCKING
 export SGLANG_MAMBA_CONV_DTYPE=bfloat16
+export SGLANG_DEBUG_KIMI_K3_WEIGHT_LOAD=2
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
@@ -27,10 +28,12 @@ export STREAMS_PER_DEVICE=32
 export DEEP_NORMAL_MODE_USE_INT8_QUANT=1
 
 export SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=64
-export HCCL_BUFFSIZE=1200
+export HCCL_BUFFSIZE=1600
 export HCCL_OP_EXPANSION_MODE=AIV
 
-export PYTHONPATH=/home/zkk/sglang/python:$PYTHONPATH
+export RT_ASCEND_VISIBLE_DEVICES="8,9,10,11,12,13,14,15"
+
+export PYTHONPATH=/home/hanwlax/workspace/sglang/python:$PYTHONPATH
 
 sglang serve \
     --model-path $MODEL_PATH \
@@ -40,8 +43,8 @@ sglang serve \
     --device npu \
     --quantization modelslim \
     --dtype bfloat16 \
-    --tp-size 16 \
-    --mem-fraction-static 0.8 \
+    --tp-size 8 \
+    --mem-fraction-static 0.7 \
     --max-total-tokens 65536 \
     --page-size 1 \
     --chunked-prefill-size -1 \
@@ -51,6 +54,7 @@ sglang serve \
     --disable-radix-cache \
     --host 0.0.0.0 \
     --port 8880 \
-    --skip-server-warmup
+    --skip-server-warmup \
+    --enable-multimodal --mm-enable-dp-encoder --mm-attention-backend ascend_attn
 
 exit 1

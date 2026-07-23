@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import torch
 
-from python.sglang.srt.layers.moe.moe_runner.base import MoeRunnerConfig
+from sglang.srt.layers.moe.moe_runner.base import MoeRunnerConfig
 from sglang.srt.hardware_backend.npu.utils import npu_format_cast
 from sglang.srt.layers.quantization.base_config import FusedMoEMethodBase
 

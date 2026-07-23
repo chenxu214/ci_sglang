@@ -1670,6 +1670,7 @@ multimodal_model_archs = [
     "Qwen3ASRForConditionalGeneration",
     "Qwen3OmniMoeForConditionalGeneration",
     "KimiVLForConditionalGeneration",
+    "KimiK3ForConditionalGeneration",
     "LocateAnythingForConditionalGeneration",
     "InternVLChatModel",
     "InternS1ForConditionalGeneration",
