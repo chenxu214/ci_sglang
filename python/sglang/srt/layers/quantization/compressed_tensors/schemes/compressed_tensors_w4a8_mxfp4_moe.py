@@ -120,18 +120,26 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        layer.w13_weight.data = torch_npu.npu_format_cast(
-            layer.w13_weight.data,
-            29,
-            customize_dtype=torch.float8_e4m3fn,
-            input_dtype=torch_npu.float4_e2m1fn_x2,
-        )
-        layer.w2_weight.data = torch_npu.npu_format_cast(
-            layer.w2_weight.data,
-            29,
-            customize_dtype=torch.float8_e4m3fn,
-            input_dtype=torch_npu.float4_e2m1fn_x2,
-        )
+        # Skip NZ format cast when MoE DRAM offload is enabled.
+        # npu_format_cast(format=29) produces NZ layout incompatible with
+        # CPU round-trip (AICPU Transpose kernel fails with errorCode=0x2a).
+        # For offload, weights stay in ND format and are converted to NZ
+        # at forward time in w4a8_mxfp4_gmm_npu.
+        _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
+
+        if not _skip_nz_cast:
+            layer.w13_weight.data = torch_npu.npu_format_cast(
+                layer.w13_weight.data,
+                29,
+                customize_dtype=torch.float8_e4m3fn,
+                input_dtype=torch_npu.float4_e2m1fn_x2,
+            )
+            layer.w2_weight.data = torch_npu.npu_format_cast(
+                layer.w2_weight.data,
+                29,
+                customize_dtype=torch.float8_e4m3fn,
+                input_dtype=torch_npu.float4_e2m1fn_x2,
+            )
         layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
         layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
         g, n, k = layer.w13_weight_scale.shape
