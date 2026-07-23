@@ -86,25 +86,6 @@ if is_npu():
 
 logger = logging.getLogger(__name__)
 
-class SituAndMul(nn.Module):
-    """
-    SituAndMul activation: beta * tanh(gate / beta) * sigmoid(gate) * up
-    When linear_beta is set, up is also transformed by linear_beta * tanh(up / linear_beta).
-    """
-
-    def __init__(self, beta: float = 1.0, linear_beta: float | None = None):
-        super().__init__()
-        self.beta = beta
-        self.linear_beta = linear_beta
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        d = x.shape[-1] // 2
-        gate = x[..., :d].to(torch.float32)
-        up = x[..., d:].to(torch.float32)
-        situ_a = self.beta * torch.tanh(gate / self.beta) * torch.sigmoid(gate)
-        if self.linear_beta is not None:
-            up = self.linear_beta * torch.tanh(up / self.linear_beta)
-        return (situ_a * up).to(x.dtype)
 
 class SituAndMul(nn.Module):
     def __init__(self, beta: float, linear_beta: Optional[float]) -> None:
