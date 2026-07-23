@@ -21,6 +21,7 @@ export SGLANG_MAMBA_CONV_DTYPE=bfloat16
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
+source /usr/local/memfabric_hybrid/set_env.sh
 
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_SOCKET_IFNAME=lo
@@ -33,7 +34,7 @@ export SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=64
 export HCCL_BUFFSIZE=1200
 export HCCL_OP_EXPANSION_MODE=AIV
 export ASCEND_USE_FIA=1
-export SGLANG_NPU_PROFILING=1
+export SGLANG_NPU_PROFILING=0
 export SGLANG_W4A8_MXFP4_MOE=1
 
 sglang serve \
@@ -56,6 +57,7 @@ sglang serve \
     --moe-a2a-backend deepep \
     --deepep-mode auto \
     --skip-server-warmup \
+    --weight-loader-drop-cache-after-load \
     --disable-cuda-graph
 
 exit 1
