@@ -21,6 +21,7 @@ import torch
 import torch_npu
 
 from sglang.srt.utils.common import get_int_env_var
+from sglang.srt.hardware_backend.npu.utils import NPUACLFormat
 
 logger = logging.getLogger(__name__)
 
@@ -207,12 +208,15 @@ class ExpertWeightStore:
             # npu_format_cast to ND may only change metadata without
             # reformatting storage, so .contiguous() forces a real ND copy.
             if tensor.device.type != "cpu":
-                try:
-                    tensor = torch_npu.npu_format_cast(tensor, 2).contiguous()
-                except Exception:
-                    # Fallback: .contiguous() alone may still convert NZ
-                    # storage to ND by creating a new contiguous copy
-                    tensor = tensor.contiguous()
+                # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
+                # Cast to ND first, then .contiguous() forces a real format
+                # conversion (not just metadata change). If this fails, raise
+                # immediately — a silent fallback to .contiguous() alone does
+                # NOT guarantee NZ→ND and would cause "do not support internal
+                # format" errors later in copy_().
+                tensor = torch_npu.npu_format_cast(
+                    tensor, NPUACLFormat.ACL_FORMAT_ND
+                ).contiguous()
                 tensor = tensor.cpu()
 
             if self.use_acc_offload and self._offload_initialized:
