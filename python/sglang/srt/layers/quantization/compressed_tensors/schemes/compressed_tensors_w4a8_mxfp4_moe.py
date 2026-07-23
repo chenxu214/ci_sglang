@@ -202,12 +202,29 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             if self.moe_runner_config is not None
             else topk_ids.shape[1]
         )
+
+        w13 = layer.w13_weight
+        w2 = layer.w2_weight
+        w13_scale = layer.w13_weight_scale
+        w2_scale = layer.w2_weight_scale
+
+        # For DRAM offload (ND weights), extract only selected experts
+        # before NZ conversion to avoid OOM from converting the full
+        # [num_local_experts, ...] weight tensor.
+        if w13.is_contiguous():
+            unique_ids, inverse_indices = torch.unique(topk_ids, return_inverse=True)
+            w13 = w13[unique_ids]
+            w2 = w2[unique_ids]
+            w13_scale = w13_scale[unique_ids]
+            w2_scale = w2_scale[unique_ids]
+            topk_ids = inverse_indices.to(torch.int32)
+
         output = npu_fused_experts_w4a8_mxfp4(
             hidden_states,
-            layer.w13_weight,
-            layer.w13_weight_scale,
-            layer.w2_weight,
-            layer.w2_weight_scale,
+            w13,
+            w13_scale,
+            w2,
+            w2_scale,
             topk_weights,
             topk_ids,
             top_k,
