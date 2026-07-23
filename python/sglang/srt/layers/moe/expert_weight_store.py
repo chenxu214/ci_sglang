@@ -850,18 +850,18 @@ class ExpertWeightStore:
         return buffers
 
     def free_layer_buffers(self, buffers: Dict[str, torch.Tensor]):
-        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer."""
+        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer.
+
+        Only clears Python references; the caching allocator reclaims and
+        reuses the memory automatically. No gc.collect()/empty_cache() here
+        — empty_cache() triggers a device-wide sync on NPU, which waits for
+        pending h2d_stream prefetch operations, destroying compute/prefetch
+        overlap and causing multi-second stalls per layer.
+        """
         if not buffers:
             return
         freed_mb = sum(t.nbytes for t in buffers.values()) / 1024**2
         buffers.clear()
-        import gc
-        gc.collect()
-        if torch.npu.is_available():
-            torch.npu.empty_cache()
-        logger.debug(
-            f"[ExpertWeightStore] free_layer_buffers: freed {freed_mb:.1f} MB"
-        )
 
     def uninitialize(self):
         """Cleanup acc_offload resources."""
