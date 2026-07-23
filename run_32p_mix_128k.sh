@@ -60,11 +60,10 @@ do
             --quantization modelslim \
             --dtype bfloat16 \
             --tp-size 64 \
-	        --enable-dp-attention --dp-size 4 --enable-dp-lm-head \
-            --mem-fraction-static 0.8 \
+	          --enable-dp-attention --dp-size 4 --enable-dp-lm-head \
+            --mem-fraction-static 0.78 \
             --chunked-prefill-size 8192 \
             --cuda-graph-bs 16 \
-            --disable-radix-cache \
             --max-running-requests 64 \
             --host 0.0.0.0 \
             --port 30000 \
@@ -85,7 +84,7 @@ python -m sglang.bench_serving \
   --host 0.0.0.0 \
   --port 30000 \
   --max-concurrency 1 \
-  --random-input-len 8000 \
+  --random-input-len 128000 \
   --random-output-len 1000 \
   --num-prompts 1 \
   --disable-ignore-eos \
