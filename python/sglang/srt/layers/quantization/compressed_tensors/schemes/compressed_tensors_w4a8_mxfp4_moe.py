@@ -419,6 +419,13 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
                 f"active_expert_ids={active_expert_ids}"
             )
 
+        if num_active == 0:
+            return combine_cls(
+                hidden_states=hidden_states,
+                topk_ids=dispatch_output.topk_ids,
+                topk_weights=dispatch_output.topk_weights,
+            )
+
         sample_key = (layer.layer_id, active_expert_ids[0])
         weight_names = list(
             layer._expert_weight_store.dram_store[sample_key].keys()
