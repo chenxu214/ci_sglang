@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import torch
 import torch_npu
 
-from sglang.srt.layers.activation import SituAndMul
+from sglang.srt.hardware_backend.npu.utils import situ_and_mul
 from sglang.srt.layers.moe import MoeRunnerConfig
 from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     CompressedTensorsMoEScheme,
@@ -120,26 +120,18 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        # Skip NZ format cast when MoE DRAM offload is enabled.
-        # npu_format_cast(format=29) produces NZ layout incompatible with
-        # CPU round-trip (AICPU Transpose kernel fails with errorCode=0x2a).
-        # For offload, weights stay in ND format and are converted to NZ
-        # at forward time in w4a8_mxfp4_gmm_npu.
-        _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
-
-        if not _skip_nz_cast:
-            layer.w13_weight.data = torch_npu.npu_format_cast(
-                layer.w13_weight.data,
-                29,
-                customize_dtype=torch.float8_e4m3fn,
-                input_dtype=torch_npu.float4_e2m1fn_x2,
-            )
-            layer.w2_weight.data = torch_npu.npu_format_cast(
-                layer.w2_weight.data,
-                29,
-                customize_dtype=torch.float8_e4m3fn,
-                input_dtype=torch_npu.float4_e2m1fn_x2,
-            )
+        layer.w13_weight.data = torch_npu.npu_format_cast(
+            layer.w13_weight.data,
+            29,
+            customize_dtype=torch.float8_e4m3fn,
+            input_dtype=torch_npu.float4_e2m1fn_x2,
+        )
+        layer.w2_weight.data = torch_npu.npu_format_cast(
+            layer.w2_weight.data,
+            29,
+            customize_dtype=torch.float8_e4m3fn,
+            input_dtype=torch_npu.float4_e2m1fn_x2,
+        )
         layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
         layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
         g, n, k = layer.w13_weight_scale.shape
@@ -156,10 +148,11 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
     ):
         self.moe_runner_config = moe_runner_config
         if self.moe_runner_config.activation == "situ":
-            self.act_fn = SituAndMul(
-                beta=self.moe_runner_config.activation_situ_beta,
-                linear_beta=self.moe_runner_config.activation_situ_linear_beta,
-            )
+            # self.act_fn = SituAndMul(
+            #     beta=self.moe_runner_config.activation_situ_beta,
+            #     linear_beta=self.moe_runner_config.activation_situ_linear_beta,
+            # )
+            self.act_fn = situ_and_mul
 
     def apply_weights(
         self,
@@ -273,7 +266,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = act_fn(hidden_states)
+    hidden_states = act_fn(hidden_states, expert_tokens, 0)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -341,7 +334,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = act_fn(hidden_states)
+    hidden_states = act_fn(hidden_states, expert_tokens, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -429,7 +422,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         group_list=group_list,
         output_dtype=output_dtype,
     )
-    hidden_states = act_fn(hidden_states)
+    hidden_states = act_fn(hidden_states, group_list, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -453,41 +446,23 @@ def w4a8_mxfp4_gmm_npu(
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
 
+    # return torch.ops.npu.npu_grouped_matmul(
+    #     [input],
+    #     [weight],
+    #     antiquant_scale=[weight_scale],
+    #     split_item=2,
+    #     group_type=0,
+    #     group_list=group_list,
+    #     group_list_type=group_list_type,
+    #     output_dtype=output_dtype,
+    # )[0]
+
     if input_scale is None:
         x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
             input, dst_type=torch_npu.float8_e4m3fn
         )
     else:
         x, x_scale = input, input_scale
-
-    # For ND-format weights (from DRAM offload), convert to NZ format at
-    # forward time. NZ format cannot be stored in DRAM (AICPU Transpose
-    # kernel fails on CPU transfer), so DRAM offload weights are stored
-    # in ND format and converted to NZ on NPU here.
-    #
-    # The is_contiguous() guard distinguishes the two paths:
-    #   - ND path (offload): contiguous after transpose → convert
-    #   - NZ path (non-offload): non-contiguous after NZ cast → skip
-    #
-    # CANN aclnnGroupedMatmulV4 in MX mode requires scale and weight to
-    # have the SAME transposition state. DRAM round-trip (.cpu() +
-    # .to("npu")) makes scale contiguous (transposed=false), so we
-    # restore its transposed state via reshape + transpose to match weight.
-    if weight.is_contiguous():
-        weight = torch_npu.npu_format_cast(
-            weight.transpose(1, 2).contiguous().view(torch.uint8),
-            29,
-            customize_dtype=torch.float8_e4m3fn,
-            input_dtype=torch_npu.float4_e2m1fn_x2,
-        ).transpose(1, 2)
-
-        # Restore scale's transposed state to match weight (NZ).
-        # process_weights_after_loading applied:
-        #   reshape(E, N, K//2, 2).transpose(-3, -2) → [E, K//2, N, 2]
-        # DRAM round-trip flattens to contiguous [E, K//2, N, 2] with
-        # different memory layout. Permute back to [E, N, K//2, 2] C-order
-        # then re-apply transpose to restore the non-contiguous state.
-        weight_scale = weight_scale.permute(0, 2, 1, 3).contiguous().transpose(-3, -2)
 
     return torch.ops.npu.npu_grouped_matmul(
         [x],

@@ -53,11 +53,10 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     CompressedTensorsWNA16MoE,
     CompressedTensorsWNA16TritonMoE,
     NPUCompressedTensorsW4A8Int8DynamicMoE,
+    NPUCompressedTensorsW4A8mxfp4MoE,
     NPUCompressedTensorsW4A16Int4DynamicMoE,
     NPUCompressedTensorsW8A8Int8,
     NPUCompressedTensorsW8A8Int8DynamicMoE,
-    NPUCompressedTensorsW4A16mxfp4MoE,
-    NPUCompressedTensorsW4A8mxfp4MoE,
 )
 from sglang.srt.layers.quantization.compressed_tensors.utils import (
     find_matched_target,
@@ -711,9 +710,7 @@ class CompressedTensorsConfig(QuantizationConfig):
                     and input_quant is None
                 ):
                     if self.quant_format == "mxfp4-pack-quantized":
-                        if os.getenv("SGLANG_W4A16_MXFP4_MOE"):
-                            return NPUCompressedTensorsW4A16mxfp4MoE()
-                        elif os.getenv("SGLANG_W4A8_MXFP4_MOE"):
+                        if os.getenv("SGLANG_W4A8_MXFP4_MOE"):
                             return NPUCompressedTensorsW4A8mxfp4MoE()
                         else:
                             raise NotImplementedError(

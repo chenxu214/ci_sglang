@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Adapted from: https://github.com/vllm-project/vllm/blob/0384aa7150c4c9778efca041ffd1beb3ad2bd694/vllm/model_executor/models/kimi_linear.py
 
+import logging
 from collections.abc import Iterable
 from typing import Optional
 
-import logging
 import torch
 from torch import nn
 
@@ -57,7 +57,6 @@ from sglang.srt.utils.common import (
     log_info_on_rank0,
     set_weight_attrs,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -705,9 +704,7 @@ class KimiDecoderLayer(nn.Module):
             self.self_attention_res_norm = RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
             )
-            self.mlp_res_norm = RMSNorm(
-                config.hidden_size, eps=config.rms_norm_eps
-            )
+            self.mlp_res_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             self.self_attention_res_proj = ReplicatedLinear(
                 config.hidden_size,
                 1,
@@ -782,9 +779,7 @@ class KimiDecoderLayer(nn.Module):
             )
 
         if self.layer_idx % self.attn_res_block_size == 0:
-            block_residual = torch.cat(
-                (block_residual, prefix_sum.unsqueeze(1)), dim=1
-            )
+            block_residual = torch.cat((block_residual, prefix_sum.unsqueeze(1)), dim=1)
             prefix_sum = None
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -849,9 +844,7 @@ class KimiLinearModel(nn.Module):
             self.embed_tokens = PPMissingLayer()
 
         self.alt_stream = torch.cuda.Stream()
-        self._prefetch_layers = get_int_env_var(
-            "SGLANG_KIMI_PREFETCH_LAYERS", 10
-        )
+        self._prefetch_layers = get_int_env_var("SGLANG_KIMI_PREFETCH_LAYERS", 10)
 
         self.layers, self.start_layer, self.end_layer = make_layers(
             config.num_hidden_layers,
@@ -1167,7 +1160,10 @@ class KimiK3ForConditionalGeneration(nn.Module):
 
             # DeepSeek MLA fuses q_a and kv_a into one replicated projection,
             # while K3 checkpoints keep the two FLOAT tensors separate.
-            if ".self_attn.q_a_proj." in name or ".self_attn.kv_a_proj_with_mqa." in name:
+            if (
+                ".self_attn.q_a_proj." in name
+                or ".self_attn.kv_a_proj_with_mqa." in name
+            ):
                 layer_id = int(name.split(".")[2])
                 if not self.config.is_kda_layer(layer_id):
                     if ".self_attn.q_a_proj." in name:
@@ -1183,9 +1179,9 @@ class KimiK3ForConditionalGeneration(nn.Module):
                         )
                         output_offset = self.config.q_lora_rank
                     param = params_dict[fused_name]
-                    param.data.narrow(
-                        0, output_offset, loaded_weight.shape[0]
-                    ).copy_(loaded_weight)
+                    param.data.narrow(0, output_offset, loaded_weight.shape[0]).copy_(
+                        loaded_weight
+                    )
                     loaded_params.add(fused_name)
                     continue
 
