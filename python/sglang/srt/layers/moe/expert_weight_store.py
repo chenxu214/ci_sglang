@@ -751,14 +751,6 @@ class ExpertWeightStore:
         if is_prefill:
             self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
             # Free decode buffers (not needed during prefill).
-            # record_stream: layer weight views may still reference buffer
-            # storage; this prevents caching allocator from reusing the
-            # memory before pending decode kernels complete.
-            if torch.npu.is_available():
-                current_stream = torch.npu.current_stream()
-                for buffers in self._decode_buffers.values():
-                    for tensor in buffers.values():
-                        tensor.record_stream(current_stream)
             self._decode_buffers.clear()
         else:
             self.hbm_cache_max_slots = self._decode_cache_slots
@@ -815,16 +807,15 @@ class ExpertWeightStore:
         return buffers
 
     def free_layer_buffers(self, buffers: Dict[str, torch.Tensor]):
-        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer.
-
-        Only clears Python references; the caching allocator reclaims and
-        reuses the memory automatically. No gc.collect()/empty_cache() here
-        to avoid per-layer caching allocator overhead.
-        """
+        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer."""
         if not buffers:
             return
         freed_mb = sum(t.nbytes for t in buffers.values()) / 1024**2
         buffers.clear()
+        import gc
+        gc.collect()
+        if torch.npu.is_available():
+            torch.npu.empty_cache()
         logger.info(
             f"[ExpertWeightStore] free_layer_buffers: freed {freed_mb:.1f} MB"
         )
