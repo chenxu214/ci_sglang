@@ -727,6 +727,12 @@ class ExpertWeightStore:
             self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
         else:
             self.hbm_cache_max_slots = self._decode_cache_slots
+            # Clear prefill-era prefetch tracking so decode stats start
+            # from a clean slate.  During prefill, prefetch_full_layer
+            # populates _prefetch_requests with ALL experts per layer,
+            # which would make decode metrics meaningless.
+            self._prefetch_requests.clear()
+            self._prefetch_stats.clear()
 
     def prefetch_full_layer(self, layer_id: int, num_experts: int):
         """Async prefetch ALL experts for a layer on the h2d_stream.
