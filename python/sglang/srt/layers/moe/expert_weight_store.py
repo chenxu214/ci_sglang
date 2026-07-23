@@ -456,27 +456,41 @@ class ExpertWeightStore:
         num_active = len(active_expert_ids)
         lc = self._get_layer_cache(layer_id)
 
-        # Collect cache misses
+        # Snapshot cache hits BEFORE loading misses.
+        # _put_hbm_cache (called inside _sparse_copy_batch / _pytorch_h2d_batch)
+        # may evict entries when LRU is full, including hits snapshotted here.
+        # The snapshot holds references so evicted tensors survive until
+        # torch.stack copies the data into the compact tensor.
+        cache_hits = {}
         missing_keys = []
         for eid in active_expert_ids:
             self._stats["total_requests"] += 1
             if eid in lc:
                 self._stats["hbm_hit"] += 1
+                cache_hits[eid] = lc[eid]
             else:
                 self._stats["dram_load"] += 1
                 missing_keys.append((layer_id, eid))
 
-        # Load misses from DRAM into LRU cache
+        # Load misses from DRAM (return value holds references regardless
+        # of LRU eviction)
+        loaded = {}
         if missing_keys:
             if self.use_acc_offload and self._offload_initialized:
-                self._sparse_copy_batch(layer_id, missing_keys)
+                loaded = self._sparse_copy_batch(layer_id, missing_keys)
             else:
-                self._pytorch_h2d_batch(missing_keys)
+                loaded = self._pytorch_h2d_batch(missing_keys)
 
-        # Build compact tensors from LRU cache entries
+        # Build compact tensors from snapshots (not LRU cache, which may
+        # have evicted entries during loading)
         result = {}
         for name in weight_names:
-            tensors = [lc[eid][name] for eid in active_expert_ids]
+            tensors = []
+            for eid in active_expert_ids:
+                if eid in cache_hits:
+                    tensors.append(cache_hits[eid][name])
+                else:
+                    tensors.append(loaded[eid][name])
             result[name] = torch.stack(tensors, dim=0)
 
         return result
