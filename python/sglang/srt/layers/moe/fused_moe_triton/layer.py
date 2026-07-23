@@ -1309,16 +1309,6 @@ class FusedMoE(torch.nn.Module):
             return self.forward_impl(hidden_states, topk_output)
 
     def forward_impl(self, hidden_states: torch.Tensor, topk_output: TopKOutput):
-        if (
-            getattr(self, "_dram_offload_enabled", False)
-            and getattr(self, "w13_weight", None) is None
-        ):
-            raise RuntimeError(
-                f"FusedMoE forward_impl layer_id={self.layer_id}: w13_weight is None "
-                f"(free_prefill_cache freed weights but they were not re-set). "
-                f"Ensure wait_prefill_prefetch() or _load_experts_on_demand() "
-                f"runs before forward."
-            )
         origin_hidden_states_dim = hidden_states.shape[-1]
         assert self.quant_method is not None
 
