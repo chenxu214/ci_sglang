@@ -768,14 +768,6 @@ class ExpertWeightStore:
             self._per_layer_caches.clear()
             self.hbm_cache_used_bytes = 0
 
-    def prefetch_full_layer(self, layer_id: int, num_experts: int):
-        """Async prefetch ALL experts for a layer on the h2d_stream.
-
-        Used during prefill: while layer L computes, layer L+N's full expert
-        set is loaded into HBM cache. Call sync_prefetch() before using.
-        """
-        self.async_prefetch(layer_id, list(range(num_experts)))
-
     def sync_prefetch(self):
         """Block until all pending h2d_stream operations complete."""
         self._ensure_initialized()
@@ -836,28 +828,6 @@ class ExpertWeightStore:
         logger.info(
             f"[ExpertWeightStore] free_layer_buffers: freed {freed_mb:.1f} MB"
         )
-
-    def release_layer_hbm_cache(self, layer_id: int):
-        """Remove all HBM cache entries for a given layer.
-
-        Called after prefill compute for a layer to cap HBM usage at ~(N+1)
-        concurrent layers' worth of cached experts.
-        """
-        if layer_id not in self._per_layer_caches:
-            return
-        lc = self._per_layer_caches.pop(layer_id)
-        freed_bytes = sum(
-            sum(t.nbytes for t in w.values()) for w in lc.values()
-        )
-        self.hbm_cache_used_bytes -= freed_bytes
-        evicted = len(lc)
-        del lc
-        if evicted > 0:
-            logger.info(
-                f"[ExpertWeightStore release_layer] layer_id={layer_id}: "
-                f"released {evicted} experts, "
-                f"{freed_bytes / 1024**2:.1f} MB freed"
-            )
 
     def uninitialize(self):
         """Cleanup acc_offload resources."""
