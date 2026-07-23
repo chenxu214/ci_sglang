@@ -77,6 +77,7 @@ from sglang.srt.utils import (
     print_info_once,
     round_up,
 )
+from sglang.srt.utils.common import log_info_on_rank0
 from sglang.srt.utils.custom_op import register_custom_op
 
 _is_hip = is_hip()
@@ -1270,8 +1271,14 @@ class FusedMoE(torch.nn.Module):
 
             return forward_fuseep(self, hidden_states, topk_output)
 
-        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM
-        if self._dram_offload_enabled and self._expert_weight_store is not None:
+        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM.
+        # Skip when prefill prefetch has already set weights via
+        # wait_prefill_prefetch (_prefetched_buffers exists).
+        if (
+            self._dram_offload_enabled
+            and self._expert_weight_store is not None
+            and not hasattr(self, "_prefetched_buffers")
+        ):
             self._load_experts_on_demand(topk_output)
 
         if is_in_tc_piecewise_cuda_graph():
@@ -1509,6 +1516,71 @@ class FusedMoE(torch.nn.Module):
                     )
             except Exception:
                 pass  # Prefetch is best-effort
+
+    # ------------------------------------------------------------------ #
+    # Prefill full-layer prefetch wrappers (called by KimiLinearModel).
+    # ------------------------------------------------------------------ #
+
+    def start_prefill_prefetch(self):
+        """Async prefetch ALL local experts for this layer into per-layer HBM buffers.
+
+        Allocates [num_experts, ...] tensors and loads from DRAM on h2d_stream.
+        Does NOT use LRU cache. Call wait_prefill_prefetch() before compute
+        and free_prefill_cache() after compute.
+        """
+        if (
+            not self._dram_offload_enabled
+            or self._expert_weight_store is None
+        ):
+            return
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
+            f"num_experts={self.num_local_experts}",
+        )
+        self._prefetched_buffers = self._expert_weight_store.prefetch_layer_to_buffer(
+            self.layer_id, self.num_local_experts
+        )
+
+    def wait_prefill_prefetch(self):
+        """Block until this layer's prefetch H2D copy completes, then set weights."""
+        if (
+            not self._dram_offload_enabled
+            or self._expert_weight_store is None
+        ):
+            return
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] wait_prefill_prefetch start layer_id={self.layer_id}",
+        )
+        self._expert_weight_store.sync_prefetch()
+        for name, tensor in self._prefetched_buffers.items():
+            setattr(self, name, tensor)
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id}",
+        )
+
+    def free_prefill_cache(self):
+        """Release this layer's prefetched HBM buffers after compute.
+
+        Clears layer weight references and frees the per-layer buffers.
+        """
+        if (
+            not self._dram_offload_enabled
+            or self._expert_weight_store is None
+        ):
+            return
+        log_info_on_rank0(
+            logger,
+            f"[FusedMoE] free_prefill_cache layer_id={self.layer_id}",
+        )
+        if hasattr(self, "_prefetched_buffers"):
+            for name in self._prefetched_buffers:
+                if hasattr(self, name):
+                    setattr(self, name, None)
+            self._expert_weight_store.free_layer_buffers(self._prefetched_buffers)
+            del self._prefetched_buffers
 
     @classmethod
     def make_expert_params_mapping(

@@ -908,8 +908,13 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
             f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
             f"Total DRAM usage: {dram_gb:.1f} GB"
         )
-        # Release HBM memory used during offload registration.
-        expert_store.release_hbm_weights()
+        # Release HBM memory freed by offload_expert_weights_to_dram's
+        # delattr. At this point LRU cache and shared buffers are still
+        # empty (not yet used), so this is just gc + empty_cache.
+        import gc
+        gc.collect()
+        if torch.npu.is_available():
+            torch.npu.empty_cache()
 
         if torch.npu.is_available():
             alloc_end = torch.npu.memory_allocated() / 1024**3

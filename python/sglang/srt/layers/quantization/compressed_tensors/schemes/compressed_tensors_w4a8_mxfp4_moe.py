@@ -397,6 +397,40 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         group_list = group_list.to(torch.int64)
         combine_cls = DeepEPLLCombineInput
 
+    # Decode DRAM offload: build compact [num_active, ...] weight tensors
+    # after dispatch (we know which experts received tokens). Replaces the
+    # [224, ...] shared buffer with a smaller [num_active, ...] tensor.
+    # Prefill uses the shared buffer (pre-loaded by _load_experts_on_demand).
+    if (
+        getattr(layer, "_dram_offload_enabled", False)
+        and layer._expert_weight_store is not None
+        and layer._expert_weight_store.hbm_cache_max_slots > 0
+    ):
+        group_list_cpu = group_list.cpu()
+        active_mask = group_list_cpu > 0
+        active_expert_ids = active_mask.nonzero().squeeze(-1).tolist()
+        if not isinstance(active_expert_ids, list):
+            active_expert_ids = [active_expert_ids]
+        num_active = len(active_expert_ids)
+
+        if num_active > 16:
+            raise RuntimeError(
+                f"Decode active experts ({num_active}) exceeds limit (16). "
+                f"active_expert_ids={active_expert_ids}"
+            )
+
+        sample_key = (layer.layer_id, active_expert_ids[0])
+        weight_names = list(
+            layer._expert_weight_store.dram_store[sample_key].keys()
+        )
+        compact_weights = layer._expert_weight_store.build_active_weight_tensors(
+            layer.layer_id, active_expert_ids, weight_names
+        )
+        for name, tensor in compact_weights.items():
+            setattr(layer, name, tensor)
+
+        group_list = group_list_cpu[active_mask].to(hidden_states.device)
+
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
         hidden_states,
