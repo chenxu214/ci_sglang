@@ -321,7 +321,6 @@ class ExpertWeightStore:
         self._ensure_initialized()
         results = {}
         missing = []
-        hit_ids = []
 
         lc = self._get_layer_cache(layer_id)
         for eid in expert_ids:
@@ -334,20 +333,10 @@ class ExpertWeightStore:
             if eid in lc:
                 lc.move_to_end(eid)  # LRU: mark as recently used
                 self._stats["hbm_hit"] += 1
-                hit_ids.append(eid)
                 results[eid] = lc[eid]
             else:
                 self._stats["dram_load"] += 1
                 missing.append(key)
-
-        if missing:
-            miss_ids = [k[1] for k in missing]
-            logger.info(
-                f"[ExpertWeightStore batch_get] layer_id={layer_id}: "
-                f"requested={expert_ids}, hbm_hit={hit_ids} ({len(hit_ids)}), "
-                f"dram_load={miss_ids} ({len(miss_ids)}), "
-                f"backend={'acc_offload' if (self.use_acc_offload and self._offload_initialized) else 'pytorch_h2d'}"
-            )
 
         if not missing:
             return results
@@ -619,9 +608,6 @@ class ExpertWeightStore:
         dst_ptrs = []
         len_ptrs = []
         expert_results = {}
-        total_copy_bytes = 0
-
-        alloc_before, reserved_before = _get_hbm_usage_gb()
 
         # Collect all (src, dst, len) pairs for all missing experts
         for key in missing_keys:
@@ -642,7 +628,6 @@ class ExpertWeightStore:
                 src_ptrs.append(dram_tensor.data_ptr())
                 dst_ptrs.append(hbm_tensor.data_ptr())
                 len_ptrs.append(dram_tensor.nbytes)
-                total_copy_bytes += dram_tensor.nbytes
 
             expert_results[eid] = hbm_weights
             self._put_hbm_cache(key, hbm_weights)
@@ -674,15 +659,6 @@ class ExpertWeightStore:
         # Wait for sparse_copy to complete
         self._h2d_stream.synchronize()
 
-        alloc_after, reserved_after = _get_hbm_usage_gb()
-        logger.info(
-            f"[ExpertWeightStore sparse_copy] layer_id={layer_id}: "
-            f"loaded {len(missing_keys)} experts, {num_pairs} tensors, "
-            f"{total_copy_bytes / 1024**2:.1f} MB DRAM→HBM. "
-            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
-            f"(+{alloc_after - alloc_before:.2f} GB)"
-        )
-
         return expert_results
 
     # ------------------------------------------------------------------
@@ -694,33 +670,18 @@ class ExpertWeightStore:
     ) -> Dict[int, Dict[str, torch.Tensor]]:
         """Batch load experts using PyTorch H2D (fallback)."""
         results = {}
-        total_copy_bytes = 0
-        layer_id = missing_keys[0][0] if missing_keys else -1
-
-        alloc_before, _ = _get_hbm_usage_gb()
 
         with torch.npu.stream(self._h2d_stream):
             for key in missing_keys:
                 eid = key[1]
                 hbm_weights = self._load_to_hbm_unchecked(key)
                 results[eid] = hbm_weights
-                total_copy_bytes += sum(
-                    t.nbytes for t in hbm_weights.values()
-                )
                 # Put into HBM cache so hbm_cache_used_bytes is updated
                 # and subsequent lookups get cache hits.
                 self._put_hbm_cache(key, hbm_weights)
 
         self._h2d_stream.synchronize()
 
-        alloc_after, _ = _get_hbm_usage_gb()
-        logger.info(
-            f"[ExpertWeightStore pytorch_h2d] layer_id={layer_id}: "
-            f"loaded {len(missing_keys)} experts, "
-            f"{total_copy_bytes / 1024**2:.1f} MB DRAM→HBM. "
-            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
-            f"(+{alloc_after - alloc_before:.2f} GB)"
-        )
         return results
 
     def _load_to_hbm(
@@ -898,7 +859,7 @@ class ExpertWeightStore:
         gc.collect()
         if torch.npu.is_available():
             torch.npu.empty_cache()
-        logger.info(
+        logger.debug(
             f"[ExpertWeightStore] free_layer_buffers: freed {freed_mb:.1f} MB"
         )
 
@@ -956,7 +917,7 @@ class ExpertWeightStore:
         self._decode_buffers.clear()
         self._decode_slot_maps.clear()
 
-        logger.info(
+        logger.debug(
             f"[ExpertWeightStore] release_hbm_weights: "
             f"cleared {cache_count} LRU entries ({cache_gb:.2f} GB), "
             f"{shared_buffer_count} shared buffers "

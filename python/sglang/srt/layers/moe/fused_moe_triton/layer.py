@@ -77,7 +77,7 @@ from sglang.srt.utils import (
     print_info_once,
     round_up,
 )
-from sglang.srt.utils.common import log_info_on_rank0
+from sglang.srt.utils.common import log_info_on_rank0, log_debug_on_rank0
 from sglang.srt.utils.custom_op import register_custom_op
 
 _is_hip = is_hip()
@@ -1540,7 +1540,7 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
-        log_info_on_rank0(
+        log_debug_on_rank0(
             logger,
             f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
             f"num_experts={self.num_local_experts}",
@@ -1556,14 +1556,14 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
-        log_info_on_rank0(
+        log_debug_on_rank0(
             logger,
             f"[FusedMoE] wait_prefill_prefetch start layer_id={self.layer_id}",
         )
         self._expert_weight_store.sync_prefetch()
         for name, tensor in self._prefetched_buffers.items():
             setattr(self, name, tensor)
-        log_info_on_rank0(
+        log_debug_on_rank0(
             logger,
             f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id}",
         )
@@ -1578,7 +1578,7 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
-        log_info_on_rank0(
+        log_debug_on_rank0(
             logger,
             f"[FusedMoE] free_prefill_cache layer_id={self.layer_id}",
         )

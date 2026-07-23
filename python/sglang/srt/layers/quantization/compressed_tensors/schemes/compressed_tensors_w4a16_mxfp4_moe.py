@@ -144,21 +144,25 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
         # Both npu_format_cast(format=29) and npu_convert_weight_to_int4pack
         # produce NPU-specific layouts incompatible with CPU round-trip
         # (AICPU Transpose kernel fails with errorCode=0x2a). For offload,
-        # weights are stored in ND format (after unpack+transpose) and
-        # converted to NZ+int4pack at forward time in w4a16_mxfp4_gmm_npu.
+        # weights are stored as packed uint8 (NOT unpacked to float32) to
+        # keep DRAM/HBM buffer 4x smaller. Unpack+transpose+NZ+int4pack
+        # are done at forward time in w4a16_mxfp4_gmm_npu for selected
+        # experts only.
         _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
 
-        layer.w13_weight.data = unpack_uint8_to_fp4_return_float32(layer.w13_weight.data)
-        layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
         if not _skip_nz_cast:
+            layer.w13_weight.data = unpack_uint8_to_fp4_return_float32(layer.w13_weight.data)
+            layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
             layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29, customize_dtype=torch.bfloat16)
             layer.w13_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w13_weight.data).contiguous()
+        # else: keep as packed uint8 [E, 2*N, H//2] for DRAM offload
 
-        layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
-        layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
         if not _skip_nz_cast:
+            layer.w2_weight.data = unpack_uint8_to_fp4_return_float32(layer.w2_weight.data)
+            layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
             layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.bfloat16)
             layer.w2_weight.data = torch_npu.npu_convert_weight_to_int4pack(layer.w2_weight.data).contiguous()
+        # else: keep as packed uint8 [E, H, N//2] for DRAM offload
 
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
         layer.w2_weight_scale.data = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
@@ -188,12 +192,32 @@ class NPUCompressedTensorsW4A16mxfp4MoE(CompressedTensorsMoEScheme):
             if self.moe_runner_config is not None
             else topk_ids.shape[1]
         )
+
+        w13 = layer.w13_weight
+        w2 = layer.w2_weight
+        w13_scale = layer.w13_weight_scale
+        w2_scale = layer.w2_weight_scale
+
+        # DRAM offload path: weights are ND (contiguous). Extract only the
+        # selected experts before NZ+int4pack conversion to avoid converting
+        # the entire [num_experts, ...] tensor (which doubles HBM and causes
+        # OOM). Non-offload path has NZ weights (non-contiguous) → skipped.
+        if w13.is_contiguous():
+            unique_ids, inverse_indices = torch.unique(
+                topk_ids, return_inverse=True
+            )
+            w13 = w13[unique_ids]
+            w2 = w2[unique_ids]
+            w13_scale = w13_scale[unique_ids]
+            w2_scale = w2_scale[unique_ids]
+            topk_ids = inverse_indices.to(torch.int32).view_as(topk_ids)
+
         output = npu_fused_experts_w4a16_mxfp4(
             hidden_states,
-            layer.w13_weight,
-            layer.w13_weight_scale,
-            layer.w2_weight,
-            layer.w2_weight_scale,
+            w13,
+            w13_scale,
+            w2,
+            w2_scale,
             topk_weights,
             topk_ids,
             top_k,
@@ -398,6 +422,41 @@ def npu_apply_w4a16_mxfp4_moe_deepep(
         group_list = group_list.to(torch.int64)
         combine_cls = DeepEPLLCombineInput
 
+    # Decode DRAM offload: build compact [num_active, ...] weight tensors
+    # after dispatch (we know which experts received tokens). Replaces the
+    # full [num_experts, ...] shared buffer with a smaller tensor to avoid
+    # OOM during NZ conversion. Prefill uses the shared buffer (pre-loaded
+    # by _load_experts_on_demand).
+    if (
+        getattr(layer, "_dram_offload_enabled", False)
+        and layer._expert_weight_store is not None
+        and layer._expert_weight_store.hbm_cache_max_slots > 0
+    ):
+        group_list_cpu = group_list.cpu()
+        active_mask = group_list_cpu > 0
+        active_expert_ids = active_mask.nonzero().squeeze(-1).tolist()
+        if not isinstance(active_expert_ids, list):
+            active_expert_ids = [active_expert_ids]
+        num_active = len(active_expert_ids)
+
+        if num_active > 16:
+            raise RuntimeError(
+                f"Decode active experts ({num_active}) exceeds limit (16). "
+                f"active_expert_ids={active_expert_ids}"
+            )
+
+        sample_key = (layer.layer_id, active_expert_ids[0])
+        weight_names = list(
+            layer._expert_weight_store.dram_store[sample_key].keys()
+        )
+        compact_weights = layer._expert_weight_store.build_active_weight_tensors(
+            layer.layer_id, active_expert_ids, weight_names
+        )
+        for name, tensor in compact_weights.items():
+            setattr(layer, name, tensor)
+
+        group_list = group_list_cpu[active_mask].to(hidden_states.device)
+
     hidden_states = npu_apply_without_routing_weights_w4a16_mxfp4(
         layer,
         hidden_states,
@@ -454,17 +513,17 @@ def w4a16_mxfp4_gmm_npu(
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
 
-    # For ND-format weights (from DRAM offload), convert to NZ+int4pack at
-    # forward time. NZ format and int4pack are NPU-specific layouts that
-    # cannot be stored in DRAM (AICPU Transpose kernel fails on CPU
-    # transfer), so DRAM offload weights are stored in ND format (after
-    # unpack+transpose) and converted here. This matches the non-offload
-    # path's process_weights_after_loading.
+    # For DRAM offload, weights are stored as packed uint8 (NOT unpacked
+    # to float32) to keep DRAM/HBM buffer 4x smaller. At forward time,
+    # unpack to float32 and transpose before NZ+int4pack conversion.
+    # This matches the non-offload path's process_weights_after_loading.
     #
     # The is_contiguous() guard distinguishes the two paths:
-    #   - ND path (offload): contiguous after unpack+transpose → convert
+    #   - Packed uint8 path (offload): contiguous → unpack+transpose+convert
     #   - NZ path (non-offload): non-contiguous after NZ cast → skip
     if weight.is_contiguous():
+        if weight.dtype == torch.uint8:
+            weight = unpack_uint8_to_fp4_return_float32(weight).transpose(1, 2)
         weight = torch_npu.npu_format_cast(
             weight, 29, customize_dtype=torch.bfloat16
         )
