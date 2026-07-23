@@ -168,14 +168,15 @@ class ExpertWeightStore:
         cpu_weights = {}
         total_bytes = 0
         for name, tensor in weights.items():
-            # NZ format (FRACTAL_NZ, format=29) cannot be copied via copy_()
-            # or .cpu() — NPU raises "do not support internal format".
-            # Convert to ND (format=0) before D2H transfer.
-            try:
-                if tensor.npu_format == 29:  # FRACTAL_NZ
+            # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
+            # copy_() - NPU raises "do not support internal format".
+            # Force-convert to ND (format 0) then move to CPU before D2H.
+            if tensor.device.type != "cpu":
+                try:
                     tensor = torch_npu.npu_format_cast(tensor, 0)
-            except AttributeError:
-                pass  # Not an NPU tensor or no npu_format attr
+                except Exception:
+                    pass  # Already ND or conversion not needed
+                tensor = tensor.cpu()
 
             if self.use_acc_offload and self._offload_initialized:
                 dram_tensor = self._offload.empty(
@@ -185,8 +186,6 @@ class ExpertWeightStore:
                 dram_tensor = torch.empty(
                     tensor.shape, dtype=tensor.dtype, pin_memory=True
                 )
-            # Direct cross-device copy (HBM→DRAM or CPU→DRAM) avoids
-            # the temporary CPU copy that tensor.cpu() would create.
             dram_tensor.copy_(tensor)
             cpu_weights[name] = dram_tensor
             total_bytes += dram_tensor.nbytes
