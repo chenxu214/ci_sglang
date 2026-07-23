@@ -68,9 +68,7 @@ class ExpertWeightStore:
         # Slot-count limit for decode LRU (env-tunable). When > 0, evict by
         # entry count in addition to byte-size. Set to 0 (unlimited) during
         # prefill via set_cache_mode().
-        self._decode_cache_slots = get_int_env_var(
-            "SGLANG_KIMI_DECODE_CACHE_SLOTS", 20
-        )
+        self._decode_cache_slots = get_int_env_var("SGLANG_KIMI_DECODE_CACHE_SLOTS", 20)
         self.hbm_cache_max_slots = self._decode_cache_slots
 
         self._h2d_stream = None
@@ -89,6 +87,14 @@ class ExpertWeightStore:
         self._shared_buffer_shapes: Dict[str, tuple] = {}
 
         self._stats = {"hbm_hit": 0, "dram_load": 0, "total_requests": 0}
+
+        # Prefetch tracking for accuracy/coverage metrics.
+        # _prefetch_requests[layer_id] = set of expert IDs prefetched for this
+        # layer (submitted by the previous layer's async_prefetch).
+        self._prefetch_requests: Dict[int, set] = {}
+        # Per-layer rolling stats: accuracy = |prefetch ∩ needed| / |prefetch|
+        # coverage = |prefetch ∩ needed| / |needed|
+        self._prefetch_stats: Dict[int, dict] = {}
 
     def _ensure_initialized(self):
         if not self._initialized:
@@ -182,9 +188,7 @@ class ExpertWeightStore:
                 tensor = tensor.cpu()
 
             if self.use_acc_offload and self._offload_initialized:
-                dram_tensor = self._offload.empty(
-                    tensor.shape, dtype=tensor.dtype
-                )
+                dram_tensor = self._offload.empty(tensor.shape, dtype=tensor.dtype)
             else:
                 dram_tensor = torch.empty(
                     tensor.shape, dtype=tensor.dtype, pin_memory=True
@@ -246,6 +250,32 @@ class ExpertWeightStore:
             else:
                 self._stats["dram_load"] += 1
                 missing.append(key)
+
+        # --- Prefetch accuracy/coverage metrics ---
+        needed_set = set(e for e in expert_ids if (layer_id, e) in self.dram_store)
+        prefetch_set = self._prefetch_requests.get(layer_id, set())
+        if needed_set and prefetch_set:
+            hit = len(needed_set & prefetch_set)
+            accuracy = hit / len(prefetch_set)
+            coverage = hit / len(needed_set)
+
+            if layer_id not in self._prefetch_stats:
+                self._prefetch_stats[layer_id] = {
+                    "acc_sum": 0.0,
+                    "cov_sum": 0.0,
+                    "count": 0,
+                }
+            s = self._prefetch_stats[layer_id]
+            s["acc_sum"] += accuracy
+            s["cov_sum"] += coverage
+            s["count"] += 1
+
+            logger.info(
+                f"[ExpertWeightStore prefetch] layer={layer_id}: "
+                f"acc={hit}/{len(prefetch_set)} ({accuracy:.0%}), "
+                f"cov={hit}/{len(needed_set)} ({coverage:.0%})"
+            )
+        # -------------------------------------------
 
         if not missing:
             return results
@@ -360,17 +390,13 @@ class ExpertWeightStore:
         )
         return results
 
-    def _load_to_hbm(
-        self, key: Tuple[int, int]
-    ) -> Dict[str, torch.Tensor]:
+    def _load_to_hbm(self, key: Tuple[int, int]) -> Dict[str, torch.Tensor]:
         """Load a single expert from DRAM to HBM (with cache eviction)."""
         hbm_weights = self._load_to_hbm_unchecked(key)
         self._put_hbm_cache(key, hbm_weights)
         return hbm_weights
 
-    def _load_to_hbm_unchecked(
-        self, key: Tuple[int, int]
-    ) -> Dict[str, torch.Tensor]:
+    def _load_to_hbm_unchecked(self, key: Tuple[int, int]) -> Dict[str, torch.Tensor]:
         """Copy expert weights from DRAM to HBM without cache management."""
         dram_weights = self.dram_store[key]
         hbm_weights = {}
@@ -379,9 +405,7 @@ class ExpertWeightStore:
             hbm_weights[name] = hbm_tensor
         return hbm_weights
 
-    def _put_hbm_cache(
-        self, key: Tuple[int, int], weights: Dict[str, torch.Tensor]
-    ):
+    def _put_hbm_cache(self, key: Tuple[int, int], weights: Dict[str, torch.Tensor]):
         """Put expert weights into per-layer HBM LRU cache, evicting if needed.
 
         Eviction is per-layer: each layer's cache has its own slot-count limit
@@ -397,10 +421,7 @@ class ExpertWeightStore:
 
         # Per-layer slot-count eviction (decode LRU: 20 experts max per layer)
         if self.hbm_cache_max_slots > 0:
-            while (
-                len(lc) >= self.hbm_cache_max_slots
-                and len(lc) > 0
-            ):
+            while len(lc) >= self.hbm_cache_max_slots and len(lc) > 0:
                 evicted_eid, evicted_weights = lc.popitem(last=False)
                 evicted_size = sum(t.nbytes for t in evicted_weights.values())
                 self.hbm_cache_used_bytes -= evicted_size
@@ -425,6 +446,9 @@ class ExpertWeightStore:
         self._ensure_initialized()
         if self._h2d_stream is None:
             return
+
+        # Record prefetch intent for accuracy/coverage tracking.
+        self._prefetch_requests[layer_id] = set(expert_ids)
 
         missing = []
         lc = self._get_layer_cache(layer_id)
@@ -480,9 +504,7 @@ class ExpertWeightStore:
         if layer_id not in self._per_layer_caches:
             return
         lc = self._per_layer_caches.pop(layer_id)
-        freed_bytes = sum(
-            sum(t.nbytes for t in w.values()) for w in lc.values()
-        )
+        freed_bytes = sum(sum(t.nbytes for t in w.values()) for w in lc.values())
         self.hbm_cache_used_bytes -= freed_bytes
         evicted = len(lc)
         del lc
@@ -532,9 +554,7 @@ class ExpertWeightStore:
         loaded_count = 0
         for layer_id in layers_to_load:
             expert_ids = [
-                key[1]
-                for key in self.dram_store.keys()
-                if key[0] == layer_id
+                key[1] for key in self.dram_store.keys() if key[0] == layer_id
             ]
             if not expert_ids:
                 continue
@@ -564,6 +584,7 @@ class ExpertWeightStore:
         self._shared_buffer_shapes.clear()
 
         import gc
+
         gc.collect()
         if torch.npu.is_available():
             torch.npu.empty_cache()
@@ -590,6 +611,14 @@ class ExpertWeightStore:
     def get_stats(self) -> dict:
         total = max(self._stats["total_requests"], 1)
         cache_count = sum(len(lc) for lc in self._per_layer_caches.values())
+
+        # Aggregate prefetch accuracy/coverage across all layers
+        acc_sum, cov_sum, cnt = 0.0, 0.0, 0
+        for s in self._prefetch_stats.values():
+            acc_sum += s["acc_sum"]
+            cov_sum += s["cov_sum"]
+            cnt += s["count"]
+
         return {
             "hbm_hit_rate": self._stats["hbm_hit"] / total,
             "dram_load_count": self._stats["dram_load"],
@@ -597,6 +626,9 @@ class ExpertWeightStore:
             "hbm_cache_used_gb": self.hbm_cache_used_bytes / 1024**3,
             "dram_total_experts": len(self.dram_store),
             "backend": "acc_offload" if self.use_acc_offload else "pytorch_h2d",
+            "prefetch_accuracy": acc_sum / max(cnt, 1),
+            "prefetch_coverage": cov_sum / max(cnt, 1),
+            "prefetch_measurements": cnt,
         }
 
     def get_dram_usage_gb(self) -> float:
