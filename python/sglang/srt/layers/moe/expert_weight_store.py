@@ -75,6 +75,9 @@ class ExpertWeightStore:
         # for prefill). This prevents cross-layer eviction during decode.
         self._per_layer_caches: Dict[int, OrderedDict] = {}
         self.hbm_cache_used_bytes = 0
+        # Pre-allocated decode buffers: {layer_id: {name: [max_slots, ...]}}
+        # Reused across decode steps to avoid per-step torch.stack allocation.
+        self._decode_buffers: Dict[int, Dict[str, torch.Tensor]] = {}
 
         # Slot-count limit for decode LRU (env-tunable). When > 0, evict by
         # entry count in addition to byte-size. Set to 0 (unlimited) during
@@ -481,17 +484,37 @@ class ExpertWeightStore:
             else:
                 loaded = self._pytorch_h2d_batch(missing_keys)
 
-        # Build compact tensors from snapshots (not LRU cache, which may
-        # have evicted entries during loading)
+        # Get or create pre-allocated decode buffers (avoids per-step
+        # torch.stack allocation). Buffer shape [max_slots, ...], only
+        # first num_active slots are filled each step.
+        if layer_id not in self._decode_buffers:
+            sample_key = (layer_id, 0)
+            max_slots = self._decode_cache_slots
+            buffers = {}
+            for name in weight_names:
+                sample_tensor = self.dram_store[sample_key][name]
+                full_shape = (max_slots,) + sample_tensor.shape
+                buffers[name] = torch.empty(
+                    full_shape, dtype=sample_tensor.dtype, device="npu"
+                )
+            self._decode_buffers[layer_id] = buffers
+        buffers = self._decode_buffers[layer_id]
+
+        # Copy data into pre-allocated buffers (HBM→HBM, no allocation).
+        # record_stream prevents caching allocator from reusing source
+        # tensor memory before the async copy_ kernel reads it.
+        current_stream = torch.npu.current_stream()
         result = {}
         for name in weight_names:
-            tensors = []
-            for eid in active_expert_ids:
+            buf = buffers[name]
+            for i, eid in enumerate(active_expert_ids):
                 if eid in cache_hits:
-                    tensors.append(cache_hits[eid][name])
+                    src = cache_hits[eid][name]
                 else:
-                    tensors.append(loaded[eid][name])
-            result[name] = torch.stack(tensors, dim=0)
+                    src = loaded[eid][name]
+                src.record_stream(current_stream)
+                buf[i].copy_(src)
+            result[name] = buf[:num_active]
 
         return result
 
@@ -727,6 +750,8 @@ class ExpertWeightStore:
         """
         if is_prefill:
             self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
+            # Free decode buffers (not needed during prefill)
+            self._decode_buffers.clear()
         else:
             self.hbm_cache_max_slots = self._decode_cache_slots
             # Clear prefill residue: unlimited-mode entries would otherwise
