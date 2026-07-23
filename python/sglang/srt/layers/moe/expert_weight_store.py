@@ -236,10 +236,11 @@ class ExpertWeightStore:
         self.dram_store[key] = cpu_weights
         self._registered_layers.add(layer_id)
 
-        logger.info(
-            f"[ExpertWeightStore] D2H layer_id={layer_id} expert_id={expert_id}: "
-            f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
-        )
+        if expert_id % 64 == 0:
+            logger.info(
+                f"[ExpertWeightStore] D2H layer_id={layer_id} expert_id={expert_id}: "
+                f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
+            )
 
     def get_expert_weights(
         self, layer_id: int, expert_id: int
@@ -315,6 +316,117 @@ class ExpertWeightStore:
         else:
             # Fallback: PyTorch H2D on dedicated stream
             results.update(self._pytorch_h2d_batch(missing))
+
+        return results
+
+    def batch_load_to_shared_buffer(
+        self,
+        layer_id: int,
+        expert_ids: List[int],
+        shared_buffers: Dict[str, torch.Tensor],
+    ) -> Dict[int, Dict[str, torch.Tensor]]:
+        """Batch load expert weights directly into shared HBM buffers.
+
+        This avoids the extra HBM→HBM copy that batch_get_expert_weights +
+        _load_experts_on_demand would do. Weights are written directly
+        into shared_buffers[expert_id].
+
+        Args:
+            layer_id: Layer index
+            expert_ids: List of expert IDs to load
+            shared_buffers: {weight_name: HBM tensor of shape [num_experts, ...]}
+
+        Returns:
+            {expert_id: {weight_name: view into shared_buffer}} for cache stats
+        """
+        self._ensure_initialized()
+        results = {}
+        missing = []
+
+        for eid in expert_ids:
+            key = (layer_id, eid)
+            self._stats["total_requests"] += 1
+
+            if key not in self.dram_store:
+                continue
+
+            # Always load from DRAM for shared buffer path (no LRU check)
+            self._stats["dram_load"] += 1
+            missing.append(key)
+
+        if not missing:
+            return results
+
+        # Build (src_ptr, dst_ptr, len) triples pointing directly into
+        # the shared buffers. This avoids allocating per-expert HBM tensors
+        # and the subsequent copy_ into shared buffers.
+        src_ptrs = []
+        dst_ptrs = []
+        len_ptrs = []
+
+        for key in missing:
+            eid = key[1]
+            dram_weights = self.dram_store[key]
+            expert_views = {}
+
+            for name, dram_tensor in dram_weights.items():
+                if name not in shared_buffers:
+                    continue
+                # Destination: expert's slot in the shared buffer
+                dst_tensor = shared_buffers[name][eid]
+                expert_views[name] = dst_tensor
+
+                src_ptrs.append(dram_tensor.data_ptr())
+                dst_ptrs.append(dst_tensor.data_ptr())
+                len_ptrs.append(dram_tensor.nbytes)
+
+            results[eid] = expert_views
+
+        num_pairs = len(src_ptrs)
+        if num_pairs == 0:
+            return results
+
+        if self.use_acc_offload and self._offload_initialized:
+            src_tensor = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
+            dst_tensor = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
+            len_tensor = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
+            size_tensor = torch.tensor(num_pairs, dtype=torch.int32, device="npu")
+
+            device = torch.device(f"npu:{torch.npu.current_device()}")
+            with torch.npu.stream(self._h2d_stream):
+                ret = self._offload.sparse_copy(
+                    src_tensor, dst_tensor, len_tensor, size_tensor, device
+                )
+            self._h2d_stream.synchronize()
+
+            if ret != 0:
+                logger.error(
+                    f"[ExpertWeightStore] sparse_copy failed (ret={ret}), "
+                    f"falling back to PyTorch H2D"
+                )
+                # Fallback: PyTorch H2D into shared buffers
+                with torch.npu.stream(self._h2d_stream):
+                    for key in missing:
+                        eid = key[1]
+                        dram_weights = self.dram_store[key]
+                        for name, dram_tensor in dram_weights.items():
+                            if name in shared_buffers:
+                                shared_buffers[name][eid].copy_(
+                                    dram_tensor, non_blocking=True
+                                )
+                self._h2d_stream.synchronize()
+        else:
+            # PyTorch H2D directly into shared buffers
+            with torch.npu.stream(self._h2d_stream):
+                for key in missing:
+                    eid = key[1]
+                    dram_weights = self.dram_store[key]
+                    for name, dram_tensor in dram_weights.items():
+                        if name in shared_buffers:
+                            shared_buffers[name][eid].copy_(
+                                dram_tensor, non_blocking=True
+                            )
+            self._h2d_stream.synchronize()
 
         return results
 
