@@ -816,38 +816,6 @@ class ExpertWeightStore:
                 f"{freed_bytes / 1024**2:.1f} MB freed"
             )
 
-    def release_hbm_weights(self):
-        """Release all HBM cached weights and shared buffers (free HBM memory)."""
-        cache_count = sum(len(lc) for lc in self._per_layer_caches.values())
-        cache_gb = self.hbm_cache_used_bytes / 1024**3
-        shared_buffer_count = len(self._shared_hbm_buffers)
-        shared_buffer_bytes = sum(t.nbytes for t in self._shared_hbm_buffers.values())
-
-        alloc_before, reserved_before = _get_hbm_usage_gb()
-
-        self._per_layer_caches.clear()
-        self.hbm_cache_used_bytes = 0
-        self._shared_hbm_buffers.clear()
-        self._shared_buffer_shapes.clear()
-
-        # Trigger Python GC and empty NPU cache to actually release memory
-        import gc
-        gc.collect()
-        if torch.npu.is_available():
-            torch.npu.empty_cache()
-
-        alloc_after, reserved_after = _get_hbm_usage_gb()
-
-        logger.info(
-            f"[ExpertWeightStore] release_hbm_weights: "
-            f"cleared hbm_cache({cache_count} experts, {cache_gb:.2f} GB) "
-            f"+ shared_buffers({shared_buffer_count} tensors, "
-            f"{shared_buffer_bytes / 1024**2:.1f} MB). "
-            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
-            f"(freed {alloc_before - alloc_after:.2f} GB), "
-            f"reserved {reserved_before:.2f}→{reserved_after:.2f} GB"
-        )
-
     def uninitialize(self):
         """Cleanup acc_offload resources."""
         if self._offload_initialized:
