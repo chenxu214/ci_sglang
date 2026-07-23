@@ -18,6 +18,7 @@ from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch_npu
 
 from sglang.srt.utils.common import get_int_env_var
 
@@ -204,6 +205,15 @@ class ExpertWeightStore:
         cpu_weights = {}
         total_bytes = 0
         for name, tensor in weights.items():
+            # NZ format (FRACTAL_NZ, format=29) cannot be copied via copy_()
+            # or .cpu() — NPU raises "do not support internal format".
+            # Convert to ND (format=0) before D2H transfer.
+            try:
+                if tensor.npu_format == 29:  # FRACTAL_NZ
+                    tensor = torch_npu.npu_format_cast(tensor, 0)
+            except AttributeError:
+                pass  # Not an NPU tensor or no npu_format attr
+
             if self.use_acc_offload and self._offload_initialized:
                 # Allocate from acc_offload DRAM pool
                 dram_tensor = self._offload.empty(
