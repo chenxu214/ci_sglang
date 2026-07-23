@@ -720,11 +720,20 @@ class ExpertWeightStore:
     # ------------------------------------------------------------------ #
 
     def set_cache_mode(self, is_prefill: bool):
-        """Toggle between prefill (unlimited slots) and decode (20-slot LRU)."""
+        """Toggle between prefill (unlimited slots) and decode (20-slot LRU).
+
+        When switching to decode, clears any prefill LRU residue to prevent
+        stale entries and hbm_cache_used_bytes inflation.
+        """
         if is_prefill:
             self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
         else:
             self.hbm_cache_max_slots = self._decode_cache_slots
+            # Clear prefill residue: unlimited-mode entries would otherwise
+            # coexist with decode's 20-slot LRU, inflating hbm_cache_used_bytes
+            # and triggering massive eviction on the first decode step.
+            self._per_layer_caches.clear()
+            self.hbm_cache_used_bytes = 0
 
     def prefetch_full_layer(self, layer_id: int, num_experts: int):
         """Async prefetch ALL experts for a layer on the h2d_stream.
