@@ -78,6 +78,10 @@ class ExpertWeightStore:
         # Pre-allocated decode buffers: {layer_id: {name: [max_slots, ...]}}
         # Reused across decode steps to avoid per-step torch.stack allocation.
         self._decode_buffers: Dict[int, Dict[str, torch.Tensor]] = {}
+        # Slot map for decode: {layer_id: OrderedDict[expert_id, slot_index]}
+        # Replaces per-expert HBM tensors in LRU with int indices into
+        # _decode_buffers, eliminating double allocation.
+        self._decode_slot_maps: Dict[int, OrderedDict] = {}
 
         # Slot-count limit for decode LRU (env-tunable). When > 0, evict by
         # entry count in addition to byte-size. Set to 0 (unlimited) during
@@ -441,10 +445,16 @@ class ExpertWeightStore:
     ) -> Dict[str, torch.Tensor]:
         """Build compact [num_active, ...] weight tensors for active experts.
 
-        Called after dispatch (decode only) when we know which experts
-        received tokens. Checks LRU cache first (HBM→HBM copy on hit),
-        loads from DRAM on miss. Replaces the shared [224, ...] buffer
-        with a smaller [num_active, ...] tensor.
+        Uses pre-allocated _decode_buffers as the sole storage (no separate
+        per-expert LRU tensors). A slot map (LRU of expert_id → slot_index)
+        tracks which expert is in which buffer slot for cache hits.
+
+        Flow:
+          1. Assign slots: hits reuse old slot, misses get free/evicted slot
+          2. Load misses from DRAM directly into buffer slots (no per-expert
+             tensor allocation)
+          3. Compact: swap data to sequential positions 0..num_active-1
+          4. Update slot map: all active experts → their compacted positions
 
         Args:
             layer_id: Layer index
@@ -457,39 +467,11 @@ class ExpertWeightStore:
         self._ensure_initialized()
 
         num_active = len(active_expert_ids)
-        lc = self._get_layer_cache(layer_id)
+        max_slots = self._decode_cache_slots
 
-        # Snapshot cache hits BEFORE loading misses.
-        # _put_hbm_cache (called inside _sparse_copy_batch / _pytorch_h2d_batch)
-        # may evict entries when LRU is full, including hits snapshotted here.
-        # The snapshot holds references so evicted tensors survive until
-        # torch.stack copies the data into the compact tensor.
-        cache_hits = {}
-        missing_keys = []
-        for eid in active_expert_ids:
-            self._stats["total_requests"] += 1
-            if eid in lc:
-                self._stats["hbm_hit"] += 1
-                cache_hits[eid] = lc[eid]
-            else:
-                self._stats["dram_load"] += 1
-                missing_keys.append((layer_id, eid))
-
-        # Load misses from DRAM (return value holds references regardless
-        # of LRU eviction)
-        loaded = {}
-        if missing_keys:
-            if self.use_acc_offload and self._offload_initialized:
-                loaded = self._sparse_copy_batch(layer_id, missing_keys)
-            else:
-                loaded = self._pytorch_h2d_batch(missing_keys)
-
-        # Get or create pre-allocated decode buffers (avoids per-step
-        # torch.stack allocation). Buffer shape [max_slots, ...], only
-        # first num_active slots are filled each step.
+        # Get or create decode buffers
         if layer_id not in self._decode_buffers:
             sample_key = (layer_id, 0)
-            max_slots = self._decode_cache_slots
             buffers = {}
             for name in weight_names:
                 sample_tensor = self.dram_store[sample_key][name]
@@ -500,21 +482,85 @@ class ExpertWeightStore:
             self._decode_buffers[layer_id] = buffers
         buffers = self._decode_buffers[layer_id]
 
-        # Copy data into pre-allocated buffers (HBM→HBM, no allocation).
-        # record_stream prevents caching allocator from reusing source
-        # tensor memory before the async copy_ kernel reads it.
-        current_stream = torch.npu.current_stream()
+        # Get or create slot map (LRU: expert_id → slot_index)
+        if layer_id not in self._decode_slot_maps:
+            self._decode_slot_maps[layer_id] = OrderedDict()
+        slot_map = self._decode_slot_maps[layer_id]
+
+        # Assign slots: hits reuse old slot, misses get free/evicted slot
+        assigned = {}  # {expert_id: slot_index}
+        for eid in active_expert_ids:
+            self._stats["total_requests"] += 1
+            if eid in slot_map:
+                self._stats["hbm_hit"] += 1
+                assigned[eid] = slot_map.pop(eid)
+            else:
+                self._stats["dram_load"] += 1
+
+        # Find free slots for misses (not in current slot_map or assigned)
+        used = set(slot_map.values()) | set(assigned.values())
+        free_slots = [s for s in range(max_slots) if s not in used]
+
+        for eid in active_expert_ids:
+            if eid not in assigned:
+                if free_slots:
+                    assigned[eid] = free_slots.pop(0)
+                elif slot_map:
+                    evicted_eid, evicted_slot = slot_map.popitem(last=False)
+                    assigned[eid] = evicted_slot
+                else:
+                    raise RuntimeError(
+                        f"No free decode buffer slots for layer {layer_id}, "
+                        f"num_active={num_active}, max_slots={max_slots}"
+                    )
+
+        # Load misses from DRAM directly into buffer slots (no per-expert
+        # tensor allocation, no _pytorch_h2d_batch / _sparse_copy_batch)
+        for eid in active_expert_ids:
+            if eid not in slot_map:  # miss
+                slot = assigned[eid]
+                key = (layer_id, eid)
+                dram_weights = self.dram_store[key]
+                for name, dram_tensor in dram_weights.items():
+                    if name in buffers:
+                        buffers[name][slot].copy_(
+                            dram_tensor, non_blocking=True
+                        )
+
+        # Compact: swap data to sequential positions 0..num_active-1.
+        # Uses swap (3-way via temp slot) to avoid data loss.
+        # slot_to_eid tracks which expert is at each slot for O(1) lookup.
+        temp_slot = max_slots - 1
+        slot_to_eid = {s: e for e, s in assigned.items()}
+
+        for i in range(num_active):
+            eid = active_expert_ids[i]
+            src_slot = assigned[eid]
+            if src_slot == i:
+                continue
+            # Swap buf[i] and buf[src_slot] via temp
+            for name in weight_names:
+                buf = buffers[name]
+                buf[temp_slot].copy_(buf[i])
+                buf[i].copy_(buf[src_slot])
+                buf[src_slot].copy_(buf[temp_slot])
+            # Update mappings
+            other_eid = slot_to_eid.get(i)
+            assigned[eid] = i
+            slot_to_eid[i] = eid
+            if other_eid is not None:
+                assigned[other_eid] = src_slot
+                slot_to_eid[src_slot] = other_eid
+
+        # Update slot map: all active experts at sequential positions
+        slot_map.clear()
+        for i, eid in enumerate(active_expert_ids):
+            slot_map[eid] = i
+
+        # Return views into pre-allocated buffer
         result = {}
         for name in weight_names:
-            buf = buffers[name]
-            for i, eid in enumerate(active_expert_ids):
-                if eid in cache_hits:
-                    src = cache_hits[eid][name]
-                else:
-                    src = loaded[eid][name]
-                src.record_stream(current_stream)
-                buf[i].copy_(src)
-            result[name] = buf[:num_active]
+            result[name] = buffers[name][:num_active]
 
         return result
 
@@ -750,8 +796,9 @@ class ExpertWeightStore:
         """
         if is_prefill:
             self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
-            # Free decode buffers (not needed during prefill).
+            # Free decode buffers and slot maps (not needed during prefill).
             self._decode_buffers.clear()
+            self._decode_slot_maps.clear()
         else:
             self.hbm_cache_max_slots = self._decode_cache_slots
             # Clear prefill residue: unlimited-mode entries would otherwise
