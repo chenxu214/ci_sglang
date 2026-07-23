@@ -203,8 +203,19 @@ class DeepseekV2WeightLoaderMixin:
             futures = []
             params_dict = dict(self.named_parameters())
             weight_names = []
+            # MoE DRAM offload: force synchronous loading to avoid accumulating
+            # mmap-backed shard tensors in the futures list. Each shard's tensor
+            # is released immediately after copy_ to param, allowing
+            # drop_cache_after_load's DONTNEED to reclaim page cache.
+            # Without this, peak Host RAM = param(900G) + futures mmap(900G) ≈ 1.8T.
+            from sglang.srt.server_args import get_global_server_args
+            _force_sync = getattr(
+                get_global_server_args(), "moe_dram_offload", False
+            )
             for name, loaded_weight in weights:
                 use_async_loading = should_async_load(loaded_weight)
+                if _force_sync:
+                    use_async_loading = False
                 layer_id = get_layer_id(name)
                 if (
                     layer_id is not None
