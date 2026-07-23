@@ -1271,8 +1271,14 @@ class FusedMoE(torch.nn.Module):
 
             return forward_fuseep(self, hidden_states, topk_output)
 
-        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM
-        if self._dram_offload_enabled and self._expert_weight_store is not None:
+        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM.
+        # Skip when prefill prefetch has already set weights via
+        # wait_prefill_prefetch (_prefetched_buffers exists).
+        if (
+            self._dram_offload_enabled
+            and self._expert_weight_store is not None
+            and not hasattr(self, "_prefetched_buffers")
+        ):
             self._load_experts_on_demand(topk_output)
 
         if is_in_tc_piecewise_cuda_graph():
