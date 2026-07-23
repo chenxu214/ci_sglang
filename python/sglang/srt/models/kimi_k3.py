@@ -21,11 +21,8 @@ from sglang.srt.distributed import (
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.layers.attention.fla.fused_norm_gate import FusedRMSNormGated
-<<<<<<< HEAD
 from sglang.srt.layers.attention.fla.kda import fused_kda_gate
-=======
 from sglang.srt.layers.attention.vision import VisionAttention
->>>>>>> 7fe1a1aa9 (support image_url input)
 from sglang.srt.layers.communicator import AttentionInputs, get_attn_tp_context
 from sglang.srt.layers.conv import Conv2dLayer
 from sglang.srt.layers.dp_attention import is_dp_attention_enabled
