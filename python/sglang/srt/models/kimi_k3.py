@@ -940,13 +940,15 @@ class KimiLinearModel(nn.Module):
         # before the compute loop begins. The ExpertWeightStore (created by
         # --moe-dram-offload) handles the actual DRAM→HBM copy on its h2d_stream.
         if is_prefill and N > 0:
+            moe_count = 0
             for i in range(self.start_layer, self.end_layer):
                 layer = self.layers[i]
                 if not hasattr(layer, "block_sparse_moe"):
                     continue
-                if i - self.start_layer >= N:
+                if moe_count >= N:
                     break
                 layer.block_sparse_moe.start_prefill_prefetch()
+                moe_count += 1
 
         for i in range(self.start_layer, self.end_layer):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
