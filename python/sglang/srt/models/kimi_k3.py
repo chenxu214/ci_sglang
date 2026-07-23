@@ -201,10 +201,11 @@ class KimiMLP(nn.Module):
         if hidden_act == "situ":
             from sglang.srt.layers.activation import SituAndMul
 
-            self.act_fn = SituAndMul(
-                beta=activation_situ_beta,
-                linear_beta=activation_situ_linear_beta,
-            )
+            # self.act_fn = SituAndMul(
+            #     beta=activation_situ_beta,
+            #     linear_beta=activation_situ_linear_beta,
+            # )
+            self.act_fn = situ_and_mul
         elif hidden_act == "silu":
             from sglang.srt.layers.activation import SiluAndMul
 
