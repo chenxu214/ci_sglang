@@ -337,7 +337,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = act_fn(hidden_states, expert_tokens, 0)
+    hidden_states = act_fn(hidden_states, expert_tokens, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -425,7 +425,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         group_list=group_list,
         output_dtype=output_dtype,
     )
-    hidden_states = act_fn(hidden_states, group_list, 0)
+    hidden_states = act_fn(hidden_states, group_list, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
