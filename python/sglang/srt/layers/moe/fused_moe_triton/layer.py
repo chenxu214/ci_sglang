@@ -105,8 +105,17 @@ def _force_cpu_allocation():
     ``moe_dram_offload`` is enabled to avoid allocating all 80 layers'
     expert weights on HBM simultaneously (which causes OOM).
     """
-    _torch_fns = ["empty", "zeros", "ones", "randn", "rand", "full",
-                  "arange", "linspace", "tensor"]
+    _torch_fns = [
+        "empty",
+        "zeros",
+        "ones",
+        "randn",
+        "rand",
+        "full",
+        "arange",
+        "linspace",
+        "tensor",
+    ]
     _saved = {}
 
     def _make_patched(original_fn):
@@ -114,6 +123,7 @@ def _force_cpu_allocation():
             if "device" not in kwargs or kwargs["device"] is None:
                 kwargs["device"] = "cpu"
             return original_fn(*args, **kwargs)
+
         return _patched
 
     for name in _torch_fns:
@@ -1368,14 +1378,24 @@ class FusedMoE(torch.nn.Module):
     def _get_expert_weight_names(self) -> list:
         """Get the list of weight attribute names for this MoE layer."""
         names = []
-        for attr in ["w13_weight", "w2_weight",
-                      "w13_weight_scale", "w2_weight_scale",
-                      "w13_weight_scale_inv", "w2_weight_scale_inv",
-                      "w13_weight_scale_second", "w2_weight_scale_second",
-                      "w13_weight_offset", "w2_weight_offset",
-                      "w13_weight_offset_second", "w2_weight_offset_second",
-                      "w13_bias", "w2_bias",
-                      "w13_scale_bias", "w2_scale_bias"]:
+        for attr in [
+            "w13_weight",
+            "w2_weight",
+            "w13_weight_scale",
+            "w2_weight_scale",
+            "w13_weight_scale_inv",
+            "w2_weight_scale_inv",
+            "w13_weight_scale_second",
+            "w2_weight_scale_second",
+            "w13_weight_offset",
+            "w2_weight_offset",
+            "w13_weight_offset_second",
+            "w2_weight_offset_second",
+            "w13_bias",
+            "w2_bias",
+            "w13_scale_bias",
+            "w2_scale_bias",
+        ]:
             if hasattr(self, attr):
                 names.append(attr)
         return names
@@ -1420,6 +1440,7 @@ class FusedMoE(torch.nn.Module):
                 delattr(self, name)
 
         import gc
+
         gc.collect()
         if torch.npu.is_available():
             torch.npu.empty_cache()
@@ -1463,9 +1484,7 @@ class FusedMoE(torch.nn.Module):
         sample_key = (self.layer_id, local_expert_ids[0])
         if sample_key not in self._expert_weight_store.dram_store:
             return
-        weight_names = list(
-            self._expert_weight_store.dram_store[sample_key].keys()
-        )
+        weight_names = list(self._expert_weight_store.dram_store[sample_key].keys())
 
         # Ensure shared HBM buffers exist (one per weight name).
         # All MoE layers share the same buffer (reused across forwards).
@@ -1477,25 +1496,50 @@ class FusedMoE(torch.nn.Module):
             shared_buffers[name] = self._expert_weight_store.get_shared_hbm_buffer(
                 name, full_shape, dtype
             )
+
             setattr(self, name, shared_buffers[name])
 
-        # Batch H2D directly into shared buffers (avoids extra HBM→HBM copy)
+        if torch.npu.is_available():
+            alloc_before = torch.npu.memory_allocated() / 1024**3
+
+        # Batch H2D directly into shared buffers (avoids extra HBM→HBM copy).
         self._expert_weight_store.batch_load_to_shared_buffer(
             layer_id=self.layer_id,
             expert_ids=local_expert_ids,
             shared_buffers=shared_buffers,
         )
 
+        if torch.npu.is_available():
+            alloc_after = torch.npu.memory_allocated() / 1024**3
+            stats = self._expert_weight_store.get_stats()
+            logger.debug(
+                f"[FusedMoE] load_on_demand layer={self.layer_id}: "
+                f"{len(local_expert_ids)} experts, "
+                f"hit_rate={stats['hbm_hit_rate']:.0%}, "
+                f"cache={stats['hbm_cache_used_gb']:.1f} GB, "
+                f"prefetch(acc={stats['prefetch_accuracy']:.0%}, "
+                f"cov={stats['prefetch_coverage']:.0%}, "
+                f"n={stats['prefetch_measurements']}), "
+                f"eviction(waste={stats['eviction_waste_rate']:.0%}, "
+                f"total={stats['eviction_total']}), "
+                f"HBM {alloc_before:.2f}→{alloc_after:.2f} GB"
+            )
+
         # Async prefetch: predict next layer's experts using router logits
-        if hasattr(topk_output, "router_logits") and topk_output.router_logits is not None:
+        if (
+            hasattr(topk_output, "router_logits")
+            and topk_output.router_logits is not None
+        ):
             try:
                 router_logits = topk_output.router_logits
-                avg_logits = router_logits.mean(dim=0) if router_logits.dim() > 1 else router_logits
-                # k=min(8, num_local_experts) on NPU; CPU sync only for IDs
-                k = min(8, self.num_local_experts)
-                if avg_logits.shape[-1] < k:
-                    k = avg_logits.shape[-1]
-                _, prefetch_global_ids = torch.topk(avg_logits, k=k)
+                avg_logits = (
+                    router_logits.mean(dim=0)
+                    if router_logits.dim() > 1
+                    else router_logits
+                )
+                _, prefetch_global_ids = torch.topk(
+                    avg_logits, k=min(8, self.num_local_experts)
+                )
                 prefetch_local_ids = []
                 for gid in prefetch_global_ids.view(-1).cpu().tolist():
                     lid = self._map_global_expert_id_to_local_expert_id(gid)
@@ -1522,10 +1566,7 @@ class FusedMoE(torch.nn.Module):
         copy with layer L's compute. Call wait_prefill_prefetch() before
         the layer's forward to ensure the copy is complete.
         """
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-        ):
+        if not self._dram_offload_enabled or self._expert_weight_store is None:
             return
         log_info_on_rank0(
             logger,
@@ -1538,10 +1579,7 @@ class FusedMoE(torch.nn.Module):
 
     def wait_prefill_prefetch(self):
         """Block default stream until this layer's prefetch H2D copy completes."""
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-        ):
+        if not self._dram_offload_enabled or self._expert_weight_store is None:
             return
         log_info_on_rank0(
             logger,
@@ -1558,10 +1596,7 @@ class FusedMoE(torch.nn.Module):
 
         Caps HBM at ~(N+1) concurrent layers' worth of cached experts.
         """
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-        ):
+        if not self._dram_offload_enabled or self._expert_weight_store is None:
             return
         log_info_on_rank0(
             logger,
@@ -1571,10 +1606,7 @@ class FusedMoE(torch.nn.Module):
 
     def release_shared_buffers(self):
         """Release shared HBM buffers (called after prefill to reclaim memory)."""
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-        ):
+        if not self._dram_offload_enabled or self._expert_weight_store is None:
             return
         log_info_on_rank0(
             logger,
