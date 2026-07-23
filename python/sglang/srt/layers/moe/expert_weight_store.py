@@ -815,15 +815,16 @@ class ExpertWeightStore:
         return buffers
 
     def free_layer_buffers(self, buffers: Dict[str, torch.Tensor]):
-        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer."""
+        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer.
+
+        Only clears Python references; the caching allocator reclaims and
+        reuses the memory automatically. No gc.collect()/empty_cache() here
+        to avoid per-layer caching allocator overhead.
+        """
         if not buffers:
             return
         freed_mb = sum(t.nbytes for t in buffers.values()) / 1024**2
         buffers.clear()
-        import gc
-        gc.collect()
-        if torch.npu.is_available():
-            torch.npu.empty_cache()
         logger.info(
             f"[ExpertWeightStore] free_layer_buffers: freed {freed_mb:.1f} MB"
         )
