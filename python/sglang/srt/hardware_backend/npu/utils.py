@@ -17,6 +17,226 @@ _is_npu = is_npu()
 indexer_weight_stream = None
 gva_is_inited = False
 
+from typing import Optional
+
+import triton
+import triton.language as tl
+import triton.language.extra.cann.extension as al
+import triton.language.extra.cann.libdevice as libdevice
+
+from sgl_kernel_npu.utils.triton_utils import get_device_properties
+
+
+@triton.jit
+def _situ_and_mul_kernel(
+    x_ptr,
+    group_list_ptr,
+    out_ptr,
+    TOTAL_COLS: tl.constexpr,
+    HALF_COLS: tl.constexpr,
+    NUM_EXPERTS: tl.constexpr,
+    NUM_EXPERTS_ALGIN: tl.constexpr,
+    GROUP_LIST_TYPE: tl.constexpr,
+    NUM_CORES: tl.constexpr,
+    BETA: tl.constexpr,
+    INV_BETA: tl.constexpr,
+    DO_LINEAR_BETA: tl.constexpr,
+    LINEAR_BETA: tl.constexpr,
+    INV_LINEAR_BETA: tl.constexpr,
+):
+    # calc real total_rows (same as swiglu_quant)
+    if GROUP_LIST_TYPE == 0:  # cusum
+        total_rows = tl.load(group_list_ptr + NUM_EXPERTS).to(tl.int32)
+    else:
+        gl_offsets = tl.arange(0, NUM_EXPERTS_ALGIN)
+        gl_mask = gl_offsets < NUM_EXPERTS
+        group_list = tl.load(group_list_ptr + gl_offsets, gl_mask, other=0).to(tl.int32)
+        total_rows = tl.sum(group_list)
+
+    block_size = (total_rows - 1) // NUM_CORES + 1
+    pid = tl.program_id(0)
+    row_begin = pid * block_size
+    if row_begin >= total_rows:
+        return
+    row_end = tl.minimum((pid + 1) * block_size, total_rows)
+
+    for row_idx in range(row_begin, row_end):
+        # situ_and_mul
+        x_offsets = row_idx * TOTAL_COLS + tl.arange(0, TOTAL_COLS)
+        cur_x = tl.load(x_ptr + x_offsets).to(tl.float32)
+        gate = al.extract_slice(cur_x, offsets=(0,), sizes=(HALF_COLS,), strides=(1,))
+        up = al.extract_slice(
+            cur_x, offsets=(HALF_COLS,), sizes=(HALF_COLS,), strides=(1,)
+        )
+
+        # situ_a = beta * tanh(gate / beta) * sigmoid(gate). tl.tanh is
+        # unavailable on Ascend, so tanh uses the CANN libdevice lowering.
+        situ_a = BETA * libdevice.tanh(gate * INV_BETA) * tl.sigmoid(gate)
+        if DO_LINEAR_BETA:
+            up = LINEAR_BETA * libdevice.tanh(up * INV_LINEAR_BETA)
+        out = situ_a * up
+
+        # store out
+        o_offsets = row_idx * HALF_COLS + tl.arange(0, HALF_COLS)
+        tl.store(out_ptr + o_offsets, out.to(out_ptr.dtype.element_ty))
+
+
+def situ_and_mul(
+    x,
+    group_list,
+    group_list_type,
+    beta: float = 4.0,
+    linear_beta: Optional[float] = 25.0,
+):
+    """SituAndMul activation with MoE group_list.
+
+    Args:
+        x: ``[..., 2d]`` BF16 tensor (gate | up halves along the last dim).
+        group_list: per-expert token counts (count) or cumulative sum (cusum).
+        group_list_type: 0 = cusum, 1 = count.
+        beta: SituAndMul beta (soft-saturation bound on the gate path).
+        linear_beta: optional soft-saturation bound on the up path; ``None``
+            leaves ``up`` unchanged.
+
+    Returns:
+        ``[..., d]`` BF16 tensor; only the first ``sum(group_list)`` rows are
+        written (the rest are padding and left uninitialized).
+    """
+    # group_list_type must be 0 cusum or 1 count
+    if group_list_type not in (0, 1):
+        raise ValueError(f"group_list_type must be 0 or 1, but got {group_list_type}")
+    if x.shape[-1] % 2 != 0:
+        raise ValueError(f"x last dim must be even, but got {x.shape[-1]}")
+
+    x_2d = x.reshape(-1, x.shape[-1])
+    s, h = x_2d.shape
+    out = torch.empty((s, h // 2), dtype=x.dtype, device=x.device)
+    num_experts = group_list.shape[0]
+
+    # ub must be 32-byte aligned on npu
+    if group_list.dtype == torch.int64:
+        num_experts_algin = (num_experts + 7) // 8 * 8
+    elif group_list.dtype == torch.int32:
+        num_experts_algin = (num_experts + 15) // 16 * 16
+    else:
+        raise ValueError(
+            f"group_list dtype must be torch.int32 or torch.int64, "
+            f"but got {group_list.dtype}"
+        )
+
+    do_linear_beta = linear_beta is not None
+    linear_beta_v = linear_beta if do_linear_beta else 1.0
+
+    _, num_vectorcore = get_device_properties()
+    _situ_and_mul_kernel[(num_vectorcore,)](
+        x_2d,
+        group_list,
+        out,
+        TOTAL_COLS=h,
+        HALF_COLS=h // 2,
+        NUM_EXPERTS=num_experts,
+        NUM_EXPERTS_ALGIN=num_experts_algin,
+        GROUP_LIST_TYPE=group_list_type,
+        NUM_CORES=num_vectorcore,
+        BETA=beta,
+        INV_BETA=1.0 / beta,
+        DO_LINEAR_BETA=do_linear_beta,
+        LINEAR_BETA=linear_beta_v,
+        INV_LINEAR_BETA=(1.0 / linear_beta_v) if do_linear_beta else 1.0,
+        multibuffer=True,
+    )
+    return out.reshape(*x.shape[:-1], h // 2)
+
+
+@triton.jit
+def _apply_attn_res_kernel(
+    v_ptr,
+    score_weight_ptr,
+    out_ptr,
+    N: tl.constexpr,
+    H: tl.constexpr,
+    B: tl.constexpr,
+    EPS: tl.constexpr,
+    NUM_CORES: tl.constexpr,
+    NB: tl.constexpr,
+):
+    block_size = (N - 1) // NUM_CORES + 1
+    pid = tl.program_id(0)
+    tok0 = pid * block_size
+    if tok0 >= N:
+        return
+    tok1 = tl.minimum(tok0 + block_size, N)
+
+    cols = tl.arange(0, H)                                   # full-row (non-pow2 OK on Ascend)
+    s_idx = tl.arange(0, NB)                                 # padded stream-index block
+    w = tl.load(score_weight_ptr + cols).to(tl.float32)      # [H] score_weight, resident
+
+    for tok in range(tok0, tok1):
+        # ---- pass 1: per stream, one full-row load; MS + vw; score = rstd * vw ----
+        scores = tl.full([NB], -float("inf"), dtype=tl.float32)
+        for s in range(B + 1):
+            v = tl.load(v_ptr + tok * (B + 1) * H + s * H + cols).to(tl.float32)
+            ms = tl.sum(v * v) / H
+            rstd = tl.rsqrt(ms + EPS)
+            k = v * rstd  # normalize first (matches reference FP32 path exactly)
+            scores = tl.where(s_idx == s, tl.sum(k * w), scores)
+
+        # ---- softmax (manual: tl.max + tl.exp + tl.sum; tl.softmax unusable) ----
+        scores_max = tl.max(scores)
+        exp_scores = tl.exp(scores - scores_max)
+        weights = exp_scores / tl.sum(exp_scores)
+
+        # ---- pass 2: weighted sum of raw streams (full-row reload) ----
+        out = tl.zeros([H], dtype=tl.float32)
+        for s in range(B + 1):
+            v = tl.load(v_ptr + tok * (B + 1) * H + s * H + cols).to(tl.float32)
+            w_s = tl.sum(tl.where(s_idx == s, weights, 0.0))
+            out += w_s * v
+
+        tl.store(out_ptr + tok * H + cols, out.to(out_ptr.dtype.element_ty))
+
+
+def apply_attn_res(prefix_sum, block_residual, proj, norm):
+    """K3 learned attn-residual: softmax-mix B+1 residual streams per token.
+
+    Args:
+        prefix_sum: [N, H] BF16 (current running sum).
+        block_residual: [N, B, H] BF16 (B past block snapshots).
+        proj: nn.Linear(H, 1) — learned per-channel scoring projection.
+        norm: KimiRMSNorm-like — has .weight [H] and .variance_epsilon (float).
+
+    Returns:
+        [N, H] BF16 — the softmax-weighted mix of the B+1 streams.
+    """
+    N, H = prefix_sum.shape
+    B = block_residual.shape[1]
+    proj_w = proj.weight.squeeze(0)
+    norm_w = norm.weight
+    eps = norm.variance_epsilon
+    score_weight = (norm_w * proj_w).float()
+
+    # Cat into single [N, B+1, H] — kernel reads from one pointer
+    # (Triton-Ascend can't select between two different-source pointers in-kernel).
+    v = torch.cat([block_residual, prefix_sum.unsqueeze(1)], dim=1)
+
+    out = torch.empty((N, H), dtype=prefix_sum.dtype, device=prefix_sum.device)
+    NB = triton.next_power_of_2(B + 1)
+
+    _, num_vectorcore = get_device_properties()
+    _apply_attn_res_kernel[(num_vectorcore,)](
+        v,
+        score_weight,
+        out,
+        N=N,
+        H=H,
+        B=B,
+        EPS=eps,
+        NUM_CORES=num_vectorcore,
+        NB=NB,
+        multibuffer=True,
+    )
+    return out
+
 
 class NPUACLFormat(IntEnum):
     ACL_FORMAT_UNDEFINED = -1

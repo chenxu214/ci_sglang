@@ -52,6 +52,7 @@ from sglang.srt.models.transformers import maybe_prefix
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.utils import is_npu, make_layers
 from sglang.srt.utils.common import BumpAllocator, add_prefix, set_weight_attrs
+from sglang.srt.hardware_backend.npu.utils import situ_and_mul, apply_attn_res
 
 
 class _NoopRotaryEmbedding(nn.Module):
@@ -792,7 +793,7 @@ class KimiDecoderLayer(nn.Module):
             )
 
         if block_residual.shape[1] > 0:
-            hidden_states = _apply_attn_res(
+            hidden_states = apply_attn_res(
                 prefix_sum,
                 block_residual,
                 self.self_attention_res_proj,
@@ -814,7 +815,7 @@ class KimiDecoderLayer(nn.Module):
         )
         prefix_sum = hidden_states if prefix_sum is None else prefix_sum + hidden_states
 
-        hidden_states = _apply_attn_res(
+        hidden_states = apply_attn_res(
             prefix_sum,
             block_residual,
             self.mlp_res_proj,
@@ -985,7 +986,7 @@ class KimiLinearModel(nn.Module):
         else:
             if hidden_states.shape[0] != 0:
                 if self.use_attn_residuals:
-                    hidden_states = _apply_attn_res(
+                    hidden_states = apply_attn_res(
                         hidden_states,
                         residual,
                         self.output_attn_res_proj,
