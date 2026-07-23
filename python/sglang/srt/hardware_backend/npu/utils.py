@@ -21,7 +21,7 @@ from typing import Optional
 
 import triton
 import triton.language as tl
-import triton.backends.ascend.runtime  # REQUIRED: activates the Triton-Ascend autotune path
+# import triton.backends.ascend.runtime  # REQUIRED: activates the Triton-Ascend autotune path
 import triton.language.extra.cann.libdevice as libdevice
 
 from sgl_kernel_npu.utils.triton_utils import get_device_properties
@@ -76,9 +76,12 @@ def _situ_and_mul_kernel(
     # which is what keeps large d (e.g. 33792) within UB. gate = first half, up = second half.
     h_offs = tl.arange(0, BLOCK_H)
     for row_idx in range(row_begin, row_end):
-        gate_base = x_ptr + row_idx * TOTAL_COLS
-        up_base = x_ptr + row_idx * TOTAL_COLS + HALF_COLS
-        out_base = out_ptr + row_idx * HALF_COLS
+        # int64 row offset: row_idx * stride stays int32 by default on triton-ascend
+        # (no auto-promote), which overflows when N*d is large (e.g. N=32768, d=33792).
+        row_off = row_idx.to(tl.int64) * TOTAL_COLS
+        gate_base = x_ptr + row_off
+        up_base = x_ptr + row_off + HALF_COLS
+        out_base = out_ptr + row_idx.to(tl.int64) * HALF_COLS
         for h_start in range(0, HALF_COLS, BLOCK_H):
             h_idx = h_start + h_offs
             mask = h_idx < HALF_COLS
