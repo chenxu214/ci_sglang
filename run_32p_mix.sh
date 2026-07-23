@@ -29,7 +29,7 @@ export SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=64
 export HCCL_BUFFSIZE=4200
 export HCCL_OP_EXPANSION_MODE=AIV
 
-export PYTHONPATH=/home/zkk/sglang/python:$PYTHONPATH
+export PYTHONPATH=/home/l00890003/codes/sglang-4p/python:$PYTHONPATH
 
 D_IP=('192.168.25.209' '192.168.25.212' '192.168.25.216' '192.168.25.217')
 LOCAL_HOST1=`hostname -I|awk -F " " '{print$1}'`
@@ -89,3 +89,7 @@ python -m sglang.bench_serving \
   --disable-ignore-eos \
   --random-range-ratio 1 \
   --warmup-request 0
+
+curl -s --max-time 60 http://localhost:30000/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\": \"/home/weights/Kimi-K3-int4\", \"messages\": [{\"role\": \"user\", \"content\": \"The capital of France is"}], \"max_tokens\": 20, \"temperature\": 0}"
+curl -s --max-time 60 http://localhost:30000/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\": \"/home/weights/Kimi-K3-int4\", \"messages\": [{\"role\": \"user\", \"content\": \"The capital of France is"}], \"max_tokens\": 20, \"temperature\": 0}"
+for prompt in "1+1=" "The capital of France is" "Hello, how are you? I am"; do echo "=== prompt: $prompt ==="; ssh root@192.168.25.209 "docker exec sglang-zkk-B120 curl -s --max-time 120 http://localhost:30000/v1/completions -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\\"/home/weights/Kimi-K3-int4\\\", \\\"prompt\\\": \\\"$prompt\\\", \\\"max_tokens\\\": 5, \\\"temperature\\\": 0}\" 2>&1" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['text'])" 2>/dev/null || echo "FAILED"; done

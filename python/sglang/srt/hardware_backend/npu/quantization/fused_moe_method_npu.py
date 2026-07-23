@@ -487,6 +487,11 @@ class _NPUFusedMoEMethodBase(FusedMoEMethodBase):
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
     ):
         self.moe_runner_config = moe_runner_config
+        if self.moe_runner_config.activation == "situ":
+            self.act_fn = SituAndMul(
+                beta=self.moe_runner_config.activation_situ_beta,
+                linear_beta=self.moe_runner_config.activation_situ_linear_beta,
+            )
 
     def _maybe_apply_deepep(
         self,
@@ -945,11 +950,11 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
 
         # act_fn:
         if self.moe_runner_config.activation == "situ":
-            act_fn = SituAndMul(
-                beta=self.moe_runner_config.activation_situ_beta,
-                linear_beta=self.moe_runner_config.activation_situ_linear_beta,
-            )
-            hidden_states = act_fn(hidden_states)
+            # act_fn = SituAndMul(
+            #     beta=self.moe_runner_config.activation_situ_beta,
+            #     linear_beta=self.moe_runner_config.activation_situ_linear_beta,
+            # )
+            hidden_states = self.act_fn(hidden_states)
         else: 
             hidden_states = torch.ops.npu.npu_swiglu(hidden_states)
         hidden_states, activate_out_scale = torch.ops.npu.npu_dynamic_quant(hidden_states)
