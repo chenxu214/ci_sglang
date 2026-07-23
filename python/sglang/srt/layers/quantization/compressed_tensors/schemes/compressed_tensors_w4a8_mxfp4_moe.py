@@ -26,7 +26,7 @@ from sglang.srt.utils import next_power_of_2, set_weight_attrs
 
 import torch_npu
 
-from python.sglang.srt.layers.activation import SituAndMul
+from sglang.srt.layers.activation import SituAndMul
 
 logger = logging.getLogger(__name__)
 
