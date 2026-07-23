@@ -223,7 +223,6 @@ class ExpertWeightStore:
                 dram_tensor = self._offload.empty(
                     tensor.shape, dtype=tensor.dtype
                 )
-                dram_tensor.copy_(tensor.cpu())
             else:
                 # Fallback: PyTorch pinned memory
                 dram_tensor = torch.empty(
