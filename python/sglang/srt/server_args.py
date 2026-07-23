@@ -4356,7 +4356,10 @@ class ServerArgs:
             logger.info(
                 f"Using {self.attention_backend} as attention backend for {model_arch}."
             )
-        elif model_arch in ["KimiLinearForCausalLM"]:
+        elif model_arch in [
+            "KimiLinearForCausalLM",
+            "KimiK3ForConditionalGeneration",
+        ]:
             self._handle_mamba_radix_cache(model_arch=model_arch)
         elif model_arch in ["BailingMoeV2_5ForCausalLM"]:
             self._handle_mamba_radix_cache(model_arch=model_arch)
@@ -4574,6 +4577,8 @@ class ServerArgs:
             "GraniteMoeHybridForCausalLM",
             "NemotronHForCausalLM",
             "NemotronHPuzzleForCausalLM",
+            "KimiLinearForCausalLM",
+            "KimiK3ForConditionalGeneration",
         ]:
             return self.linear_attn_backend == "triton"
 

@@ -459,7 +459,7 @@ class TritonKDAKernel(LinearAttnKernelBase):
         dt_bias: Optional[torch.Tensor] = None,
         lower_bound: Optional[float] = None,
         **kwargs,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, None, Optional[torch.Tensor]]:
         # Early input check (before any kernel call)
         import os as _os_early
         if _os_early.getenv("SGLANG_KDA_DEBUG", "0") == "1" and A_log is not None:
@@ -486,7 +486,7 @@ class TritonKDAKernel(LinearAttnKernelBase):
                       f"g={list(g.shape)} beta={list(beta.shape)} "
                       f"seqlen={query_start_loc[-1].item() if query_start_loc is not None else '?'}",
                       file=_sys.stderr, flush=True)
-            return kda_extend_torch_native(
+            out = kda_extend_torch_native(
                 q=q, k=k, v=v, g=g, beta=beta,
                 scale=None,
                 initial_state=ssm_states,
@@ -496,6 +496,7 @@ class TritonKDAKernel(LinearAttnKernelBase):
                 use_qk_l2norm_in_kernel=True,
                 cu_seqlens=query_start_loc,
             )
+            return out, None, None
 
         # kimi_linear.py (212 version) already calls fused_kda_gate to activate
         # the gate before passing it here. So g is already the activated gate
@@ -508,7 +509,7 @@ class TritonKDAKernel(LinearAttnKernelBase):
         ssm_pre_triton = ssm_states.clone() if _kda_debug else None
         ssm_pre_nan = torch.isnan(ssm_states).any().item() if _kda_debug else False
 
-        out_triton = chunk_kda(
+        out_triton, last_recurrent_state, h = chunk_kda(
             q=q,
             k=k,
             v=v,
@@ -563,4 +564,4 @@ class TritonKDAKernel(LinearAttnKernelBase):
                   f"beta_min={beta.float().min().item():.4f} beta_max={beta.float().max().item():.4f}",
                   file=_sys.stderr, flush=True)
 
-        return out_triton
+        return out_triton, last_recurrent_state, h

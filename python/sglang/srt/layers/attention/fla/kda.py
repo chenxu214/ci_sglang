@@ -1193,8 +1193,8 @@ def chunk_kda_fwd(
         cu_seqlens=cu_seqlens,
         chunk_size=chunk_size,
     )
-    del Aqk, v_new, h
-    return o
+    del Aqk, v_new
+    return o, None, h
 
 
 def chunk_kda(
@@ -1217,7 +1217,7 @@ def chunk_kda(
         q = l2norm_fwd(q.contiguous())
         k = l2norm_fwd(k.contiguous())
 
-    o = chunk_kda_fwd(
+    o, last_recurrent_state, h = chunk_kda_fwd(
         q=q,
         k=k,
         v=v.contiguous(),
@@ -1228,7 +1228,7 @@ def chunk_kda(
         initial_state_indices=initial_state_indices,
         cu_seqlens=cu_seqlens,
     )
-    return o
+    return o, last_recurrent_state, h
 
 
 @triton.autotune(
