@@ -1,32 +1,17 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 import torch
+import torch_npu
 
-from sglang.srt.distributed import get_tp_group
-from sglang.srt.distributed.device_communicators.pynccl_allocator import (
-    use_symmetric_memory,
-)
-from sglang.srt.layers.dp_attention import is_allocation_symmetric
-from sglang.srt.layers.moe import MoeRunner, MoeRunnerBackend, MoeRunnerConfig
-from sglang.srt.layers.moe.utils import RoutingMethodType, get_moe_runner_backend
+from sglang.srt.layers.activation import SituAndMul
+from sglang.srt.layers.moe import MoeRunnerConfig
 from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     CompressedTensorsMoEScheme,
 )
-from sglang.srt.layers.quantization.fp8_utils import is_blackwell_supported
-from sglang.srt.layers.quantization.utils import (
-    prepare_static_weights_for_trtllm_fp4_moe,
-    reorder_w1w3_to_w3w1,
-    replace_parameter,
-    swizzle_blockscale,
-)
-from sglang.srt.utils import next_power_of_2, set_weight_attrs
-
-import torch_npu
-
-from python.sglang.srt.layers.activation import SituAndMul
+from sglang.srt.utils import set_weight_attrs
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +20,7 @@ __all__ = ["NPUCompressedTensorsW4A8mxfp4MoE"]
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.token_dispatcher import (
         CombineInput,
+        DispatchOutput,
         StandardDispatchOutput,
     )
 
@@ -143,17 +129,27 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
 
         if not _skip_nz_cast:
             layer.w13_weight.data = torch_npu.npu_format_cast(
-                layer.w13_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
+                layer.w13_weight.data,
+                29,
+                customize_dtype=torch.float8_e4m3fn,
+                input_dtype=torch_npu.float4_e2m1fn_x2,
             )
             layer.w2_weight.data = torch_npu.npu_format_cast(
-                layer.w2_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
+                layer.w2_weight.data,
+                29,
+                customize_dtype=torch.float8_e4m3fn,
+                input_dtype=torch_npu.float4_e2m1fn_x2,
             )
         layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
         layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
         g, n, k = layer.w13_weight_scale.shape
-        layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(g, n, k // 2, 2).transpose(-3, -2)
+        layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(
+            g, n, k // 2, 2
+        ).transpose(-3, -2)
         g, n, k = layer.w2_weight_scale.shape
-        layer.w2_weight_scale.data = layer.w2_weight_scale.data.reshape(g, n, k // 2, 2).transpose(-3, -2)
+        layer.w2_weight_scale.data = layer.w2_weight_scale.data.reshape(
+            g, n, k // 2, 2
+        ).transpose(-3, -2)
 
     def create_moe_runner(
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
@@ -170,7 +166,9 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         layer: torch.nn.Module,
         dispatch_output: StandardDispatchOutput,
     ) -> CombineInput:
-        combine_input = npu_apply_w4a8_mxfp4_moe_deepep(layer, dispatch_output, act_fn=self.act_fn)
+        combine_input = npu_apply_w4a8_mxfp4_moe_deepep(
+            layer, dispatch_output, act_fn=self.act_fn
+        )
         if combine_input is not None:
             return combine_input
 
@@ -367,9 +365,9 @@ def npu_fused_experts_w4a8_mxfp4_decode(
 
 def npu_apply_w4a8_mxfp4_moe_deepep(
     layer: torch.nn.Module,
-    dispatch_output: "DispatchOutput",
+    dispatch_output: DispatchOutput,
     act_fn: Callable = _npu_swiglu,
-) -> Optional["CombineInput"]:
+) -> Optional[CombineInput]:
     from sglang.srt.layers.moe.token_dispatcher import (
         DeepEPLLCombineInput,
         DeepEPNormalCombineInput,
@@ -457,8 +455,7 @@ def w4a8_mxfp4_gmm_npu(
 
     if input_scale is None:
         x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
-            input,
-            dst_type=torch_npu.float8_e4m3fn
+            input, dst_type=torch_npu.float8_e4m3fn
         )
     else:
         x, x_scale = input, input_scale
@@ -490,10 +487,7 @@ def w4a8_mxfp4_gmm_npu(
         # DRAM round-trip flattens to contiguous [E, K//2, N, 2] with
         # different memory layout. Permute back to [E, N, K//2, 2] C-order
         # then re-apply transpose to restore the non-contiguous state.
-        weight_scale = (
-            weight_scale.permute(0, 2, 1, 3).contiguous()
-            .transpose(-3, -2)
-        )
+        weight_scale = weight_scale.permute(0, 2, 1, 3).contiguous().transpose(-3, -2)
 
     return torch.ops.npu.npu_grouped_matmul(
         [x],

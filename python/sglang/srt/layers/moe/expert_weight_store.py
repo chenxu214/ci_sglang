@@ -394,6 +394,32 @@ class ExpertWeightStore:
             self._stats["dram_load"] += 1
             missing.append(key)
 
+        # --- Prefetch accuracy/coverage metrics ---
+        needed_set = set(e for e in expert_ids if (layer_id, e) in self.dram_store)
+        prefetch_set = self._prefetch_requests.get(layer_id, set())
+        if needed_set and prefetch_set:
+            hit = len(needed_set & prefetch_set)
+            accuracy = hit / len(prefetch_set)
+            coverage = hit / len(needed_set)
+
+            if layer_id not in self._prefetch_stats:
+                self._prefetch_stats[layer_id] = {
+                    "acc_sum": 0.0,
+                    "cov_sum": 0.0,
+                    "count": 0,
+                }
+            s = self._prefetch_stats[layer_id]
+            s["acc_sum"] += accuracy
+            s["cov_sum"] += coverage
+            s["count"] += 1
+
+            logger.info(
+                f"[ExpertWeightStore prefetch] layer={layer_id}: "
+                f"acc={hit}/{len(prefetch_set)} ({accuracy:.0%}), "
+                f"cov={hit}/{len(needed_set)} ({coverage:.0%})"
+            )
+        # -------------------------------------------
+
         if not missing:
             return results
 
