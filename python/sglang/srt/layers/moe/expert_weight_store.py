@@ -657,6 +657,15 @@ class ExpertWeightStore:
         lc = self._get_layer_cache(layer_id)
         weight_size = sum(t.nbytes for t in weights.values())
 
+        # Handle re-insertion (e.g., _sparse_copy_batch fallback to
+        # _pytorch_h2d_batch): remove old entry first to prevent
+        # false slot-count eviction and hbm_cache_used_bytes inflation.
+        if expert_id in lc:
+            old_weights = lc.pop(expert_id)
+            old_size = sum(t.nbytes for t in old_weights.values())
+            self.hbm_cache_used_bytes -= old_size
+            del old_weights
+
         # Per-layer slot-count eviction (decode LRU: 20 experts max per layer)
         if self.hbm_cache_max_slots > 0:
             while (
