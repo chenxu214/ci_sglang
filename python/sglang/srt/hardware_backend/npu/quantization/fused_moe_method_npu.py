@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import torch
 
+from python.sglang.srt.layers.moe.moe_runner.base import MoeRunnerConfig
 from sglang.srt.hardware_backend.npu.utils import npu_format_cast
 from sglang.srt.layers.quantization.base_config import FusedMoEMethodBase
 
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     )
     from sglang.srt.layers.quantization.base_config import QuantizationConfig
 
-from python.sglang.srt.layers.activation import SituAndMul
+from sglang.srt.layers.activation import SituAndMul
 
 def npu_fused_experts_w4a4(
     hidden_states: torch.Tensor,
