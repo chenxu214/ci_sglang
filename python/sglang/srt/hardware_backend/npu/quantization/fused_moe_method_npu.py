@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from sglang.srt.layers.quantization.base_config import QuantizationConfig
 
 from sglang.srt.layers.activation import SituAndMul
+from sglang.srt.hardware_backend.npu.utils import situ_and_mul
+
 
 def npu_fused_experts_w4a4(
     hidden_states: torch.Tensor,
@@ -488,10 +490,11 @@ class _NPUFusedMoEMethodBase(FusedMoEMethodBase):
     ):
         self.moe_runner_config = moe_runner_config
         if self.moe_runner_config.activation == "situ":
-            self.act_fn = SituAndMul(
-                beta=self.moe_runner_config.activation_situ_beta,
-                linear_beta=self.moe_runner_config.activation_situ_linear_beta,
-            )
+            self.act_fn = situ_and_mul
+            # self.act_fn = SituAndMul(
+            #     beta=self.moe_runner_config.activation_situ_beta,
+            #     linear_beta=self.moe_runner_config.activation_situ_linear_beta,
+            # )
 
     def _maybe_apply_deepep(
         self,
@@ -954,7 +957,7 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             #     beta=self.moe_runner_config.activation_situ_beta,
             #     linear_beta=self.moe_runner_config.activation_situ_linear_beta,
             # )
-            hidden_states = self.act_fn(hidden_states)
+            hidden_states = self.act_fn(hidden_states, expert_tokens, group_list_type)
         else: 
             hidden_states = torch.ops.npu.npu_swiglu(hidden_states)
         hidden_states, activate_out_scale = torch.ops.npu.npu_dynamic_quant(hidden_states)
@@ -1007,11 +1010,11 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             output_dtype=output_dtype,
         )[0]
         if self.moe_runner_config.activation == "situ":
-            act_fn = SituAndMul(
-                beta=self.moe_runner_config.activation_situ_beta,
-                linear_beta=self.moe_runner_config.activation_situ_linear_beta,
-            )
-            hidden_states = act_fn(hidden_states)
+            # act_fn = SituAndMul(
+            #     beta=self.moe_runner_config.activation_situ_beta,
+            #     linear_beta=self.moe_runner_config.activation_situ_linear_beta,
+            # )
+            hidden_states = situ_and_mul(hidden_states, group_list, group_list_type)
             hidden_states, activate_out_scale = torch.ops.npu.npu_dynamic_quant(hidden_states)
         else:
             hidden_states, activate_out_scale = swiglu_quant(

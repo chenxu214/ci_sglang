@@ -26,7 +26,8 @@ from sglang.srt.utils import next_power_of_2, set_weight_attrs
 
 import torch_npu
 
-from sglang.srt.layers.activation import SituAndMul
+from python.sglang.srt.layers.activation import SituAndMul
+from sglang.srt.hardware_backend.npu.utils import situ_and_mul
 
 logger = logging.getLogger(__name__)
 
@@ -152,10 +153,11 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
     ):
         self.moe_runner_config = moe_runner_config
         if self.moe_runner_config.activation == "situ":
-            self.act_fn = SituAndMul(
-                beta=self.moe_runner_config.activation_situ_beta,
-                linear_beta=self.moe_runner_config.activation_situ_linear_beta,
-            )
+            # self.act_fn = SituAndMul(
+            #     beta=self.moe_runner_config.activation_situ_beta,
+            #     linear_beta=self.moe_runner_config.activation_situ_linear_beta,
+            # )
+            self.act_fn = situ_and_mul
 
     def apply_weights(
         self,
@@ -267,7 +269,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = act_fn(hidden_states)
+    hidden_states = act_fn(hidden_states, expert_tokens, 0)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -335,7 +337,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = act_fn(hidden_states)
+    hidden_states = act_fn(hidden_states, expert_tokens, 0)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -423,7 +425,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         group_list=group_list,
         output_dtype=output_dtype,
     )
-    hidden_states = act_fn(hidden_states)
+    hidden_states = act_fn(hidden_states, group_list, 0)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
         input_scale=None,
