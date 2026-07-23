@@ -65,7 +65,6 @@ class ExpertWeightStore:
 
     def __init__(
         self,
-        hbm_cache_layers: int = 0,
         dram_pool_size_gb: float = 1300.0,
         use_acc_offload: bool = True,
     ):
@@ -74,9 +73,7 @@ class ExpertWeightStore:
         # Each layer has its own slot-count limit (20 for decode, unlimited
         # for prefill). This prevents cross-layer eviction during decode.
         self._per_layer_caches: Dict[int, OrderedDict] = {}
-        self.hbm_cache_size_bytes = 0  # Auto-calculated during warmup
         self.hbm_cache_used_bytes = 0
-        self.hbm_cache_layers = hbm_cache_layers
 
         # Slot-count limit for decode LRU (env-tunable). When > 0, evict by
         # entry count in addition to byte-size. Set to 0 (unlimited) during
@@ -677,17 +674,6 @@ class ExpertWeightStore:
                 self.hbm_cache_used_bytes -= evicted_size
                 del evicted_weights
 
-        # Global byte-size eviction (warmup-based; 0 = skip)
-        if self.hbm_cache_size_bytes > 0:
-            while (
-                self.hbm_cache_used_bytes + weight_size > self.hbm_cache_size_bytes
-                and len(lc) > 0
-            ):
-                evicted_eid, evicted_weights = lc.popitem(last=False)
-                evicted_size = sum(t.nbytes for t in evicted_weights.values())
-                self.hbm_cache_used_bytes -= evicted_size
-                del evicted_weights
-
         lc[expert_id] = weights
         self.hbm_cache_used_bytes += weight_size
 
@@ -825,78 +811,6 @@ class ExpertWeightStore:
                 f"released {evicted} experts, "
                 f"{freed_bytes / 1024**2:.1f} MB freed"
             )
-
-    def warmup_hbm_cache(self, num_layers: int = 0):
-        """Pre-populate HBM cache with experts from the first N layers.
-
-        Called after all expert weights are registered to DRAM. Loads
-        the first `num_layers` layers' experts into HBM cache so that
-        the initial forward passes have high cache hit rates.
-
-        Also auto-calculates the HBM cache size based on the number of
-        layers (with 20% headroom for on-demand loading of other layers).
-
-        Args:
-            num_layers: Number of layers to pre-load into HBM.
-                        0 means use self.hbm_cache_layers.
-        """
-        self._ensure_initialized()
-
-        if num_layers > 0:
-            self.hbm_cache_layers = num_layers
-
-        if self.hbm_cache_layers <= 0:
-            return
-
-        # Get sorted list of registered layers
-        sorted_layers = sorted(self._registered_layers)
-        layers_to_load = sorted_layers[: self.hbm_cache_layers]
-
-        if not layers_to_load:
-            return
-
-        # Auto-calculate HBM cache size from layer count
-        total_size = 0
-        for layer_id in layers_to_load:
-            for key, weights in self.dram_store.items():
-                if key[0] == layer_id:
-                    total_size += sum(t.nbytes for t in weights.values())
-        # Add 20% headroom for on-demand loading of other layers' experts
-        self.hbm_cache_size_bytes = int(total_size * 1.2)
-
-        alloc_before, reserved_before = _get_hbm_usage_gb()
-        logger.info(
-            f"[ExpertWeightStore] HBM cache sized: "
-            f"{self.hbm_cache_size_bytes / 1024**3:.1f} GB "
-            f"for {len(layers_to_load)} layers. "
-            f"HBM before warmup: alloc={alloc_before:.2f} GB, "
-            f"reserved={reserved_before:.2f} GB"
-        )
-
-        # Batch load all experts from the first N layers into HBM
-        loaded_count = 0
-        for layer_id in layers_to_load:
-            # Collect all expert IDs for this layer
-            expert_ids = [
-                key[1]
-                for key in self.dram_store.keys()
-                if key[0] == layer_id
-            ]
-            if not expert_ids:
-                continue
-
-            self.batch_get_expert_weights(layer_id, expert_ids)
-            loaded_count += len(expert_ids)
-
-        alloc_after, reserved_after = _get_hbm_usage_gb()
-        logger.info(
-            f"[ExpertWeightStore] Warmup complete: loaded {loaded_count} experts "
-            f"from {len(layers_to_load)} layers into HBM cache "
-            f"({self.hbm_cache_used_bytes / 1024**3:.1f} GB used). "
-            f"HBM after warmup: alloc={alloc_after:.2f} GB "
-            f"(+{alloc_after - alloc_before:.2f} GB), "
-            f"reserved={reserved_after:.2f} GB"
-        )
 
     def release_hbm_weights(self):
         """Release all HBM cached weights and shared buffers (free HBM memory)."""
