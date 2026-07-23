@@ -771,6 +771,39 @@ class ExpertWeightStore:
             f"reserved={reserved_after:.2f} GB"
         )
 
+    def release_shared_buffers(self):
+        """Free shared HBM buffers only (keep LRU cache intact).
+
+        Called after prefill to reclaim the 3.75 GB shared buffer.
+        Decode will lazily reallocate on first _load_experts_on_demand call.
+        """
+        shared_buffer_count = len(self._shared_hbm_buffers)
+        shared_buffer_bytes = sum(
+            t.nbytes for t in self._shared_hbm_buffers.values()
+        )
+
+        if shared_buffer_count == 0:
+            return
+
+        alloc_before, _ = _get_hbm_usage_gb()
+
+        self._shared_hbm_buffers.clear()
+        self._shared_buffer_shapes.clear()
+
+        import gc
+        gc.collect()
+        if torch.npu.is_available():
+            torch.npu.empty_cache()
+
+        alloc_after, _ = _get_hbm_usage_gb()
+        logger.info(
+            f"[ExpertWeightStore] release_shared_buffers: freed "
+            f"{shared_buffer_count} buffers "
+            f"({shared_buffer_bytes / 1024**2:.1f} MB). "
+            f"HBM alloc {alloc_before:.2f}→{alloc_after:.2f} GB "
+            f"(freed {alloc_before - alloc_after:.2f} GB)"
+        )
+
     def release_hbm_weights(self):
         """Release all HBM cached weights and shared buffers (free HBM memory)."""
         cache_count = sum(len(lc) for lc in self._per_layer_caches.values())
