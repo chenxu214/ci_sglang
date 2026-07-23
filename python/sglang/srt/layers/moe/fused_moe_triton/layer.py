@@ -1576,19 +1576,6 @@ class FusedMoE(torch.nn.Module):
             self._expert_weight_store.free_layer_buffers(self._prefetched_buffers)
             del self._prefetched_buffers
 
-    def release_shared_buffers(self):
-        """Release shared HBM buffers (called after prefill to reclaim memory)."""
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-        ):
-            return
-        log_info_on_rank0(
-            logger,
-            f"[FusedMoE] release_shared_buffers layer_id={self.layer_id}",
-        )
-        self._expert_weight_store.release_shared_buffers()
-
     @classmethod
     def make_expert_params_mapping(
         cls,

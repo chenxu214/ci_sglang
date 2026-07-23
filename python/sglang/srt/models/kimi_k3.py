@@ -301,10 +301,6 @@ class KimiMoE(nn.Module):
         if hasattr(self.experts, "free_prefill_cache"):
             self.experts.free_prefill_cache()
 
-    def release_shared_buffers(self):
-        if hasattr(self.experts, "release_shared_buffers"):
-            self.experts.release_shared_buffers()
-
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_size = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_size)
@@ -993,12 +989,6 @@ class KimiLinearModel(nn.Module):
                 # to cap HBM at ~(N+1) concurrent layers' worth of experts.
                 if is_prefill and moe is not None:
                     moe.free_prefill_cache()
-
-        if is_prefill:
-            for i in range(self.start_layer, self.end_layer):
-                layer = self.layers[i]
-                if hasattr(layer, "block_sparse_moe"):
-                    layer.block_sparse_moe.release_shared_buffers()
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(
