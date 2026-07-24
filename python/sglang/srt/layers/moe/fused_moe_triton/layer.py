@@ -1276,11 +1276,6 @@ class FusedMoE(torch.nn.Module):
         # wait_prefill_prefetch (_prefetched_buffers exists).
         # Skip during graph capture — .cpu() in _load_experts_on_demand
         # is not supported inside capture.
-        # Skip during W4A8 decode (hbm_cache_max_slots > 0) —
-        # build_active_weight_tensors in apply_weights will handle
-        # weight loading with compact extraction, making the full
-        # [num_experts, ...] temp buffer allocation + H2D copy here
-        # a complete waste (~2GB per layer per forward).
         if (
             self._dram_offload_enabled
             and self._expert_weight_store is not None
@@ -1289,7 +1284,6 @@ class FusedMoE(torch.nn.Module):
                 torch.npu.is_available()
                 and torch.npu.is_current_stream_capturing()
             )
-            and self._expert_weight_store.hbm_cache_max_slots == 0
         ):
             self._load_experts_on_demand(topk_output)
 
