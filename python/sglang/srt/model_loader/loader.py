@@ -846,25 +846,41 @@ class DefaultModelLoader(BaseModelLoader):
         if _dram_offload_enabled:
             from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
             use_acc_offload = getattr(_server_args, "moe_use_acc_offload", True)
+            skip_layers = getattr(_server_args, "moe_dram_offload_skip_layers", 0)
+            use_pool_for_storage = (skip_layers == 0)
             user_pool_gb = getattr(_server_args, "moe_dram_pool_size_gb", None)
             if user_pool_gb is not None:
                 dram_pool_gb = user_pool_gb
             else:
-                # Auto-calculate from module parameter shapes
+                # Auto-calculate from module parameter shapes, EXCLUDING
+                # skip layers (their weights stay in HBM).
                 total_moe_bytes = 0
                 for _, mod in model.named_modules():
                     if isinstance(mod, FusedMoE):
+                        if skip_layers > 0 and mod.layer_id < skip_layers:
+                            continue
                         for name in mod._get_expert_weight_names():
                             param = getattr(mod, name, None)
                             if param is not None:
                                 total_moe_bytes += param.data.numel() * param.data.element_size()
-                dram_pool_gb = (total_moe_bytes * 1.2) / (1024**3)
+                margin = 1.2 if use_pool_for_storage else 1.0
+                dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
+                logger.info(
+                    f"[MoE DRAM Offload] Auto-calculated pool size: "
+                    f"{dram_pool_gb:.1f} GB/rank "
+                    f"(MoE weights={total_moe_bytes / 1024**3:.1f} GB, "
+                    f"skip_layers={skip_layers}, margin={margin}x, "
+                    f"storage={'pool' if use_pool_for_storage else 'pinned'})"
+                )
             _expert_store = ExpertWeightStore(
                 dram_pool_size_gb=dram_pool_gb,
                 use_acc_offload=use_acc_offload,
+                use_pool_for_storage=use_pool_for_storage,
             )
+            # Enable DRAM offload only for non-skip layers.
+            # Skip layers keep weights in HBM (moe_dram_offload=False in __init__).
             for _, mod in model.named_modules():
-                if isinstance(mod, FusedMoE):
+                if isinstance(mod, FusedMoE) and getattr(mod, "moe_dram_offload", False):
                     mod.enable_dram_offload(_expert_store)
             logger.info(
                 f"[MoE DRAM Offload] Pre-enabled for FusedMoE modules. "
@@ -885,9 +901,13 @@ class DefaultModelLoader(BaseModelLoader):
 
                 # Immediately offload FusedMoE weights to DRAM after
                 # processing to free HBM for subsequent layers.
+                # Skip layers where moe_dram_offload=False (skip_layers
+                # keeps them in HBM with NZ format — offloading would
+                # fail on non-contiguous NZ tensors).
                 if (
                     _expert_store is not None
                     and isinstance(module, FusedMoE)
+                    and getattr(module, "moe_dram_offload", False)
                 ):
                     module.offload_expert_weights_to_dram()
                     import gc
