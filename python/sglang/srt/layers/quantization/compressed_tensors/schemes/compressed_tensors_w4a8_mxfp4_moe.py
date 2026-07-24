@@ -203,6 +203,63 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             else topk_ids.shape[1]
         )
 
+        # Decode DRAM offload: build compact [num_active, ...] weight tensors
+        # from DRAM via build_active_weight_tensors (avoids allocating the
+        # full [num_experts, ...] shared buffer). Uses torch.unique to remap
+        # topk_ids to compact indices.
+        if (
+            getattr(layer, "_dram_offload_enabled", False)
+            and layer._expert_weight_store is not None
+            and layer._expert_weight_store.hbm_cache_max_slots > 0
+        ):
+            unique_ids, inverse_indices = torch.unique(
+                topk_ids.view(-1), return_inverse=True
+            )
+            active_expert_ids = unique_ids.cpu().tolist()
+            if not isinstance(active_expert_ids, list):
+                active_expert_ids = [active_expert_ids]
+
+            if not active_expert_ids:
+                return StandardCombineInput(hidden_states=hidden_states)
+
+            # Filter to experts present in DRAM store (handles EP where
+            # some global IDs are not local)
+            active_expert_ids = [
+                eid for eid in active_expert_ids
+                if (layer.layer_id, eid) in layer._expert_weight_store.dram_store
+            ]
+            if not active_expert_ids:
+                return StandardCombineInput(hidden_states=hidden_states)
+
+            sample_key = (layer.layer_id, active_expert_ids[0])
+            weight_names = list(
+                layer._expert_weight_store.dram_store[sample_key].keys()
+            )
+            compact_weights = layer._expert_weight_store.build_active_weight_tensors(
+                layer.layer_id, active_expert_ids, weight_names
+            )
+
+            # Remap topk_ids to compact slot indices
+            eid_to_slot = {eid: i for i, eid in enumerate(active_expert_ids)}
+            remapped = topk_ids.view(-1).cpu().tolist()
+            remapped = torch.tensor(
+                [eid_to_slot.get(eid, 0) for eid in remapped],
+                dtype=torch.int32, device=topk_ids.device,
+            ).view_as(topk_ids)
+
+            output = npu_fused_experts_w4a8_mxfp4(
+                hidden_states,
+                compact_weights.get("w13_weight"),
+                compact_weights.get("w13_weight_scale"),
+                compact_weights.get("w2_weight"),
+                compact_weights.get("w2_weight_scale"),
+                topk_weights,
+                remapped,
+                top_k,
+                act_fn=self.act_fn,
+            )
+            return StandardCombineInput(hidden_states=output)
+
         w13 = layer.w13_weight
         w2 = layer.w2_weight
         w13_scale = layer.w13_weight_scale

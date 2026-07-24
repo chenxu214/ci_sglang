@@ -1278,6 +1278,7 @@ class FusedMoE(torch.nn.Module):
             self._dram_offload_enabled
             and self._expert_weight_store is not None
             and not hasattr(self, "_prefetched_buffers")
+            and self._expert_weight_store.hbm_cache_max_slots == 0
         ):
             self._load_experts_on_demand(topk_output)
 
