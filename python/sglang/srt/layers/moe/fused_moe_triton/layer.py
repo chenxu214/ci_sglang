@@ -1563,6 +1563,8 @@ class FusedMoE(torch.nn.Module):
         """Release this layer's prefetched HBM buffers after compute.
 
         Clears layer weight references and frees the per-layer buffers.
+        When N=0 (prefetch disabled), _load_experts_on_demand allocated
+        per-forward temp buffers — release those references too.
         """
         if (
             not self._dram_offload_enabled
@@ -1579,6 +1581,10 @@ class FusedMoE(torch.nn.Module):
                     setattr(self, name, None)
             self._expert_weight_store.free_layer_buffers(self._prefetched_buffers)
             del self._prefetched_buffers
+        else:
+            # N=0 prefill: _load_experts_on_demand set temp buffers.
+            # Release weight references so caching allocator can reuse HBM.
+            self._release_dram_offload_weights()
 
     @classmethod
     def make_expert_params_mapping(
