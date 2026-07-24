@@ -1544,6 +1544,27 @@ class FusedMoE(torch.nn.Module):
             f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id}",
         )
 
+    def release_decode_weight_refs(self):
+        """Release layer's references to decode buffer views before prefill.
+
+        During DeepEP decode, layer.w13_weight etc. point to views into
+        ExpertWeightStore._decode_buffers. When switching to prefill,
+        set_cache_mode clears _decode_buffers dict, but these view refs
+        keep the underlying tensors alive — all 93 layers' decode buffers
+        survive simultaneously, inflating prefill HBM peak.
+
+        This breaks those refs so the caching allocator can reclaim the
+        blocks for prefill's torch.empty allocations.
+        """
+        if (
+            not self._dram_offload_enabled
+            or self._expert_weight_store is None
+        ):
+            return
+        for name in self._get_expert_weight_names():
+            if hasattr(self, name):
+                setattr(self, name, None)
+
     def free_prefill_cache(self):
         """Release this layer's prefetched HBM buffers after compute.
 

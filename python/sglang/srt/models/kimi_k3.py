@@ -1053,6 +1053,42 @@ class KimiLinearModel(nn.Module):
         )
         # TODO: capture aux hidden states
         aux_hidden_states = []
+        is_prefill = forward_batch.forward_mode.is_prefill()
+        N = self._prefetch_layers if is_prefill else 0
+
+        # Toggle ExpertWeightStore LRU slot limit: unlimited during prefill
+        # (loads all 112 experts per layer), 20-slot LRU during decode.
+        # When switching to prefill, also release each MoE layer's references
+        # to decode buffer views so the underlying HBM blocks can be reused
+        # by prefill's torch.empty allocations (avoids ~93 layers of stale
+        # decode buffers inflating prefill HBM peak).
+        for i in range(self.start_layer, self.end_layer):
+            layer = self.layers[i]
+            if hasattr(layer, "block_sparse_moe"):
+                experts = layer.block_sparse_moe.experts
+                if (
+                    getattr(experts, "_dram_offload_enabled", False)
+                    and experts._expert_weight_store is not None
+                ):
+                    if is_prefill:
+                        experts.release_decode_weight_refs()
+                    experts._expert_weight_store.set_cache_mode(is_prefill)
+
+        # Prefill prefetch coordination: pre-trigger async H2D copy of the
+        # full expert set for the first N MoE layers so they start loading
+        # before the compute loop begins. The ExpertWeightStore (created by
+        # --moe-dram-offload) handles the actual DRAM→HBM copy on its h2d_stream.
+        if is_prefill and N > 0:
+            moe_count = 0
+            for i in range(self.start_layer, self.end_layer):
+                layer = self.layers[i]
+                if not hasattr(layer, "block_sparse_moe"):
+                    continue
+                if moe_count >= N:
+                    break
+                layer.block_sparse_moe.start_prefill_prefetch()
+                moe_count += 1
+
         for i in range(self.start_layer, self.end_layer):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
