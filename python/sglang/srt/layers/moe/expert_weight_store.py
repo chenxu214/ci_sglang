@@ -513,6 +513,7 @@ class ExpertWeightStore:
 
         # Assign slots: hits reuse old slot, misses get free/evicted slot
         assigned = {}  # {expert_id: slot_index}
+        miss_eids = []  # track misses separately (slot_map.pop removes hits)
         for eid in active_expert_ids:
             self._stats["total_requests"] += 1
             if eid in slot_map:
@@ -520,36 +521,37 @@ class ExpertWeightStore:
                 assigned[eid] = slot_map.pop(eid)
             else:
                 self._stats["dram_load"] += 1
+                miss_eids.append(eid)
 
-        # Find free slots for misses (not in current slot_map or assigned)
+        # Find free slots for misses (not in current slot_map or assigned).
+        # Exclude temp_slot (max_slots - 1): reserved as scratch space for
+        # the 3-way swap in compact phase. Never assign an expert to it.
         used = set(slot_map.values()) | set(assigned.values())
-        free_slots = [s for s in range(max_slots) if s not in used]
+        free_slots = [s for s in range(max_slots - 1) if s not in used]
 
-        for eid in active_expert_ids:
-            if eid not in assigned:
-                if free_slots:
-                    assigned[eid] = free_slots.pop(0)
-                elif slot_map:
-                    evicted_eid, evicted_slot = slot_map.popitem(last=False)
-                    assigned[eid] = evicted_slot
-                else:
-                    raise RuntimeError(
-                        f"No free decode buffer slots for layer {layer_id}, "
-                        f"num_active={num_active}, max_slots={max_slots}"
+        for eid in miss_eids:
+            if free_slots:
+                assigned[eid] = free_slots.pop(0)
+            elif slot_map:
+                evicted_eid, evicted_slot = slot_map.popitem(last=False)
+                assigned[eid] = evicted_slot
+            else:
+                raise RuntimeError(
+                    f"No free decode buffer slots for layer {layer_id}, "
+                    f"num_active={num_active}, max_slots={max_slots}"
+                )
+
+        # Load ONLY misses from DRAM into their assigned buffer slots.
+        # Hits already have correct data in their reused slots.
+        for eid in miss_eids:
+            slot = assigned[eid]
+            key = (layer_id, eid)
+            dram_weights = self.dram_store[key]
+            for name, dram_tensor in dram_weights.items():
+                if name in buffers:
+                    buffers[name][slot].copy_(
+                        dram_tensor, non_blocking=True
                     )
-
-        # Load misses from DRAM directly into buffer slots (no per-expert
-        # tensor allocation, no _pytorch_h2d_batch / _sparse_copy_batch)
-        for eid in active_expert_ids:
-            if eid not in slot_map:  # miss
-                slot = assigned[eid]
-                key = (layer_id, eid)
-                dram_weights = self.dram_store[key]
-                for name, dram_tensor in dram_weights.items():
-                    if name in buffers:
-                        buffers[name][slot].copy_(
-                            dram_tensor, non_blocking=True
-                        )
 
         # Compact: swap data to sequential positions 0..num_active-1.
         # Uses swap (3-way via temp slot) to avoid data loss.
