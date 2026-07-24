@@ -48,6 +48,7 @@ class ExpertWeightStore:
         self,
         dram_pool_size_gb: float = 1300.0,
         use_acc_offload: bool = True,
+        use_pool_for_storage: bool = True,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
         # Pre-allocated decode buffers: {layer_id: {name: [max_slots, ...]}}
@@ -75,6 +76,17 @@ class ExpertWeightStore:
         self._offload_initialized = False
         self._dram_pool_size_bytes = int(dram_pool_size_gb * 1024**3)
 
+        # Storage mode: when False (staging mode), weights are stored in
+        # pinned memory instead of the acc_offload pool. The pool is
+        # initialized with a small size (1 GB) only to enable the
+        # sparse_copy API for H2D transfers. This avoids pre-allocating
+        # the full pool while CPU tensors still exist, halving peak Host
+        # DRAM usage during the offload phase.
+        self._use_pool_for_storage = use_pool_for_storage
+        if not use_pool_for_storage:
+            # Override pool size to a small staging buffer for sparse_copy
+            self._dram_pool_size_bytes = 1 * 1024**3  # 1 GB
+
         # Track registered layers for warmup
         self._registered_layers: set = set()
 
@@ -93,7 +105,12 @@ class ExpertWeightStore:
             self._initialized = True
 
     def _init_acc_offload(self):
-        """Initialize MemFabric acc_offload DRAM pool."""
+        """Initialize MemFabric acc_offload DRAM pool.
+
+        In staging mode (_use_pool_for_storage=False), the pool is small
+        (1 GB) and used only to enable the sparse_copy API. Weights are
+        stored in pinned memory, not in the pool.
+        """
         try:
             from memfabric_hybrid import offload
 
@@ -104,8 +121,9 @@ class ExpertWeightStore:
             if ret == 0:
                 self._offload = offload
                 self._offload_initialized = True
+                mode = "staging" if not self._use_pool_for_storage else "full"
                 logger.info(
-                    f"[ExpertWeightStore] acc_offload initialized: "
+                    f"[ExpertWeightStore] acc_offload initialized ({mode} mode): "
                     f"device={config.device_id}, "
                     f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB"
                 )
@@ -162,13 +180,19 @@ class ExpertWeightStore:
                 ).contiguous()
                 tensor = tensor.cpu()
 
-            if self.use_acc_offload and self._offload_initialized:
-                # Allocate from acc_offload DRAM pool
+            if (
+                self._use_pool_for_storage
+                and self.use_acc_offload
+                and self._offload_initialized
+            ):
+                # Allocate from acc_offload DRAM pool (full mode)
                 dram_tensor = self._offload.empty(
                     tensor.shape, dtype=tensor.dtype
                 )
             else:
-                # Fallback: PyTorch pinned memory
+                # Staging mode or fallback: PyTorch pinned memory.
+                # Pinned memory enables async H2D via sparse_copy or
+                # non_blocking copy_.
                 dram_tensor = torch.empty(
                     tensor.shape, dtype=tensor.dtype, pin_memory=True
                 )

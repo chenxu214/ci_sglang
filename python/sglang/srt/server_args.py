@@ -2031,6 +2031,14 @@ class ServerArgs:
         "Offload MoE expert weights to Host DRAM. Only Top-K selected "
         "experts are loaded to HBM on demand during forward.",
     ] = False
+    moe_dram_offload_skip_layers: A[
+        int,
+        "Number of first MoE layers to keep in HBM (not offloaded to "
+        "Host DRAM). Their weights are allocated on HBM directly and "
+        "used without on-demand loading. Reduces Host DRAM requirement "
+        "at the cost of HBM. 0 = offload all layers (default). "
+        "Each layer uses ~2.2 GB/rank (TP=8, 896 experts).",
+    ] = 0
     moe_dram_pool_size_gb: A[
         Optional[float],
         "DRAM pool size (in GB) for MoE expert weights. If None, "
