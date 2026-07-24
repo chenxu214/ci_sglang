@@ -457,17 +457,25 @@ class KDAAttnBackend(MambaAttnBackendBase):
 
         conv_states = self._channel_first_conv_states(conv_states)
         if is_npu():
-            qkv, updated_conv_states = torch_causal_conv1d_update_npu(
-                mixed_qkv.unsqueeze(-1),
-                conv_states[cache_indices],
+            qkv = causal_conv1d_update(
+                mixed_qkv,
+                conv_states,
                 layer.conv_weights,
-                bias=layer.bias,
+                layer.bias,
                 activation="silu",
+                conv_state_indices=cache_indices,
             )
-            conv_states.index_copy_(
-                0, cache_indices, updated_conv_states.to(conv_states.dtype)
-            )
-            qkv = qkv.squeeze(-1)
+            # qkv, updated_conv_states = torch_causal_conv1d_update_npu(
+            #     mixed_qkv.unsqueeze(-1),
+            #     conv_states[cache_indices],
+            #     layer.conv_weights,
+            #     bias=layer.bias,
+            #     activation="silu",
+            # )
+            # conv_states.index_copy_(
+            #     0, cache_indices, updated_conv_states.to(conv_states.dtype)
+            # )
+            # qkv = qkv.squeeze(-1)
         else:
             qkv = causal_conv1d_update(
                 mixed_qkv,
