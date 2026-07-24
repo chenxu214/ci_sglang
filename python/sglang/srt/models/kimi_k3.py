@@ -980,10 +980,21 @@ class KimiLinearModel(nn.Module):
                     residual=residual,
                     zero_allocator=zero_allocator,
                 )
+                if is_prefill:
+                    log_info_on_rank0(
+                        logger,
+                        f"prefill layer {i} compute done",
+                    )
                 # After prefill compute, free this layer's HBM cache entries
                 # to cap HBM at ~(N+1) concurrent layers' worth of experts.
                 if is_prefill and moe is not None:
                     moe.free_prefill_cache()
+
+        log_info_on_rank0(
+            logger,
+            f"{'prefill' if is_prefill else 'decode'} all layers done "
+            f"(start={self.start_layer}, end={self.end_layer})",
+        )
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(

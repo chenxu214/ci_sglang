@@ -1540,7 +1540,7 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
-        log_debug_on_rank0(
+        log_info_on_rank0(
             logger,
             f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
             f"num_experts={self.num_local_experts}",
@@ -1556,14 +1556,14 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
-        log_debug_on_rank0(
+        log_info_on_rank0(
             logger,
             f"[FusedMoE] wait_prefill_prefetch start layer_id={self.layer_id}",
         )
         self._expert_weight_store.sync_prefetch()
         for name, tensor in self._prefetched_buffers.items():
             setattr(self, name, tensor)
-        log_debug_on_rank0(
+        log_info_on_rank0(
             logger,
             f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id}",
         )
@@ -1578,7 +1578,7 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
-        log_debug_on_rank0(
+        log_info_on_rank0(
             logger,
             f"[FusedMoE] free_prefill_cache layer_id={self.layer_id}",
         )
