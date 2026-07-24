@@ -14,6 +14,7 @@ from torch.nn.parameter import UninitializedParameter
 from sglang.srt.batch_overlap.single_batch_overlap import DownGemmOverlapArgs
 from sglang.srt.batch_overlap.two_batch_overlap import MaybeTboDeepEPDispatcher
 from sglang.srt.distributed import (
+    get_moe_ep_group,
     get_tp_group,
     tensor_model_parallel_all_reduce,
 )
@@ -147,9 +148,9 @@ def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig) -> BaseDispatcher:
     ):
         return MaybeTboDeepEPDispatcher(
             group=(
-                get_tp_group().device_group
+                get_moe_ep_group().device_group
                 if not a2a_backend.is_mori()
-                else get_tp_group()
+                else get_moe_ep_group()
             ),
             router_topk=moe_runner_config.top_k,
             permute_fusion=True,
