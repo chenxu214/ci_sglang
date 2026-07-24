@@ -1112,6 +1112,20 @@ class KimiLinearModel(nn.Module):
                 layer.block_sparse_moe.start_prefill_prefetch()
                 moe_count += 1
 
+        if is_prefill and N > 0:
+            print(f"[DEBUG] syncing h2d_stream before compute loop", flush=True)
+            for i in range(self.start_layer, self.end_layer):
+                layer = self.layers[i]
+                if hasattr(layer, "block_sparse_moe"):
+                    experts = layer.block_sparse_moe.experts
+                    if (
+                        getattr(experts, "_dram_offload_enabled", False)
+                        and experts._expert_weight_store is not None
+                    ):
+                        experts._expert_weight_store.sync_prefetch()
+                        break
+            print(f"[DEBUG] h2d_stream sync done", flush=True)
+
         print(f"[DEBUG] compute loop start, start_layer={self.start_layer}, end_layer={self.end_layer}, N={N}, is_prefill={is_prefill}", flush=True)
         for i in range(self.start_layer, self.end_layer):
             print(f"[DEBUG] layer {i} start", flush=True)
