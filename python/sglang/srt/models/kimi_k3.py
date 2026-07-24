@@ -1128,7 +1128,7 @@ class KimiLinearModel(nn.Module):
 
         print(f"[DEBUG] compute loop start, start_layer={self.start_layer}, end_layer={self.end_layer}, N={N}, is_prefill={is_prefill}", flush=True)
         for i in range(self.start_layer, self.end_layer):
-            print(f"[DEBUG] layer {i} start", flush=True)
+            print(f"[DEBUG] layer {i} start, stream={torch.npu.current_stream()}", flush=True)
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
                 layer = self.layers[i]
