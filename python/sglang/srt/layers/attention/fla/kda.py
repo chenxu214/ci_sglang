@@ -701,8 +701,8 @@ def recompute_w_u_fwd(
         triton.Config({"BK": BK, "BV": BV}, num_warps=num_warps, num_stages=num_stages)
         for BK in [64]
         for BV in [64]
-        for num_warps in [2, 4, 8]
-        for num_stages in [2, 3, 4]
+        for num_warps in [4]
+        for num_stages in [2]
     ],
     key=["BT", "IS_VARLEN"],
 )
