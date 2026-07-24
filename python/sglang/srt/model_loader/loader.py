@@ -833,20 +833,47 @@ class DefaultModelLoader(BaseModelLoader):
                 f"{memory_start - memory_end:.3f}",
             )
 
+        # Pre-create ExpertWeightStore and enable DRAM offload on all
+        # FusedMoE modules BEFORE process_weights_after_loading, so that
+        # each layer's weights can be offloaded to DRAM immediately after
+        # processing (freeing HBM for the next layer). With 93 layers ×
+        # 3.75 GB = 348 GB, keeping all in HBM causes OOM.
+        from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+        from sglang.srt.server_args import get_global_server_args
+        _server_args = get_global_server_args()
+        _dram_offload_enabled = getattr(_server_args, "moe_dram_offload", False)
+        _expert_store = None
+        if _dram_offload_enabled:
+            from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
+            use_acc_offload = getattr(_server_args, "moe_use_acc_offload", True)
+            user_pool_gb = getattr(_server_args, "moe_dram_pool_size_gb", None)
+            if user_pool_gb is not None:
+                dram_pool_gb = user_pool_gb
+            else:
+                # Auto-calculate from module parameter shapes
+                total_moe_bytes = 0
+                for _, mod in model.named_modules():
+                    if isinstance(mod, FusedMoE):
+                        for name in mod._get_expert_weight_names():
+                            param = getattr(mod, name, None)
+                            if param is not None:
+                                total_moe_bytes += param.data.numel() * param.data.element_size()
+                dram_pool_gb = (total_moe_bytes * 1.2) / (1024**3)
+            _expert_store = ExpertWeightStore(
+                dram_pool_size_gb=dram_pool_gb,
+                use_acc_offload=use_acc_offload,
+            )
+            for _, mod in model.named_modules():
+                if isinstance(mod, FusedMoE):
+                    mod.enable_dram_offload(_expert_store)
+            logger.info(
+                f"[MoE DRAM Offload] Pre-enabled for FusedMoE modules. "
+                f"DRAM pool: {dram_pool_gb:.1f} GB"
+            )
+
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
             if quant_method is not None:
-                # When quant methods need to process weights after loading
-                # (for repacking, quantizing, etc), they expect parameters
-                # to be on the global target device. This scope is for the
-                # case where cpu offloading is used, where we will move the
-                # parameters onto device for processing and back off after.
-                #
-                # Skip device_loading_context for FusedMoE when
-                # moe_dram_offload is enabled: weights are on CPU
-                # (via _force_cpu_allocation) and process_weights_after_loading
-                # skips NZ format cast, so it can run entirely on CPU.
-                # This avoids NPU→CPU round-trip and NZ format issues.
                 _skip_device_loading = getattr(
                     module, "moe_dram_offload", False
                 ) and "FusedMoE" in type(module).__name__
@@ -856,9 +883,27 @@ class DefaultModelLoader(BaseModelLoader):
                     with device_loading_context(module, target_device):
                         quant_method.process_weights_after_loading(module)
 
-        # MoE DRAM offload: after weight processing, copy expert weights
-        # to Host DRAM and enable on-demand loading
-        _maybe_enable_moe_dram_offload(model)
+                # Immediately offload FusedMoE weights to DRAM after
+                # processing to free HBM for subsequent layers.
+                if (
+                    _expert_store is not None
+                    and isinstance(module, FusedMoE)
+                ):
+                    module.offload_expert_weights_to_dram()
+                    import gc
+                    gc.collect()
+                    if torch.npu.is_available():
+                        torch.npu.empty_cache()
+
+        if _expert_store is not None:
+            dram_gb = _expert_store.get_dram_usage_gb()
+            moe_layer_count = sum(
+                1 for _, m in model.named_modules() if isinstance(m, FusedMoE)
+            )
+            logger.info(
+                f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
+                f"Total DRAM usage: {dram_gb:.1f} GB"
+            )
 
 
 def _maybe_enable_moe_dram_offload(model: nn.Module):
