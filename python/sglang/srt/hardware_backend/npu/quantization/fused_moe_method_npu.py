@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from sglang.srt.layers.quantization.base_config import QuantizationConfig
 
 from sglang.srt.layers.activation import SituAndMul
-from sglang.srt.hardware_backend.npu.utils import situ_and_mul, situ_and_mul_quant
+from sglang.srt.hardware_backend.npu.utils import situ_and_mul_quant
 
 
 def npu_fused_experts_w4a4(
