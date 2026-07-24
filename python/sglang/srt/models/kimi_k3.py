@@ -78,7 +78,14 @@ from sglang.srt.models.transformers import maybe_prefix
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import is_npu, make_layers
-from sglang.srt.utils.common import BumpAllocator, add_prefix, set_weight_attrs
+from sglang.srt.utils.common import (
+    BumpAllocator,
+    add_prefix,
+    get_int_env_var,
+    log_info_on_rank0,
+    log_debug_on_rank0,
+    set_weight_attrs,
+)
 from sglang.srt.hardware_backend.npu.utils import situ_and_mul, apply_attn_res
 
 logger = logging.getLogger(__name__)
@@ -326,6 +333,18 @@ class KimiMoE(nn.Module):
                     config, "activation_situ_linear_beta", None
                 ),
             )
+
+    def start_prefill_prefetch(self):
+        if hasattr(self.experts, "start_prefill_prefetch"):
+            self.experts.start_prefill_prefetch()
+
+    def wait_prefill_prefetch(self):
+        if hasattr(self.experts, "wait_prefill_prefetch"):
+            self.experts.wait_prefill_prefetch()
+
+    def free_prefill_cache(self):
+        if hasattr(self.experts, "free_prefill_cache"):
+            self.experts.free_prefill_cache()
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_size = hidden_states.shape
@@ -966,6 +985,13 @@ class KimiLinearModel(nn.Module):
 
         self.config = config
 
+        # Number of MoE layers to prefetch during prefill (env-tunable).
+        # Async H2D copy of the full expert set starts before the compute
+        # loop, overlapping with layer-0 compute.
+        self._prefetch_layers = get_int_env_var(
+            "SGLANG_KIMI_PREFETCH_LAYERS", 10
+        )
+
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.pp_group = get_pp_group()
@@ -1053,10 +1079,76 @@ class KimiLinearModel(nn.Module):
         )
         # TODO: capture aux hidden states
         aux_hidden_states = []
+        is_prefill = forward_batch.forward_mode.is_prefill()
+        N = self._prefetch_layers if is_prefill else 0
+
+        # Toggle ExpertWeightStore LRU slot limit: unlimited during prefill
+        # (loads all 112 experts per layer), 20-slot LRU during decode.
+        for i in range(self.start_layer, self.end_layer):
+            layer = self.layers[i]
+            if hasattr(layer, "block_sparse_moe"):
+                experts = layer.block_sparse_moe.experts
+                if (
+                    getattr(experts, "_dram_offload_enabled", False)
+                    and experts._expert_weight_store is not None
+                ):
+                    experts._expert_weight_store.set_cache_mode(is_prefill)
+
+        # Prefill prefetch coordination: pre-trigger async H2D copy of the
+        # full expert set for the first N MoE layers so they start loading
+        # before the compute loop begins. The ExpertWeightStore (created by
+        # --moe-dram-offload) handles the actual DRAM→HBM copy on its h2d_stream.
+        if is_prefill and N > 0:
+            # Release decode shared HBM buffers from ALL MoE layers before
+            # allocating prefill prefetch buffers. Without this, shared decode
+            # buffers (still referenced by layer weights) coexist with new
+            # prefetch buffers and cause OOM on the second prefill.
+            expert_store = None
+            for i in range(self.start_layer, self.end_layer):
+                layer = self.layers[i]
+                if not hasattr(layer, "block_sparse_moe"):
+                    continue
+                experts = layer.block_sparse_moe.experts
+                if getattr(experts, "_dram_offload_enabled", False):
+                    experts._release_dram_offload_weights()
+                    if expert_store is None:
+                        expert_store = experts._expert_weight_store
+            if expert_store is not None:
+                expert_store.release_decode_buffers()
+
+            moe_count = 0
+            for i in range(self.start_layer, self.end_layer):
+                layer = self.layers[i]
+                if not hasattr(layer, "block_sparse_moe"):
+                    continue
+                if moe_count >= N:
+                    break
+                layer.block_sparse_moe.start_prefill_prefetch()
+                moe_count += 1
+
         for i in range(self.start_layer, self.end_layer):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
                 layer = self.layers[i]
+                moe = (
+                    layer.block_sparse_moe
+                    if hasattr(layer, "block_sparse_moe")
+                    else None
+                )
+                if is_prefill and N > 0 and moe is not None:
+                    # Wait for this layer's prefetch to finish before compute.
+                    moe.wait_prefill_prefetch()
+                    # Trigger prefetch for layer i+N so its H2D copy overlaps
+                    # with this layer's compute.
+                    target_i = i + N
+                    if target_i < self.end_layer:
+                        target_moe = (
+                            self.layers[target_i].block_sparse_moe
+                            if hasattr(self.layers[target_i], "block_sparse_moe")
+                            else None
+                        )
+                        if target_moe is not None:
+                            target_moe.start_prefill_prefetch()
                 hidden_states, residual = layer(
                     positions=positions,
                     hidden_states=hidden_states,
@@ -1064,6 +1156,21 @@ class KimiLinearModel(nn.Module):
                     residual=residual,
                     zero_allocator=zero_allocator,
                 )
+                if is_prefill:
+                    log_debug_on_rank0(
+                        logger,
+                        f"prefill layer {i} compute done",
+                    )
+                # After prefill compute, free this layer's HBM cache entries
+                # to cap HBM at ~(N+1) concurrent layers' worth of experts.
+                if is_prefill and moe is not None:
+                    moe.free_prefill_cache()
+
+        log_debug_on_rank0(
+            logger,
+            f"{'prefill' if is_prefill else 'decode'} all layers done "
+            f"(start={self.start_layer}, end={self.end_layer})",
+        )
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(
