@@ -1500,31 +1500,6 @@ class FusedMoE(torch.nn.Module):
             shared_buffers=shared_buffers,
         )
 
-        # Async prefetch: predict next layer's experts using router logits
-        if hasattr(topk_output, "router_logits") and topk_output.router_logits is not None:
-            try:
-                router_logits = topk_output.router_logits
-                avg_logits = router_logits.mean(dim=0) if router_logits.dim() > 1 else router_logits
-                # k=min(8, num_local_experts) on NPU; CPU sync only for IDs
-                k = min(8, self.num_local_experts)
-                if avg_logits.shape[-1] < k:
-                    k = avg_logits.shape[-1]
-                _, prefetch_global_ids = torch.topk(avg_logits, k=k)
-                prefetch_local_ids = []
-                for gid in prefetch_global_ids.view(-1).cpu().tolist():
-                    lid = self._map_global_expert_id_to_local_expert_id(gid)
-                    if lid >= 0 and lid < self.num_local_experts:
-                        prefetch_local_ids.append(lid)
-                # Dedupe prefetch IDs to avoid redundant loads
-                prefetch_local_ids = list(set(prefetch_local_ids))
-                if prefetch_local_ids:
-                    self._expert_weight_store.async_prefetch(
-                        layer_id=self.layer_id + 1,
-                        expert_ids=prefetch_local_ids,
-                    )
-            except Exception:
-                pass  # Prefetch is best-effort
-
     # ------------------------------------------------------------------ #
     # Prefill full-layer prefetch wrappers (called by KimiLinearModel).
     # ------------------------------------------------------------------ #
