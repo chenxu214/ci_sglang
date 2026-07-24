@@ -78,7 +78,7 @@ from sglang.srt.models.transformers import maybe_prefix
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import is_npu, make_layers
-from sglang.srt.utils.common import BumpAllocator, add_prefix, set_weight_attrs
+from sglang.srt.utils.common import BumpAllocator, add_prefix, get_int_env_var, log_info_on_rank0, set_weight_attrs
 from sglang.srt.hardware_backend.npu.utils import situ_and_mul, apply_attn_res
 
 logger = logging.getLogger(__name__)
@@ -326,6 +326,26 @@ class KimiMoE(nn.Module):
                     config, "activation_situ_linear_beta", None
                 ),
             )
+
+    # ------------------------------------------------------------------ #
+    # Prefill prefetch delegation (called by KimiLinearModel).
+    # ------------------------------------------------------------------ #
+
+    def start_prefill_prefetch(self):
+        if hasattr(self.experts, "start_prefill_prefetch"):
+            self.experts.start_prefill_prefetch()
+
+    def wait_prefill_prefetch(self):
+        if hasattr(self.experts, "wait_prefill_prefetch"):
+            self.experts.wait_prefill_prefetch()
+
+    def free_prefill_cache(self):
+        if hasattr(self.experts, "free_prefill_cache"):
+            self.experts.free_prefill_cache()
+
+    def release_decode_weight_refs(self):
+        if hasattr(self.experts, "release_decode_weight_refs"):
+            self.experts.release_decode_weight_refs()
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_size = hidden_states.shape
@@ -981,6 +1001,9 @@ class KimiLinearModel(nn.Module):
             self.embed_tokens = PPMissingLayer()
 
         self.alt_stream = torch.cuda.Stream()
+        self._prefetch_layers = get_int_env_var(
+            "SGLANG_KIMI_PREFETCH_LAYERS", 10
+        )
 
         self.layers, self.start_layer, self.end_layer = make_layers(
             config.num_hidden_layers,
@@ -1093,6 +1116,22 @@ class KimiLinearModel(nn.Module):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
                 layer = self.layers[i]
+                moe = (
+                    layer.block_sparse_moe
+                    if hasattr(layer, "block_sparse_moe")
+                    else None
+                )
+                if is_prefill and N > 0 and moe is not None:
+                    moe.wait_prefill_prefetch()
+                    target_i = i + N
+                    if target_i < self.end_layer:
+                        target_moe = (
+                            self.layers[target_i].block_sparse_moe
+                            if hasattr(self.layers[target_i], "block_sparse_moe")
+                            else None
+                        )
+                        if target_moe is not None:
+                            target_moe.start_prefill_prefetch()
                 hidden_states, residual = layer(
                     positions=positions,
                     hidden_states=hidden_states,
@@ -1100,6 +1139,19 @@ class KimiLinearModel(nn.Module):
                     residual=residual,
                     zero_allocator=zero_allocator,
                 )
+                if is_prefill:
+                    log_info_on_rank0(
+                        logger,
+                        f"prefill layer {i} compute done",
+                    )
+                if is_prefill and N > 0 and moe is not None:
+                    moe.free_prefill_cache()
+
+        log_info_on_rank0(
+            logger,
+            f"{'prefill' if is_prefill else 'decode'} all layers done "
+            f"(start={self.start_layer}, end={self.end_layer})",
+        )
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(

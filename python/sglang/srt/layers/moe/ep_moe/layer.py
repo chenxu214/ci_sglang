@@ -152,6 +152,20 @@ class DeepEPMoE(FusedMoE):
         hidden_states: torch.Tensor,
         topk_output: TopKOutput,
     ):
+        # Fallback to FusedMoE._load_experts_on_demand when DRAM offload
+        # is enabled but prefill prefetch was not triggered (N=0).
+        # Prefill with N>0: _prefetched_buffers exists → skip (weights
+        # already set by wait_prefill_prefetch).
+        # Decode: hbm_cache_max_slots > 0 → skip (weights built by
+        # build_active_weight_tensors after dispatch).
+        if (
+            self._dram_offload_enabled
+            and self._expert_weight_store is not None
+            and not hasattr(self, "_prefetched_buffers")
+            and self._expert_weight_store.hbm_cache_max_slots == 0
+        ):
+            self._load_experts_on_demand(topk_output)
+
         if is_in_tc_piecewise_cuda_graph():
             assert TopKOutputChecker.format_is_standard(
                 topk_output
