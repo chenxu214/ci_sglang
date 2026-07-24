@@ -1121,6 +1121,11 @@ class KimiLinearModel(nn.Module):
                 layer = self.layers[i]
                 if not hasattr(layer, "block_sparse_moe"):
                     continue
+                # Skip layers in HBM (moe_dram_offload_skip_layers) —
+                # their weights are already on-device, no prefetch needed.
+                experts = layer.block_sparse_moe.experts
+                if not getattr(experts, "_dram_offload_enabled", False):
+                    continue
                 if moe_count >= N:
                     break
                 layer.block_sparse_moe.start_prefill_prefetch()

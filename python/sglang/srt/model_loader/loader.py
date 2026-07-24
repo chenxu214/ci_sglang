@@ -885,6 +885,14 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
     # 1300GB/rank would exceed physical DRAM on multi-rank nodes).
     use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
     user_pool_gb = getattr(server_args, "moe_dram_pool_size_gb", None)
+    skip_layers = getattr(server_args, "moe_dram_offload_skip_layers", 0)
+
+    # When skip_layers > 0, use staging mode: weights are stored in pinned
+    # memory (allocated per-layer) instead of a pre-allocated acc_offload
+    # pool. The acc_offload pool is small (1 GB) and used only to enable
+    # the sparse_copy API for H2D. This avoids the peak where all CPU
+    # tensors + the full pre-allocated pool coexist in Host DRAM.
+    use_pool_for_storage = (skip_layers == 0)
 
     if user_pool_gb is not None:
         dram_pool_gb = user_pool_gb
@@ -893,26 +901,34 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
             f"{dram_pool_gb:.1f} GB/rank"
         )
     else:
-        # Auto-calculate: sum all MoE expert weights on this rank.
-        # TP slicing means this is already total / world_size.
+        # Auto-calculate: sum MoE expert weights on this rank, EXCLUDING
+        # the first skip_layers (they stay in HBM, not offloaded to DRAM).
         total_moe_bytes = 0
         for _, module in model.named_modules():
             if isinstance(module, FusedMoE):
+                if skip_layers > 0 and module.layer_id < skip_layers:
+                    continue
                 for name in module._get_expert_weight_names():
                     param = getattr(module, name)
                     total_moe_bytes += param.data.numel() * param.data.element_size()
-        # 1.2x safety margin for fragmentation
-        dram_pool_gb = (total_moe_bytes * 1.2) / (1024**3)
+        # 1.2x safety margin for fragmentation (full mode only).
+        # In staging mode, pinned memory is allocated per-layer with no
+        # fragmentation overhead, so 1.0x suffices.
+        margin = 1.2 if use_pool_for_storage else 1.0
+        dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
         logger.info(
             f"[MoE DRAM Offload] Auto-calculated pool size: "
             f"{dram_pool_gb:.1f} GB/rank "
             f"(MoE weights={total_moe_bytes / 1024**3:.1f} GB, "
-            f"with 1.2x safety margin)"
+            f"skip_layers={skip_layers}, "
+            f"margin={margin}x, "
+            f"storage={'pool' if use_pool_for_storage else 'pinned'})"
         )
 
     expert_store = ExpertWeightStore(
         dram_pool_size_gb=dram_pool_gb,
         use_acc_offload=use_acc_offload,
+        use_pool_for_storage=use_pool_for_storage,
     )
 
     # Get HBM usage before offload starts
@@ -926,8 +942,13 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
     )
 
     moe_layer_count = 0
+    skipped_layer_count = 0
     for _, module in model.named_modules():
         if isinstance(module, FusedMoE):
+            if skip_layers > 0 and module.layer_id < skip_layers:
+                # Skip offload for first N layers — weights stay in HBM.
+                skipped_layer_count += 1
+                continue
             module.enable_dram_offload(expert_store)
             module.offload_expert_weights_to_dram()
             moe_layer_count += 1
@@ -935,7 +956,8 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
     if moe_layer_count > 0:
         dram_gb = expert_store.get_dram_usage_gb()
         logger.info(
-            f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
+            f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers"
+            f" (skipped {skipped_layer_count} layers to HBM). "
             f"Total DRAM usage: {dram_gb:.1f} GB"
         )
         # Release HBM memory used during offload registration.
