@@ -952,10 +952,16 @@ def safetensors_weights_iterator(
         position=tqdm._get_free_pos(),
     ):
         if disable_mmap:
+            # Read+close the file before deserialising, then drop the bytes
+            # buffer as soon as tensors exist. ``del result`` after the yield
+            # loop releases this shard's tensors before the next file loads.
             with open(st_file, "rb") as f:
-                result = safetensors.torch.load(f.read())
-                for name in sorted(result.keys()):
-                    yield name, result[name]
+                data = f.read()
+            result = safetensors.torch.load(data)
+            del data
+            for name in sorted(result.keys()):
+                yield name, result[name]
+            del result
         else:
             with safetensors.safe_open(st_file, framework="pt", device="cpu") as f:
                 for name in f.keys():
@@ -1032,8 +1038,13 @@ def multi_thread_safetensors_weights_iterator(
 
     def _load_file(st_file: str):
         if disable_mmap:
+            # Read file bytes and close the handle *before* deserialising so
+            # the fd is released early, then drop the bytes buffer right
+            # after the tensors are created (see buffered loader for detail).
             with open(st_file, "rb") as f:
-                result = safetensors.torch.load(f.read())
+                data = f.read()
+            result = safetensors.torch.load(data)
+            del data
         else:
             with safetensors.safe_open(st_file, framework="pt", device="cpu") as f:
                 result = {k: f.get_tensor(k) for k in f.keys()}
@@ -1087,8 +1098,14 @@ def buffered_multi_thread_safetensors_weights_iterator(
 
     def _load_file(st_file: str):
         if disable_mmap:
+            # Read file bytes and close the handle *before* deserialising so
+            # the fd is released early. ``del data`` drops the file-sized
+            # bytes buffer the moment the tensors exist, keeping per-shard
+            # DRAM peak at ~1x shard size instead of ~2x (bytes + tensors).
             with open(st_file, "rb") as f:
-                result = safetensors.torch.load(f.read())
+                data = f.read()
+            result = safetensors.torch.load(data)
+            del data
         else:
             with safetensors.safe_open(st_file, framework="pt", device="cpu") as f:
                 result = {k: f.get_tensor(k) for k in f.keys()}
