@@ -91,6 +91,10 @@ class ExpertWeightStore:
             "SGLANG_KIMI_DECODE_CACHE_SLOTS", 20
         )
         self.hbm_cache_max_slots = self._decode_cache_slots
+        # Decode mode flag: True during decode, False during prefill.
+        # Separate from hbm_cache_max_slots so that _decode_cache_slots=0
+        # (no caching) still enters the decode compact-tensor path.
+        self._is_decode_mode = False
 
         # Dedicated stream for H2D transfers (separate from compute stream)
         self._h2d_stream = None
@@ -458,16 +462,11 @@ class ExpertWeightStore:
     ) -> Dict[str, torch.Tensor]:
         """Build compact [num_active, ...] weight tensors for active experts.
 
-        Uses pre-allocated _decode_buffers as the sole storage (no separate
-        per-expert LRU tensors). A slot map (LRU of expert_id → slot_index)
-        tracks which expert is in which buffer slot for cache hits.
+        When _decode_cache_slots > 0: uses pre-allocated _decode_buffers
+        with LRU slot map for cache hits (HBM→HBM on hit, DRAM→HBM on miss).
 
-        Flow:
-          1. Assign slots: hits reuse old slot, misses get free/evicted slot
-          2. Load misses from DRAM directly into buffer slots (no per-expert
-             tensor allocation)
-          3. Compact: swap data to sequential positions 0..num_active-1
-          4. Update slot map: all active experts → their compacted positions
+        When _decode_cache_slots == 0: no caching, loads all active experts
+        from DRAM every step via torch.stack (no pre-allocated buffer).
 
         Args:
             layer_id: Layer index
@@ -480,6 +479,24 @@ class ExpertWeightStore:
         self._ensure_initialized()
 
         num_active = len(active_expert_ids)
+
+        # No-caching path: load all from DRAM, use torch.stack
+        if self._decode_cache_slots == 0:
+            tensors_by_name = {name: [] for name in weight_names}
+            for eid in active_expert_ids:
+                self._stats["total_requests"] += 1
+                self._stats["dram_load"] += 1
+                key = (layer_id, eid)
+                dram_weights = self.dram_store[key]
+                for name in weight_names:
+                    tensors_by_name[name].append(dram_weights[name])
+
+            result = {}
+            for name in weight_names:
+                result[name] = torch.stack(tensors_by_name[name], dim=0)
+            return result
+
+        # Cached path: pre-allocated buffers + LRU slot map
         max_slots = self._decode_cache_slots
 
         # Get or create decode buffers
@@ -802,21 +819,21 @@ class ExpertWeightStore:
     # ------------------------------------------------------------------ #
 
     def set_cache_mode(self, is_prefill: bool):
-        """Toggle between prefill (unlimited slots) and decode (20-slot LRU).
+        """Toggle between prefill and decode mode.
 
-        When switching to decode, clears any prefill LRU residue to prevent
-        stale entries and hbm_cache_used_bytes inflation.
+        _is_decode_mode is a separate flag from hbm_cache_max_slots so that
+        _decode_cache_slots=0 (no caching) still enters the decode path.
         """
         if is_prefill:
-            self.hbm_cache_max_slots = 0  # unlimited: prefill loads all experts
-            # Free decode buffers and slot maps (not needed during prefill).
+            self._is_decode_mode = False
+            self.hbm_cache_max_slots = 0
             self._decode_buffers.clear()
             self._decode_slot_maps.clear()
         else:
-            self.hbm_cache_max_slots = self._decode_cache_slots
-            # Clear prefill residue: unlimited-mode entries would otherwise
-            # coexist with decode's 20-slot LRU, inflating hbm_cache_used_bytes
-            # and triggering massive eviction on the first decode step.
+            self._is_decode_mode = True
+            # hbm_cache_max_slots >= 1 for decode mode detection.
+            # When _decode_cache_slots=0 (no caching), use 1 as sentinel.
+            self.hbm_cache_max_slots = max(self._decode_cache_slots, 1)
             self._per_layer_caches.clear()
             self.hbm_cache_used_bytes = 0
 
