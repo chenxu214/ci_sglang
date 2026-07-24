@@ -125,12 +125,13 @@ def _situ_and_mul_kernel(
     # total_rows: from group_list (routed MoE) or N_ROWS (dense / shared, no group_list).
     if HAS_GROUP_LIST:
         if GROUP_LIST_TYPE == 0:  # cusum
-            total_rows = tl.load(group_list_ptr + NUM_EXPERTS).to(tl.int32)
+            total_rows = tl.load(group_list_ptr + NUM_EXPERTS - 1).to(tl.int32)
         else:  # count
             gl_offsets = tl.arange(0, NUM_EXPERTS_ALGIN)
             gl_mask = gl_offsets < NUM_EXPERTS
             group_list = tl.load(group_list_ptr + gl_offsets, gl_mask, other=0).to(tl.int32)
             total_rows = tl.sum(group_list)
+        total_rows = tl.minimum(total_rows, N_ROWS)
     else:
         total_rows = N_ROWS
 
@@ -150,19 +151,20 @@ def _situ_and_mul_kernel(
         # int64 row offset: row_idx * stride stays int32 by default on triton-ascend
         # (no auto-promote), which overflows when N*d is large (e.g. N=32768, d=33792).
         row_off = row_idx.to(tl.int64) * TOTAL_COLS
-        gate_base = x_ptr + row_off
-        up_base = x_ptr + row_off + HALF_COLS
-        out_base = out_ptr + row_idx.to(tl.int64) * HALF_COLS
+        # gate_base = x_ptr + row_off
+        # up_base = x_ptr + row_off + HALF_COLS
+        # out_base = out_ptr + row_idx.to(tl.int64) * HALF_COLS
+        out_off = row_idx.to(tl.int64) * HALF_COLS
         for h_start in range(0, HALF_COLS, BLOCK_H):
             h_idx = h_start + h_offs
             mask = h_idx < HALF_COLS
-            gate = tl.load(gate_base + h_idx, mask=mask, other=0.0).to(tl.float32)
-            up = tl.load(up_base + h_idx, mask=mask, other=0.0).to(tl.float32)
+            gate = tl.load(x_ptr + row_off + h_idx, mask=mask, other=0.0).to(tl.float32)
+            up = tl.load(x_ptr + row_off + HALF_COLS + h_idx, mask=mask, other=0.0).to(tl.float32)
             situ_a = BETA * libdevice.tanh(gate * INV_BETA) * tl.sigmoid(gate)
             if DO_LINEAR_BETA:
                 up = LINEAR_BETA * libdevice.tanh(up * INV_LINEAR_BETA)
             out = situ_a * up
-            tl.store(out_base + h_idx, out.to(out_ptr.dtype.element_ty), mask=mask)
+            tl.store(out_ptr + out_off + h_idx, out.to(out_ptr.dtype.element_ty), mask=mask)
 
 
 def situ_and_mul_quant(
