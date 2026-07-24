@@ -1274,10 +1274,16 @@ class FusedMoE(torch.nn.Module):
         # MoE DRAM offload: load Top-K experts from Host DRAM to HBM.
         # Skip when prefill prefetch has already set weights via
         # wait_prefill_prefetch (_prefetched_buffers exists).
+        # Skip during graph capture — .cpu() in _load_experts_on_demand
+        # is not supported inside capture.
         if (
             self._dram_offload_enabled
             and self._expert_weight_store is not None
             and not hasattr(self, "_prefetched_buffers")
+            and not (
+                torch.npu.is_available()
+                and torch.npu.is_current_stream_capturing()
+            )
         ):
             self._load_experts_on_demand(topk_output)
 
@@ -1443,7 +1449,7 @@ class FusedMoE(torch.nn.Module):
         )
 
     def _load_experts_on_demand(self, topk_output: TopKOutput):
-        """Load Top-K selected experts from DRAM directly into shared HBM buffer."""
+        """Load Top-K selected experts from DRAM into a per-forward HBM buffer."""
         if not hasattr(topk_output, "topk_ids") or topk_output.topk_ids is None:
             return
 
@@ -1473,60 +1479,45 @@ class FusedMoE(torch.nn.Module):
             self._expert_weight_store.dram_store[sample_key].keys()
         )
 
-        # Ensure shared HBM buffers exist (one per weight name).
-        # All MoE layers share the same buffer (reused across forwards).
-        # If budget is exceeded, get_shared_hbm_buffer returns None and
-        # we fall back to a temporary per-forward allocation.
+        # Allocate per-forward temporary HBM buffers (one per weight name).
+        # These are released by the caching allocator after the forward.
+        target_device = "npu" if torch.npu.is_available() else "cpu"
         shared_buffers = {}
         for name in weight_names:
             sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
             full_shape = (self.num_local_experts,) + sample_tensor.shape
-            dtype = sample_tensor.dtype
-            buf = self._expert_weight_store.get_shared_hbm_buffer(
-                name, full_shape, dtype
+            buf = torch.empty(
+                full_shape, dtype=sample_tensor.dtype, device=target_device
             )
-            if buf is None:
-                # Budget exceeded: allocate temporary (non-cached) buffer.
-                target_device = "npu" if torch.npu.is_available() else "cpu"
-                buf = torch.empty(full_shape, dtype=dtype, device=target_device)
             shared_buffers[name] = buf
             setattr(self, name, buf)
 
-        # Batch H2D directly into shared buffers (avoids extra HBM→HBM copy)
+        # Batch H2D directly into buffers (avoids extra HBM→HBM copy)
         self._expert_weight_store.batch_load_to_shared_buffer(
             layer_id=self.layer_id,
             expert_ids=local_expert_ids,
             shared_buffers=shared_buffers,
         )
 
-        # Async prefetch: predict next layer's experts using router logits
-        if hasattr(topk_output, "router_logits") and topk_output.router_logits is not None:
-            try:
-                router_logits = topk_output.router_logits
-                avg_logits = router_logits.mean(dim=0) if router_logits.dim() > 1 else router_logits
-                # k=min(8, num_local_experts) on NPU; CPU sync only for IDs
-                k = min(8, self.num_local_experts)
-                if avg_logits.shape[-1] < k:
-                    k = avg_logits.shape[-1]
-                _, prefetch_global_ids = torch.topk(avg_logits, k=k)
-                prefetch_local_ids = []
-                for gid in prefetch_global_ids.view(-1).cpu().tolist():
-                    lid = self._map_global_expert_id_to_local_expert_id(gid)
-                    if lid >= 0 and lid < self.num_local_experts:
-                        prefetch_local_ids.append(lid)
-                # Dedupe prefetch IDs to avoid redundant loads
-                prefetch_local_ids = list(set(prefetch_local_ids))
-                if prefetch_local_ids:
-                    self._expert_weight_store.async_prefetch(
-                        layer_id=self.layer_id + 1,
-                        expert_ids=prefetch_local_ids,
-                    )
-            except Exception:
-                pass  # Prefetch is best-effort
-
     # ------------------------------------------------------------------ #
     # Prefill full-layer prefetch wrappers (called by KimiLinearModel).
     # ------------------------------------------------------------------ #
+
+    def _release_dram_offload_weights(self):
+        """Release weight tensor references to free shared HBM buffers.
+
+        Sets all weight attributes to None so that shared decode buffers
+        (referenced by all MoE layers) can be garbage collected before
+        prefill prefetch allocates new standalone buffers.
+        """
+        if not self._dram_offload_enabled or self._expert_weight_store is None:
+            return
+        sample_key = (self.layer_id, 0)
+        store = self._expert_weight_store
+        if sample_key in store.dram_store:
+            for name in store.dram_store[sample_key].keys():
+                if hasattr(self, name):
+                    setattr(self, name, None)
 
     def start_prefill_prefetch(self):
         """Async prefetch ALL local experts for this layer into per-layer HBM buffers.

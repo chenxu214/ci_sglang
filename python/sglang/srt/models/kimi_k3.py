@@ -55,6 +55,7 @@ from sglang.srt.utils.common import (
     add_prefix,
     get_int_env_var,
     log_info_on_rank0,
+    log_debug_on_rank0,
     set_weight_attrs,
 )
 
@@ -940,6 +941,23 @@ class KimiLinearModel(nn.Module):
         # before the compute loop begins. The ExpertWeightStore (created by
         # --moe-dram-offload) handles the actual DRAM→HBM copy on its h2d_stream.
         if is_prefill and N > 0:
+            # Release decode shared HBM buffers from ALL MoE layers before
+            # allocating prefill prefetch buffers. Without this, shared decode
+            # buffers (still referenced by layer weights) coexist with new
+            # prefetch buffers and cause OOM on the second prefill.
+            expert_store = None
+            for i in range(self.start_layer, self.end_layer):
+                layer = self.layers[i]
+                if not hasattr(layer, "block_sparse_moe"):
+                    continue
+                experts = layer.block_sparse_moe.experts
+                if getattr(experts, "_dram_offload_enabled", False):
+                    experts._release_dram_offload_weights()
+                    if expert_store is None:
+                        expert_store = experts._expert_weight_store
+            if expert_store is not None:
+                expert_store.release_decode_buffers()
+
             moe_count = 0
             for i in range(self.start_layer, self.end_layer):
                 layer = self.layers[i]
@@ -981,7 +999,7 @@ class KimiLinearModel(nn.Module):
                     zero_allocator=zero_allocator,
                 )
                 if is_prefill:
-                    log_info_on_rank0(
+                    log_debug_on_rank0(
                         logger,
                         f"prefill layer {i} compute done",
                     )
@@ -990,7 +1008,7 @@ class KimiLinearModel(nn.Module):
                 if is_prefill and moe is not None:
                     moe.free_prefill_cache()
 
-        log_info_on_rank0(
+        log_debug_on_rank0(
             logger,
             f"{'prefill' if is_prefill else 'decode'} all layers done "
             f"(start={self.start_layer}, end={self.end_layer})",
