@@ -2024,6 +2024,39 @@ class ServerArgs:
     offload_mode: A[str, "Mode of offloading."] = "cpu"
 
     # -------------------------------------------------------------------------
+    # MoE DRAM Offload
+    # -------------------------------------------------------------------------
+    moe_dram_offload: A[
+        bool,
+        "Offload MoE expert weights to Host DRAM. Only Top-K selected "
+        "experts are loaded to HBM on demand during forward.",
+    ] = False
+    moe_dram_pool_size_gb: A[
+        Optional[float],
+        "DRAM pool size (in GB) for MoE expert weights. If None, "
+        "auto-calculated from actual MoE weight sizes on this rank "
+        "(TP slicing already gives total/world_size per rank). "
+        "Must be large enough to hold all expert weights and backed "
+        "by physical memory (do NOT over-allocate).",
+    ] = None
+    moe_use_acc_offload: A[
+        bool,
+        "Use MemFabric acc_offload (AICore AIV kernel with MTE engine) "
+        "for batch sparse copy from DRAM to HBM. Falls back to PyTorch "
+        "H2D if memfabric_hybrid is not available. Defaults to True.",
+    ] = True
+    moe_shared_buffer_max_gb: A[
+        float,
+        "Maximum total HBM (in GB) for cached shared expert buffers across "
+        "all MoE layers. 0 (default) disables shared buffers entirely — all "
+        "layers use per-forward allocation (lowest HBM footprint, higher "
+        "allocation cost). Set to a positive value to enable cross-forward "
+        "buffer caching up to the budget; layers exceeding the budget fall "
+        "back to per-forward allocation. Useful when DeepEP caches all "
+        "experts and HBM would overflow.",
+    ] = 0
+
+    # -------------------------------------------------------------------------
     # Cuda graphs
     # -------------------------------------------------------------------------
     cuda_graph_config: A[

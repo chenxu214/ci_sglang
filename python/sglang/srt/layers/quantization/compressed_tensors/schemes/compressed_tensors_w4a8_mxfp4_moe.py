@@ -135,14 +135,37 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         )
         delattr(layer, "w2_weight_packed")
 
-        layer.w13_weight.data = torch_npu.npu_format_cast(
-            layer.w13_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
-        )
-        layer.w2_weight.data = torch_npu.npu_format_cast(
-            layer.w2_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
-        )
-        layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
-        layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
+        # Skip NZ format cast when MoE DRAM offload is enabled.
+        # NZ format is incompatible with CPU round-trip (clone/copy_/
+        # npu_format_cast(→0) all fail on internal format). For offload,
+        # weights are stored in ND format and converted to NZ at forward
+        # time in w4a8_mxfp4_gmm_npu (is_contiguous() check).
+        _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
+
+        # If weights are on CPU (DRAM offload with _force_cpu_allocation),
+        # move to NPU first — npu_format_cast requires NPU backend.
+        if not _skip_nz_cast:
+            if layer.w13_weight.data.device.type == "cpu":
+                layer.w13_weight.data = layer.w13_weight.data.npu()
+                layer.w2_weight.data = layer.w2_weight.data.npu()
+            if layer.w13_weight_scale.data.device.type == "cpu":
+                layer.w13_weight_scale.data = layer.w13_weight_scale.data.npu()
+                layer.w2_weight_scale.data = layer.w2_weight_scale.data.npu()
+
+            layer.w13_weight.data = torch_npu.npu_format_cast(
+                layer.w13_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
+            )
+            layer.w2_weight.data = torch_npu.npu_format_cast(
+                layer.w2_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2
+            )
+            layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
+            layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
+        else:
+            # ND format: just transpose for offload storage.
+            # Forward will convert to NZ via is_contiguous() check.
+            layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2).contiguous()
+            layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2).contiguous()
+
         g, n, k = layer.w13_weight_scale.shape
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(g, n, k // 2, 2).transpose(-3, -2)
         g, n, k = layer.w2_weight_scale.shape
@@ -179,12 +202,32 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             if self.moe_runner_config is not None
             else topk_ids.shape[1]
         )
+
+        w13 = layer.w13_weight
+        w2 = layer.w2_weight
+        w13_scale = layer.w13_weight_scale
+        w2_scale = layer.w2_weight_scale
+
+        # DRAM offload path: weights are ND (contiguous). Extract only the
+        # selected experts before NZ conversion to avoid converting the
+        # entire [num_experts, ...] tensor (which doubles HBM and causes
+        # OOM). Non-offload path has NZ weights (non-contiguous) → skipped.
+        if w13.is_contiguous():
+            unique_ids, inverse_indices = torch.unique(
+                topk_ids, return_inverse=True
+            )
+            w13 = w13[unique_ids]
+            w2 = w2[unique_ids]
+            w13_scale = w13_scale[unique_ids]
+            w2_scale = w2_scale[unique_ids]
+            topk_ids = inverse_indices.to(torch.int32).view_as(topk_ids)
+
         output = npu_fused_experts_w4a8_mxfp4(
             hidden_states,
-            layer.w13_weight,
-            layer.w13_weight_scale,
-            layer.w2_weight,
-            layer.w2_weight_scale,
+            w13,
+            w13_scale,
+            w2,
+            w2_scale,
             topk_weights,
             topk_ids,
             top_k,
@@ -391,6 +434,47 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         group_list = group_list.to(torch.int64)
         combine_cls = DeepEPLLCombineInput
 
+    # Decode DRAM offload: build compact [num_active, ...] weight tensors
+    # after dispatch (we know which experts received tokens). Replaces the
+    # [224, ...] shared buffer with a smaller [num_active, ...] tensor.
+    # Prefill uses the shared buffer (pre-loaded by _load_experts_on_demand).
+    if (
+        getattr(layer, "_dram_offload_enabled", False)
+        and layer._expert_weight_store is not None
+        and layer._expert_weight_store.hbm_cache_max_slots > 0
+    ):
+        group_list_cpu = group_list.cpu()
+        active_mask = group_list_cpu > 0
+        active_expert_ids = active_mask.nonzero().squeeze(-1).tolist()
+        if not isinstance(active_expert_ids, list):
+            active_expert_ids = [active_expert_ids]
+        num_active = len(active_expert_ids)
+
+        if num_active > 16:
+            raise RuntimeError(
+                f"Decode active experts ({num_active}) exceeds limit (16). "
+                f"active_expert_ids={active_expert_ids}"
+            )
+
+        if num_active == 0:
+            return combine_cls(
+                hidden_states=hidden_states,
+                topk_ids=dispatch_output.topk_ids,
+                topk_weights=dispatch_output.topk_weights,
+            )
+
+        sample_key = (layer.layer_id, active_expert_ids[0])
+        weight_names = list(
+            layer._expert_weight_store.dram_store[sample_key].keys()
+        )
+        compact_weights = layer._expert_weight_store.build_active_weight_tensors(
+            layer.layer_id, active_expert_ids, weight_names
+        )
+        for name, tensor in compact_weights.items():
+            setattr(layer, name, tensor)
+
+        group_list = group_list_cpu[active_mask].to(hidden_states.device)
+
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
         hidden_states,
@@ -449,17 +533,6 @@ def w4a8_mxfp4_gmm_npu(
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
 
-    # return torch.ops.npu.npu_grouped_matmul(
-    #     [input],
-    #     [weight],
-    #     antiquant_scale=[weight_scale],
-    #     split_item=2,
-    #     group_type=0,
-    #     group_list=group_list,
-    #     group_list_type=group_list_type,
-    #     output_dtype=output_dtype,
-    # )[0]
-
     if input_scale is None:
         x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
             input,
@@ -467,6 +540,37 @@ def w4a8_mxfp4_gmm_npu(
         )
     else:
         x, x_scale = input, input_scale
+
+    # Weights from acc_offload path are NZ-format (stored via sparse_copy
+    # D2H that bypasses format conversion) — non-contiguous, skip conversion.
+    # Weights from fallback path (no acc_offload) are ND-format (stored as
+    # contiguous on CPU) — convert to NZ format for CANN kernel.
+    #
+    # Scales from DRAM offload lose their non-contiguous (transposed)
+    # state during round-trip (.copy_() flattens to C-order). Restore
+    # the transposed state to match NZ weights (CANN requires matching
+    # transposition in MX mode).
+    if weight.is_contiguous():
+        # Fallback path (no acc_offload): weight is ND from DRAM.
+        # Convert to NZ format: undo transpose → cast to NZ → re-apply transpose.
+        weight = torch_npu.npu_format_cast(
+            weight.transpose(1, 2).contiguous().view(torch.uint8),
+            29,
+            customize_dtype=torch.float8_e4m3fn,
+            input_dtype=torch_npu.float4_e2m1fn_x2,
+        ).transpose(1, 2)
+
+    if weight_scale.is_contiguous():
+        # Restore scale's transposed state to match weight (NZ).
+        # process_weights_after_loading applied:
+        #   reshape(E, N, K//2, 2).transpose(-3, -2) → [E, K//2, N, 2]
+        # DRAM round-trip flattens to contiguous [E, K//2, N, 2] with
+        # different memory layout. Permute back to [E, N, K//2, 2] C-order
+        # then re-apply transpose to restore the non-contiguous state.
+        weight_scale = (
+            weight_scale.permute(0, 2, 1, 3).contiguous()
+            .transpose(-3, -2)
+        )
 
     return torch.ops.npu.npu_grouped_matmul(
         [x],
