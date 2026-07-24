@@ -1628,13 +1628,30 @@ class KimiK3MultiModalProjector(nn.Module):
             text_hidden_size, eps=getattr(config, "projector_ln_eps", 1e-5)
         )
 
+        quant_description = getattr(quant_config, "quant_description", {})
+        rot_proj_prefix = f"{prefix}.rot_proj"
+        rot_proj_weight_key = f"{rot_proj_prefix}.weight"
+
+        self.use_rot_proj = rot_proj_weight_key in quant_description
+        if self.use_rot_proj:
+            self.rot_proj = ReplicatedLinear(
+                text_hidden_size,
+                text_hidden_size,
+                bias=False,
+                quant_config=quant_config,
+                prefix=rot_proj_prefix,
+            )
+
     def forward(self, image_features: torch.Tensor) -> torch.Tensor:
         hidden_states = image_features.reshape(-1, self.hidden_size)
         hidden_states, _ = self.proj[0](hidden_states)
         hidden_states = self.proj[1](hidden_states)
         hidden_states, _ = self.proj[2](hidden_states)
-        return self.post_norm(hidden_states)
-
+        hidden_states = self.post_norm(hidden_states)
+        
+        if self.use_rot_proj:
+            hidden_states, _ = self.rot_proj(hidden_states)
+        return hidden_states
 
 class KimiK3ForConditionalGeneration(nn.Module):
     """Kimi-K3 multimodal wrapper.
