@@ -21,7 +21,7 @@ from typing import Optional
 
 import triton
 import triton.language as tl
-# import triton.backends.ascend.runtime  # REQUIRED: activates the Triton-Ascend autotune path
+import triton.language.extra.cann.extension as al
 import triton.language.extra.cann.libdevice as libdevice
 
 from sgl_kernel_npu.utils.triton_utils import get_device_properties
