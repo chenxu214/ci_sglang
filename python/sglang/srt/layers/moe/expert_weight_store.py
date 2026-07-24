@@ -809,7 +809,11 @@ class ExpertWeightStore:
         """Block until all pending h2d_stream operations complete."""
         self._ensure_initialized()
         if self._h2d_stream is not None:
+            import time
+            t0 = time.time()
+            logger.info(f"[ExpertWeightStore] sync_prefetch start")
             self._h2d_stream.synchronize()
+            logger.info(f"[ExpertWeightStore] sync_prefetch done in {time.time() - t0:.2f}s")
 
     def prefetch_layer_to_buffer(
         self, layer_id: int, num_experts: int
