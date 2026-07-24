@@ -877,12 +877,38 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
 
     from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
 
+    # Check skip_layers: first N MoE layers keep weights in HBM.
+    skip_layers = getattr(server_args, "moe_dram_offload_skip_layers", 0)
+    use_pool_for_storage = (skip_layers == 0)
+
     # Create shared ExpertWeightStore for all MoE layers
     dram_pool_gb = getattr(server_args, "moe_dram_pool_size_gb", 1300.0)
     use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
+    if dram_pool_gb == 1300.0:
+        # Auto-calculate: sum MoE expert weights on this rank, EXCLUDING
+        # the first skip_layers (they stay in HBM, not offloaded to DRAM).
+        total_moe_bytes = 0
+        for _, module in model.named_modules():
+            if isinstance(module, FusedMoE):
+                if skip_layers > 0 and module.layer_id < skip_layers:
+                    continue
+                for name in module._get_expert_weight_names():
+                    param = getattr(module, name)
+                    total_moe_bytes += param.data.numel() * param.data.element_size()
+        margin = 1.2 if use_pool_for_storage else 1.0
+        dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
+        logger.info(
+            f"[MoE DRAM Offload] Auto-calculated pool size: "
+            f"{dram_pool_gb:.1f} GB/rank "
+            f"(MoE weights={total_moe_bytes / 1024**3:.1f} GB, "
+            f"skip_layers={skip_layers}, "
+            f"margin={margin}x, "
+            f"storage={'pool' if use_pool_for_storage else 'pinned'})"
+        )
     expert_store = ExpertWeightStore(
         dram_pool_size_gb=dram_pool_gb,
         use_acc_offload=use_acc_offload,
+        use_pool_for_storage=use_pool_for_storage,
     )
 
     # Get HBM usage before offload starts
@@ -896,8 +922,12 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
     )
 
     moe_layer_count = 0
+    skipped_layer_count = 0
     for _, module in model.named_modules():
         if isinstance(module, FusedMoE):
+            if skip_layers > 0 and module.layer_id < skip_layers:
+                skipped_layer_count += 1
+                continue
             module.enable_dram_offload(expert_store)
             module.offload_expert_weights_to_dram()
             moe_layer_count += 1
@@ -905,7 +935,8 @@ def _maybe_enable_moe_dram_offload(model: nn.Module):
     if moe_layer_count > 0:
         dram_gb = expert_store.get_dram_usage_gb()
         logger.info(
-            f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
+            f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers"
+            f" (skipped {skipped_layer_count} layers to HBM). "
             f"Total DRAM usage: {dram_gb:.1f} GB"
         )
         # Release HBM memory freed by offload_expert_weights_to_dram's

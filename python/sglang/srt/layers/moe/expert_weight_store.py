@@ -68,6 +68,7 @@ class ExpertWeightStore:
         self,
         dram_pool_size_gb: float = 1300.0,
         use_acc_offload: bool = True,
+        use_pool_for_storage: bool = True,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
         # Per-layer LRU caches: {layer_id: OrderedDict[expert_id, weights]}
@@ -100,6 +101,14 @@ class ExpertWeightStore:
         self._offload = None
         self._offload_initialized = False
         self._dram_pool_size_bytes = int(dram_pool_size_gb * 1024**3)
+
+        # Storage mode: when False (staging mode), weights are stored in
+        # pinned memory instead of the acc_offload pool. The pool is
+        # initialized with a small size (1 GB) only to enable the
+        # sparse_copy API for H2D transfers.
+        self._use_pool_for_storage = use_pool_for_storage
+        if not use_pool_for_storage:
+            self._dram_pool_size_bytes = 1 * 1024**3  # 1 GB staging
 
         # Track registered layers for warmup
         self._registered_layers: set = set()
@@ -226,13 +235,17 @@ class ExpertWeightStore:
                 ).contiguous()
                 tensor = tensor.cpu()
 
-            if self.use_acc_offload and self._offload_initialized:
-                # Allocate from acc_offload DRAM pool
+            if (
+                self._use_pool_for_storage
+                and self.use_acc_offload
+                and self._offload_initialized
+            ):
+                # Allocate from acc_offload DRAM pool (full mode)
                 dram_tensor = self._offload.empty(
                     tensor.shape, dtype=tensor.dtype
                 )
             else:
-                # Fallback: PyTorch pinned memory
+                # Staging mode or fallback: PyTorch pinned memory.
                 dram_tensor = torch.empty(
                     tensor.shape, dtype=tensor.dtype, pin_memory=True
                 )
