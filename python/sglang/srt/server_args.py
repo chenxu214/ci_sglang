@@ -2045,16 +2045,6 @@ class ServerArgs:
         "for batch sparse copy from DRAM to HBM. Falls back to PyTorch "
         "H2D if memfabric_hybrid is not available. Defaults to True.",
     ] = True
-    moe_shared_buffer_max_gb: A[
-        float,
-        "Maximum total HBM (in GB) for cached shared expert buffers across "
-        "all MoE layers. 0 (default) disables shared buffers entirely — all "
-        "layers use per-forward allocation (lowest HBM footprint, higher "
-        "allocation cost). Set to a positive value to enable cross-forward "
-        "buffer caching up to the budget; layers exceeding the budget fall "
-        "back to per-forward allocation. Useful when DeepEP caches all "
-        "experts and HBM would overflow.",
-    ] = 0
 
     # -------------------------------------------------------------------------
     # Cuda graphs
