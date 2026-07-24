@@ -925,6 +925,10 @@ class KimiLinearModel(nn.Module):
 
         # Toggle ExpertWeightStore LRU slot limit: unlimited during prefill
         # (loads all 112 experts per layer), 20-slot LRU during decode.
+        # When switching to prefill, also release each MoE layer's references
+        # to decode buffer views so the underlying HBM blocks can be reused
+        # by prefill's torch.empty allocations (avoids ~93 layers of stale
+        # decode buffers inflating prefill HBM peak).
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
             if hasattr(layer, "block_sparse_moe"):
@@ -933,6 +937,8 @@ class KimiLinearModel(nn.Module):
                     getattr(experts, "_dram_offload_enabled", False)
                     and experts._expert_weight_store is not None
                 ):
+                    if is_prefill:
+                        experts.release_decode_weight_refs()
                     experts._expert_weight_store.set_cache_mode(is_prefill)
 
         # Prefill prefetch coordination: pre-trigger async H2D copy of the
