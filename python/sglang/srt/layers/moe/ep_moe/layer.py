@@ -152,6 +152,12 @@ class DeepEPMoE(FusedMoE):
         hidden_states: torch.Tensor,
         topk_output: TopKOutput,
     ):
+        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM.
+        # DeepEPMoE overrides forward() and bypasses FusedMoE.forward(),
+        # so the load must be triggered here. Skip when prefill prefetch
+        # has set _prefetched_buffers, or during graph capture.
+        self._maybe_load_experts_on_demand(topk_output)
+
         if is_in_tc_piecewise_cuda_graph():
             assert TopKOutputChecker.format_is_standard(
                 topk_output

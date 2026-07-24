@@ -1141,19 +1141,29 @@ class KimiLinearModel(nn.Module):
                     else None
                 )
                 if is_prefill and N > 0 and moe is not None:
-                    # Wait for this layer's prefetch to finish before compute.
-                    moe.wait_prefill_prefetch()
-                    # Trigger prefetch for layer i+N so its H2D copy overlaps
-                    # with this layer's compute.
-                    target_i = i + N
-                    if target_i < self.end_layer:
-                        target_moe = (
-                            self.layers[target_i].block_sparse_moe
-                            if hasattr(self.layers[target_i], "block_sparse_moe")
-                            else None
-                        )
-                        if target_moe is not None:
-                            target_moe.start_prefill_prefetch()
+                    # Skip layers in HBM (moe_dram_offload_skip_layers) —
+                    # their weights are already on-device. Entering this
+                    # block would (1) call wait_prefill_prefetch as a no-op,
+                    # and (2) trigger start_prefill_prefetch for target_i
+                    # which may already be prefetched by the initial loop,
+                    # leaking the original HBM buffers.
+                    experts = moe.experts
+                    if not getattr(experts, "_dram_offload_enabled", False):
+                        pass  # skip layer, no prefetch needed
+                    else:
+                        # Wait for this layer's prefetch to finish before compute.
+                        moe.wait_prefill_prefetch()
+                        # Trigger prefetch for layer i+N so its H2D copy
+                        # overlaps with this layer's compute.
+                        target_i = i + N
+                        if target_i < self.end_layer:
+                            target_moe = (
+                                self.layers[target_i].block_sparse_moe
+                                if hasattr(self.layers[target_i], "block_sparse_moe")
+                                else None
+                            )
+                            if target_moe is not None:
+                                target_moe.start_prefill_prefetch()
                 hidden_states, residual = layer(
                     positions=positions,
                     hidden_states=hidden_states,

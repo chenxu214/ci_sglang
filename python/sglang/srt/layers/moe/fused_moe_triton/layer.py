@@ -1285,16 +1285,7 @@ class FusedMoE(torch.nn.Module):
         # wait_prefill_prefetch (_prefetched_buffers exists).
         # Skip during graph capture — .cpu() in _load_experts_on_demand
         # is not supported inside capture.
-        if (
-            self._dram_offload_enabled
-            and self._expert_weight_store is not None
-            and not hasattr(self, "_prefetched_buffers")
-            and not (
-                torch.npu.is_available()
-                and torch.npu.is_current_stream_capturing()
-            )
-        ):
-            self._load_experts_on_demand(topk_output)
+        self._maybe_load_experts_on_demand(topk_output)
 
         if is_in_tc_piecewise_cuda_graph():
             if TopKOutputChecker.format_is_standard(topk_output):
@@ -1456,6 +1447,26 @@ class FusedMoE(torch.nn.Module):
             f"HBM {alloc_before:.2f}→{alloc_after:.2f} GB "
             f"(freed {alloc_before - alloc_after:.2f} GB)"
         )
+
+    def _maybe_load_experts_on_demand(self, topk_output: TopKOutput):
+        """Load Top-K experts from Host DRAM to HBM before forward.
+
+        Shared by FusedMoE.forward and DeepEPMoE.forward (which overrides
+        forward and bypasses the base implementation). Skip when prefill
+        prefetch has already set weights via wait_prefill_prefetch
+        (_prefetched_buffers exists), or during graph capture — .cpu() in
+        _load_experts_on_demand is not supported inside capture.
+        """
+        if (
+            self._dram_offload_enabled
+            and self._expert_weight_store is not None
+            and not hasattr(self, "_prefetched_buffers")
+            and not (
+                torch.npu.is_available()
+                and torch.npu.is_current_stream_capturing()
+            )
+        ):
+            self._load_experts_on_demand(topk_output)
 
     def _load_experts_on_demand(self, topk_output: TopKOutput):
         """Load Top-K selected experts from DRAM into a per-forward HBM buffer."""

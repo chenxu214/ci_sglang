@@ -396,17 +396,34 @@ class ExpertWeightStore:
                     )
 
         # Load misses from DRAM directly into buffer slots (no per-expert
-        # tensor allocation)
-        for eid in active_expert_ids:
-            if eid not in slot_map:  # miss
-                slot = assigned[eid]
-                key = (layer_id, eid)
-                dram_weights = self.dram_store[key]
-                for name, dram_tensor in dram_weights.items():
-                    if name in buffers:
-                        buffers[name][slot].copy_(
-                            dram_tensor, non_blocking=True
-                        )
+        # tensor allocation). Must run on _h2d_stream and synchronize
+        # before swap/compute — otherwise swap reads stale data and the
+        # CANN kernel reads partially-initialized buffers, causing
+        # silent precision errors (only manifests with DeepEP + offload
+        # because the non-DeepEP path uses batch_load_to_shared_buffer
+        # which already syncs).
+        if torch.npu.is_available():
+            with torch.npu.stream(self._h2d_stream):
+                for eid in active_expert_ids:
+                    if eid not in slot_map:  # miss
+                        slot = assigned[eid]
+                        key = (layer_id, eid)
+                        dram_weights = self.dram_store[key]
+                        for name, dram_tensor in dram_weights.items():
+                            if name in buffers:
+                                buffers[name][slot].copy_(
+                                    dram_tensor, non_blocking=True
+                                )
+            self._h2d_stream.synchronize()
+        else:
+            for eid in active_expert_ids:
+                if eid not in slot_map:  # miss
+                    slot = assigned[eid]
+                    key = (layer_id, eid)
+                    dram_weights = self.dram_store[key]
+                    for name, dram_tensor in dram_weights.items():
+                        if name in buffers:
+                            buffers[name][slot].copy_(dram_tensor)
 
         # Compact: swap data to sequential positions 0..num_active-1.
         # Uses swap (3-way via temp slot) to avoid data loss.

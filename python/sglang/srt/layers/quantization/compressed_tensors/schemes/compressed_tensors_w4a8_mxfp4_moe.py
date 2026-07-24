@@ -456,12 +456,6 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
             active_expert_ids = [active_expert_ids]
         num_active = len(active_expert_ids)
 
-        if num_active > 16:
-            raise RuntimeError(
-                f"Decode active experts ({num_active}) exceeds limit (16). "
-                f"active_expert_ids={active_expert_ids}"
-            )
-
         if num_active == 0:
             return combine_cls(
                 hidden_states=hidden_states,
@@ -469,17 +463,24 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
                 topk_weights=dispatch_output.topk_weights,
             )
 
-        sample_key = (layer.layer_id, active_expert_ids[0])
-        weight_names = list(
-            layer._expert_weight_store.dram_store[sample_key].keys()
-        )
-        compact_weights = layer._expert_weight_store.build_active_weight_tensors(
-            layer.layer_id, active_expert_ids, weight_names
-        )
-        for name, tensor in compact_weights.items():
-            setattr(layer, name, tensor)
+        if num_active <= 16:
+            # Build compact [num_active, ...] weight tensors for efficiency.
+            sample_key = (layer.layer_id, active_expert_ids[0])
+            weight_names = list(
+                layer._expert_weight_store.dram_store[sample_key].keys()
+            )
+            compact_weights = layer._expert_weight_store.build_active_weight_tensors(
+                layer.layer_id, active_expert_ids, weight_names
+            )
+            for name, tensor in compact_weights.items():
+                setattr(layer, name, tensor)
 
-        group_list = group_list_cpu[active_mask].to(hidden_states.device)
+            group_list = group_list_cpu[active_mask].to(hidden_states.device)
+        else:
+            logger.debug(
+                f"Decode active experts ({num_active}) exceeds compact "
+                f"limit (16). Falling back to shared buffer path."
+            )
 
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
