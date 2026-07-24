@@ -55,6 +55,7 @@ from sglang.srt.utils.common import (
     add_prefix,
     get_int_env_var,
     log_info_on_rank0,
+    log_debug_on_rank0,
     set_weight_attrs,
 )
 
@@ -980,7 +981,7 @@ class KimiLinearModel(nn.Module):
                     residual=residual,
                     zero_allocator=zero_allocator,
                 )
-                log_info_on_rank0(
+                log_debug_on_rank0(
                     logger,
                     f"KimiMoE layer compute done (layer_idx={i}, "
                     f"mode={'prefill' if is_prefill else 'decode'})",
