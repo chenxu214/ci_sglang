@@ -14,6 +14,7 @@ from torch.nn.parameter import UninitializedParameter
 from sglang.srt.batch_overlap.single_batch_overlap import DownGemmOverlapArgs
 from sglang.srt.batch_overlap.two_batch_overlap import MaybeTboDeepEPDispatcher
 from sglang.srt.distributed import (
+    get_moe_ep_group,
     get_tp_group,
     tensor_model_parallel_all_reduce,
 )
@@ -147,9 +148,9 @@ def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig) -> BaseDispatcher:
     ):
         return MaybeTboDeepEPDispatcher(
             group=(
-                get_tp_group().device_group
+                get_moe_ep_group().device_group
                 if not a2a_backend.is_mori()
-                else get_tp_group()
+                else get_moe_ep_group()
             ),
             router_topk=moe_runner_config.top_k,
             permute_fusion=True,
@@ -354,6 +355,12 @@ class FusedMoE(torch.nn.Module):
         )
 
         _moe_dram_offload = getattr(server_args, "moe_dram_offload", False)
+        # Check if this layer should be skipped from DRAM offload.
+        # The first N MoE layers keep weights in HBM.
+        _skip_layers = getattr(server_args, "moe_dram_offload_skip_layers", 0)
+        _is_skip_layer = _moe_dram_offload and _skip_layers > 0 and layer_id < _skip_layers
+        if _is_skip_layer:
+            _moe_dram_offload = False
         self.moe_dram_offload = _moe_dram_offload
         self._dram_offload_enabled = False
         self._expert_weight_store = None
@@ -1572,6 +1579,8 @@ class FusedMoE(torch.nn.Module):
         """Release this layer's prefetched HBM buffers after compute.
 
         Clears layer weight references and frees the per-layer buffers.
+        When N=0 (prefetch disabled), _load_experts_on_demand allocated
+        per-forward temp buffers — release those references too.
         """
         if (
             not self._dram_offload_enabled
@@ -1588,6 +1597,12 @@ class FusedMoE(torch.nn.Module):
                     setattr(self, name, None)
             self._expert_weight_store.free_layer_buffers(self._prefetched_buffers)
             del self._prefetched_buffers
+        else:
+            # N=0 prefill: _load_experts_on_demand set temp buffers.
+            # Release weight references so caching allocator can reuse HBM.
+            for name in self._get_expert_weight_names():
+                if hasattr(self, name):
+                    setattr(self, name, None)
 
     @classmethod
     def make_expert_params_mapping(

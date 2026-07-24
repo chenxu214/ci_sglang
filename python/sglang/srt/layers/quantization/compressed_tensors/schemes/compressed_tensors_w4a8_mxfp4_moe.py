@@ -451,9 +451,9 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         num_active = len(active_expert_ids)
 
         if num_active > 16:
-            raise RuntimeError(
-                f"Decode active experts ({num_active}) exceeds limit (16). "
-                f"active_expert_ids={active_expert_ids}"
+            logger.debug(
+                f"Decode active experts ({num_active}) exceeds 16, "
+                f"using compact path. active_expert_ids={active_expert_ids}"
             )
 
         if num_active == 0:

@@ -172,6 +172,16 @@ class DeepEPMoE(FusedMoE):
         topk_output: TopKOutput,
     ):
 
+        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM.
+        # FusedMoE.forward() is bypassed in the DeepEP path, so the
+        # _load_experts_on_demand call must be replicated here.
+        if (
+            getattr(self, "_dram_offload_enabled", False)
+            and self._expert_weight_store is not None
+            and not hasattr(self, "_prefetched_buffers")
+        ):
+            self._load_experts_on_demand(topk_output)
+
         if self.deprecate_flag:
             return super().forward_impl(
                 hidden_states,
