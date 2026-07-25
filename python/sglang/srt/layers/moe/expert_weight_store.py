@@ -110,28 +110,34 @@ class ExpertWeightStore:
         # Statistics
         self._stats = {"dram_load": 0, "total_requests": 0}
 
-        # Hybrid storage: last N offloaded layers use PyTorch H2D instead
-        # of acc_offload pool. Set via --moe-dram-offload-h2d-tail-layers.
-        # When > 0, register_expert checks layer_id to decide storage.
-        self._h2d_tail_layers = 0  # set via set_h2d_tail_layers()
+        # Hybrid storage: layers in _h2d_layer_ids use PyTorch H2D
+        # (torch.empty) instead of acc_offload pool. Configured via
+        # --moe-dram-acc-offload-layers: only the first N offloaded
+        # layers use the pool; the rest use H2D.
         self._h2d_layer_ids: set = set()  # layer_ids that use PyTorch H2D
 
-    def set_h2d_tail_layers(self, tail_layers: int, all_offloaded_layer_ids: list):
-        """Configure which layers use PyTorch H2D instead of acc_offload.
+    def set_acc_offload_layers(
+        self, acc_offload_layers: int, all_offloaded_layer_ids: list
+    ):
+        """Configure which layers use acc_offload pool vs PyTorch H2D.
 
         Args:
-            tail_layers: Number of last offloaded layers to use H2D.
+            acc_offload_layers: Number of offloaded layers (starting from
+                the first) to use acc_offload pool. 0 = all use pool.
             all_offloaded_layer_ids: Sorted list of all layer_ids that
-                will be offloaded (non-skip). The last `tail_layers`
-                of these will use PyTorch H2D.
+                will be offloaded (non-skip). Layers after the first
+                `acc_offload_layers` will use PyTorch H2D.
         """
-        self._h2d_tail_layers = tail_layers
-        if tail_layers > 0 and all_offloaded_layer_ids:
+        if acc_offload_layers > 0 and all_offloaded_layer_ids:
             sorted_ids = sorted(all_offloaded_layer_ids)
-            self._h2d_layer_ids = set(sorted_ids[-tail_layers:])
+            # First N layers use pool, rest use H2D
+            self._h2d_layer_ids = set(sorted_ids[acc_offload_layers:])
+            pool_ids = sorted_ids[:acc_offload_layers]
             logger.info(
-                f"[ExpertWeightStore] H2D tail layers: {tail_layers}. "
-                f"Layer ids using PyTorch H2D: {sorted(self._h2d_layer_ids)}"
+                f"[ExpertWeightStore] acc_offload layers: "
+                f"{len(pool_ids)} ({pool_ids[0]}..{pool_ids[-1]}), "
+                f"H2D layers: {len(self._h2d_layer_ids)} "
+                f"({sorted(self._h2d_layer_ids)})"
             )
 
     def _ensure_initialize(self):
@@ -365,11 +371,6 @@ class ExpertWeightStore:
         )
 
         if use_sparse:
-            # Pad to even count: sparse_copy drops the last weight if odd.
-            if num_pairs % 2 != 0:
-                pairs = pairs + [pairs[-1]]
-                num_pairs += 1
-
             src_ptrs = [s.data_ptr() for s, _ in pairs]
             dst_ptrs = [d.data_ptr() for _, d in pairs]
             len_ptrs = [s.nbytes for s, _ in pairs]
@@ -377,9 +378,10 @@ class ExpertWeightStore:
             src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
             dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
             len_t = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
-            # MUST be 1-D tensor — 0-D scalar causes kernel param parsing
-            # errors inside the AICore kernel.
-            size_t = torch.tensor([num_pairs], dtype=torch.int32, device="npu")
+            # MUST be 0-D scalar (not 1-D) — matches acc_offload reference
+            # usage. 1-D tensor causes OffloadSparseCopyOps kernel to
+            # misparse totalLen, leading to AIV vector core exception.
+            size_t = torch.tensor(num_pairs, dtype=torch.int32, device="npu")
 
             device = torch.device(f"npu:{torch.npu.current_device()}")
             with torch.npu.stream(self._h2d_stream):

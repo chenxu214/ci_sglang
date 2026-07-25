@@ -2038,23 +2038,16 @@ class ServerArgs:
         "used without on-demand loading. Reduces Host DRAM requirement "
         "at the cost of HBM. 0 = offload all layers (default).",
     ] = 0
-    moe_dram_offload_h2d_tail_layers: A[
+    moe_dram_acc_offload_layers: A[
         int,
-        "Number of last offloaded MoE layers to store via PyTorch H2D "
-        "(torch.empty) instead of acc_offload pool. Use when 8 ranks × "
-        "full pool size exceeds physical DRAM. The acc_offload pool "
-        "size is auto-calculated to fit only the first "
-        "(non_skip - tail) layers. 0 = all offloaded layers use "
-        "acc_offload (default).",
+        "Number of offloaded MoE layers (starting from skip_layers) to "
+        "store in acc_offload DRAM pool. Remaining offloaded layers use "
+        "PyTorch H2D (torch.empty). Use when 8 ranks × full pool size "
+        "exceeds physical DRAM. 0 = all offloaded layers use acc_offload "
+        "(default). Example: skip_layers=15, acc_offload_layers=60 → "
+        "layers 0-14 in HBM, layers 15-74 in acc_offload pool, layers "
+        "75+ in PyTorch H2D.",
     ] = 0
-    moe_dram_pool_size_gb: A[
-        Optional[float],
-        "DRAM pool size (in GB) for MoE expert weights. If None, "
-        "auto-calculated from actual MoE weight sizes on this rank "
-        "(TP slicing already gives total/world_size per rank). "
-        "Must be large enough to hold all expert weights and backed "
-        "by physical memory (do NOT over-allocate).",
-    ] = None
     moe_use_acc_offload: A[
         bool,
         "Use MemFabric acc_offload (AICore AIV kernel with MTE engine) "

@@ -923,57 +923,40 @@ class DefaultModelLoader(BaseModelLoader):
         from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
         use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
         use_pool_for_storage = True  # always pool mode for layered load
-        user_pool_gb = getattr(server_args, "moe_dram_pool_size_gb", None)
-        if user_pool_gb is not None:
-            dram_pool_gb = user_pool_gb
-        else:
-            # Auto-calculate from meta tensor shapes (numel works on meta).
-            # Only count layers that will use acc_offload pool (exclude
-            # H2D tail layers). H2D tail layers use torch.empty separately.
-            h2d_tail = getattr(server_args,
-                               "moe_dram_offload_h2d_tail_layers", 0)
-            non_skip_layer_ids = sorted(non_skip_moe_modules.keys())
-            pool_layer_ids = non_skip_layer_ids
-            h2d_layer_ids = []
-            if h2d_tail > 0 and len(non_skip_layer_ids) > h2d_tail:
-                pool_layer_ids = non_skip_layer_ids[:-h2d_tail]
-                h2d_layer_ids = non_skip_layer_ids[-h2d_tail:]
 
-            total_moe_bytes = 0
-            for _, mod in model.named_modules():
-                if (isinstance(mod, FusedMoE)
-                        and getattr(mod, "moe_dram_offload", False)
-                        and mod.layer_id in pool_layer_ids):
-                    for name, param in mod.named_parameters():
-                        if param.device.type == "meta":
-                            total_moe_bytes += (
-                                param.data.numel()
-                                * param.data.element_size()
-                            )
-            margin = 1.05
-            dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
-            h2d_gb = 0.0
-            if h2d_layer_ids:
-                h2d_bytes = 0
-                for _, mod in model.named_modules():
-                    if (isinstance(mod, FusedMoE)
-                            and getattr(mod, "moe_dram_offload", False)
-                            and mod.layer_id in h2d_layer_ids):
-                        for name, param in mod.named_parameters():
-                            if param.device.type == "meta":
-                                h2d_bytes += (
-                                    param.data.numel()
-                                    * param.data.element_size()
-                                )
-                h2d_gb = h2d_bytes / 1024**3
-            logger.info(
-                f"[MoE DRAM Offload] Auto-calculated pool size: "
-                f"{dram_pool_gb:.1f} GB/rank "
-                f"(acc_offload layers={len(pool_layer_ids)}, "
-                f"H2D tail layers={len(h2d_layer_ids)}, "
-                f"H2D weights={h2d_gb:.1f} GB, "
-                f"skip_layers={skip_layers}, margin={margin}x)"
-            )
+        # Determine which layers use acc_offload pool vs PyTorch H2D.
+        # --moe-dram-acc-offload-layers N: first N offloaded layers use
+        # pool, rest use H2D. 0 = all offloaded layers use pool.
+        acc_offload_layers = getattr(
+            server_args, "moe_dram_acc_offload_layers", 0
+        )
+        non_skip_layer_ids = sorted(non_skip_moe_modules.keys())
+        if acc_offload_layers > 0:
+            pool_layer_ids = non_skip_layer_ids[:acc_offload_layers]
+        else:
+            pool_layer_ids = non_skip_layer_ids
+
+        # Auto-calculate pool size from meta tensor shapes.
+        total_moe_bytes = 0
+        for _, mod in model.named_modules():
+            if (isinstance(mod, FusedMoE)
+                    and getattr(mod, "moe_dram_offload", False)
+                    and mod.layer_id in pool_layer_ids):
+                for name, param in mod.named_parameters():
+                    if param.device.type == "meta":
+                        total_moe_bytes += (
+                            param.data.numel()
+                            * param.data.element_size()
+                        )
+        margin = 1.05
+        dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
+        h2d_count = len(non_skip_layer_ids) - len(pool_layer_ids)
+        logger.info(
+            f"[MoE DRAM Offload] Pool size: {dram_pool_gb:.1f} GB/rank "
+            f"(acc_offload layers={len(pool_layer_ids)}, "
+            f"H2D layers={h2d_count}, "
+            f"skip_layers={skip_layers}, margin={margin}x)"
+        )
         shared_buffer_max_gb = getattr(
             server_args, "moe_shared_buffer_max_gb", 0
         )
@@ -988,11 +971,14 @@ class DefaultModelLoader(BaseModelLoader):
             if (isinstance(mod, FusedMoE)
                     and getattr(mod, "moe_dram_offload", False)):
                 mod.enable_dram_offload(_expert_store)
-        # Configure H2D tail layers (if any) before pool init.
-        h2d_tail = getattr(server_args, "moe_dram_offload_h2d_tail_layers", 0)
-        if h2d_tail > 0:
-            _expert_store.set_h2d_tail_layers(
-                h2d_tail, sorted(non_skip_moe_modules.keys())
+        # Configure acc_offload vs H2D layers (if any) before pool init.
+        acc_offload_layers = getattr(
+            server_args, "moe_dram_acc_offload_layers", 0
+        )
+        if acc_offload_layers > 0:
+            _expert_store.set_acc_offload_layers(
+                acc_offload_layers,
+                sorted(non_skip_moe_modules.keys()),
             )
         _expert_store._ensure_initialize()
         logger.info(
