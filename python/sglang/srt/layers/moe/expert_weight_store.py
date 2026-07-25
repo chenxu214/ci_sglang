@@ -345,15 +345,16 @@ class ExpertWeightStore:
 
         Centralizes all H2D transfers so that sparse_copy constraints are
         enforced in one place:
-          - size tensor MUST be 1-D (0-D scalar causes kernel param errors)
-          - num_pairs MUST be even (odd count drops the last weight)
-          - device arg MUST be torch.device (not int)
+          - size tensor MUST be 0-D scalar (matches reference usage)
+          - num_pairs MUST be even: if odd, split the last pair into two
+            halves (src_ptr + half, dst_ptr + half, len/2) to make it even
+          - sparse_copy runs on default stream (no stream context)
 
         Args:
             pairs: List of (src_cpu_tensor, dst_hbm_tensor) pairs.
                    src/dst must have the same nbytes.
-            sync: Whether to synchronize h2d_stream after copy. Set False
-                  for async prefetch (caller records an event instead).
+            sync: Whether to synchronize after copy. Set False for async
+                  prefetch (caller records an event instead).
             layer_id: If in _h2d_layer_ids, skip sparse_copy and use
                       copy_() directly (H2D tail layers stored via
                       torch.empty, not in acc_offload pool).
@@ -371,27 +372,50 @@ class ExpertWeightStore:
         )
 
         if use_sparse:
-            src_ptrs = [s.data_ptr() for s, _ in pairs]
-            dst_ptrs = [d.data_ptr() for _, d in pairs]
-            len_ptrs = [s.nbytes for s, _ in pairs]
+            # Build (src_ptr, dst_ptr, nbytes) triples from pairs.
+            # If num_pairs is odd, split the last pair into two halves
+            # to make it even (sparse_copy requires even count).
+            src_ptrs = []
+            dst_ptrs = []
+            len_ptrs = []
+
+            for src, dst in pairs:
+                src_ptrs.append(src.data_ptr())
+                dst_ptrs.append(dst.data_ptr())
+                len_ptrs.append(src.nbytes)
+
+            if num_pairs % 2 != 0:
+                # Split last pair into two halves
+                last_src = src_ptrs[-1]
+                last_dst = dst_ptrs[-1]
+                last_len = len_ptrs[-1]
+                half = last_len // 2
+                # Replace last pair with two half-size pairs
+                src_ptrs[-1] = last_src
+                dst_ptrs[-1] = last_dst
+                len_ptrs[-1] = half
+                src_ptrs.append(last_src + half)
+                dst_ptrs.append(last_dst + half)
+                len_ptrs.append(half)
+                num_pairs += 1
 
             src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
             dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
             len_t = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
-            # MUST be 0-D scalar (not 1-D) — matches acc_offload reference
-            # usage. 1-D tensor causes OffloadSparseCopyOps kernel to
-            # misparse totalLen, leading to AIV vector core exception.
+            # 0-D scalar, matches reference usage in local_dram_offload.py
             size_t = torch.tensor(num_pairs, dtype=torch.int32, device="npu")
 
             device = torch.device(f"npu:{torch.npu.current_device()}")
-            with torch.npu.stream(self._h2d_stream):
-                ret = self._offload.sparse_copy(
-                    src_ptr_t, dst_ptr_t, len_t, size_t, device
-                )
+            # sparse_copy on default stream (no stream context), matching
+            # the reference usage. Running on h2d_stream causes the kernel
+            # to execute on a different stream than its args tensors.
+            ret = self._offload.sparse_copy(
+                src_ptr_t, dst_ptr_t, len_t, size_t, device
+            )
 
             if ret == 0:
                 if sync:
-                    self._h2d_stream.synchronize()
+                    torch.npu.synchronize()
                 return
 
             logger.warning(
@@ -399,7 +423,7 @@ class ExpertWeightStore:
                 f"using copy_() fallback"
             )
 
-        # Fallback: PyTorch H2D copy_ (also runs on h2d_stream).
+        # Fallback: PyTorch H2D copy_ (runs on h2d_stream).
         with torch.npu.stream(self._h2d_stream):
             for src, dst in pairs:
                 dst.copy_(src, non_blocking=True)
