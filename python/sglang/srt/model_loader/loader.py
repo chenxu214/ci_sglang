@@ -795,6 +795,21 @@ class DefaultModelLoader(BaseModelLoader):
 
     @staticmethod
     def load_weights_and_postprocess(model, weights, target_device):
+        # Fast path: layered loading for MoE DRAM offload. Non-skip MoE
+        # layers are created on meta device (no CPU DRAM); weights are
+        # materialized + offloaded one layer at a time to minimize peak.
+        # When enabled, this path fully replaces the original flow below.
+        from sglang.srt.server_args import get_global_server_args
+        _server_args = get_global_server_args()
+        if getattr(_server_args, "moe_dram_offload", False):
+            DefaultModelLoader._load_weights_with_dram_offload_layered(
+                model, weights, target_device, _server_args
+            )
+            return
+
+        # ================================================================
+        # Original path (unchanged — no DRAM offload)
+        # ================================================================
         # Used in tests to verify memory savings when using online quantization.
         if is_cuda_alike():
             peak_memory = torch.cuda.max_memory_allocated()
@@ -833,104 +848,236 @@ class DefaultModelLoader(BaseModelLoader):
                 f"{memory_start - memory_end:.3f}",
             )
 
-        # Pre-create ExpertWeightStore and enable DRAM offload on all
-        # FusedMoE modules BEFORE process_weights_after_loading, so that
-        # each layer's weights can be offloaded to DRAM immediately after
-        # processing (freeing HBM for the next layer). With 93 layers ×
-        # 3.75 GB = 348 GB, keeping all in HBM causes OOM.
-        from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
-        from sglang.srt.server_args import get_global_server_args
-        _server_args = get_global_server_args()
-        _dram_offload_enabled = getattr(_server_args, "moe_dram_offload", False)
-        _expert_store = None
-        if _dram_offload_enabled:
-            from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
-            use_acc_offload = getattr(_server_args, "moe_use_acc_offload", True)
-            skip_layers = getattr(_server_args, "moe_dram_offload_skip_layers", 0)
-            use_pool_for_storage = (skip_layers == 0)
-            user_pool_gb = getattr(_server_args, "moe_dram_pool_size_gb", None)
-            if user_pool_gb is not None:
-                dram_pool_gb = user_pool_gb
-            else:
-                # Auto-calculate from module parameter shapes, EXCLUDING
-                # skip layers (their weights stay in HBM).
-                total_moe_bytes = 0
-                for _, mod in model.named_modules():
-                    if isinstance(mod, FusedMoE):
-                        if skip_layers > 0 and mod.layer_id < skip_layers:
-                            continue
-                        for name in mod._get_expert_weight_names():
-                            param = getattr(mod, name, None)
-                            if param is not None:
-                                total_moe_bytes += param.data.numel() * param.data.element_size()
-                margin = 1.2 if use_pool_for_storage else 1.0
-                dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
-                logger.info(
-                    f"[MoE DRAM Offload] Auto-calculated pool size: "
-                    f"{dram_pool_gb:.1f} GB/rank "
-                    f"(MoE weights={total_moe_bytes / 1024**3:.1f} GB, "
-                    f"skip_layers={skip_layers}, margin={margin}x, "
-                    f"storage={'pool' if use_pool_for_storage else 'pinned'})"
-                )
-            shared_buffer_max_gb = getattr(
-                _server_args, "moe_shared_buffer_max_gb", 0
-            )
-            _expert_store = ExpertWeightStore(
-                dram_pool_size_gb=dram_pool_gb,
-                use_acc_offload=use_acc_offload,
-                use_pool_for_storage=use_pool_for_storage,
-                shared_buffer_max_gb=shared_buffer_max_gb,
-            )
-            # Enable DRAM offload only for non-skip layers.
-            # Skip layers keep weights in HBM (moe_dram_offload=False in __init__).
-            for _, mod in model.named_modules():
-                if isinstance(mod, FusedMoE) and getattr(mod, "moe_dram_offload", False):
-                    mod.enable_dram_offload(_expert_store)
-            logger.info(
-                f"[MoE DRAM Offload] Pre-enabled for FusedMoE modules. "
-                f"DRAM pool: {dram_pool_gb:.1f} GB"
-            )
-
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
             if quant_method is not None:
-                _skip_device_loading = getattr(
-                    module, "moe_dram_offload", False
-                ) and "FusedMoE" in type(module).__name__
-                if _skip_device_loading:
+                with device_loading_context(module, target_device):
                     quant_method.process_weights_after_loading(module)
+
+    @staticmethod
+    def _load_weights_with_dram_offload_layered(
+        model, weights, target_device, server_args
+    ):
+        """Layer-by-layer weight loading for MoE DRAM offload.
+
+        Non-skip MoE layers are created on meta device (see FusedMoE.__init__),
+        so they occupy zero CPU DRAM at model-creation time. This method:
+
+        Phase 1: Split weights by layer; load non-layer + skip-layer weights.
+        Phase 2: Process skip-layer + non-MoE modules (normal HBM path).
+        Phase 3: Create ExpertWeightStore + init acc_offload pool. At this
+                 point CPU DRAM has NO non-skip weights (they are on meta),
+                 so pool init won't cause OOM.
+        Phase 4: For each non-skip MoE layer: materialize meta→CPU, load
+                 weights, process, offload to DRAM pool, release CPU tensors.
+
+        CPU DRAM peak = pool + single layer (not pool + all non-skip layers).
+        """
+        import gc
+        import re
+        from collections import defaultdict
+
+        from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+
+        quant_config = getattr(model, "quant_config", None)
+        is_nvfp4_online = getattr(quant_config, "is_nvfp4_online", False)
+        skip_layers = getattr(server_args, "moe_dram_offload_skip_layers", 0)
+
+        # ---- Split weights into per-layer buckets + non-layer weights ----
+        # Weight names like "model.layers.{id}..." or
+        # "language_model.model.layers.{id}..."
+        _layer_re = re.compile(r"\.layers\.(\d+)\.")
+        layer_weight_buckets = defaultdict(list)
+        non_layer_weights = []
+        for args in weights:
+            name = args[0] if isinstance(args, tuple) else args["name"]
+            m = _layer_re.search(name)
+            if m:
+                layer_id = int(m.group(1))
+                layer_weight_buckets[layer_id].append(args)
+            else:
+                non_layer_weights.append(args)
+
+        # Build layer_id → FusedMoE module map for non-skip layers.
+        non_skip_moe_modules = {}  # {layer_id: FusedMoE}
+        for _, mod in model.named_modules():
+            if (isinstance(mod, FusedMoE)
+                    and getattr(mod, "moe_dram_offload", False)):
+                non_skip_moe_modules[mod.layer_id] = mod
+
+        # Separate skip-layer weights (loaded normally) from non-skip
+        # (deferred to layer-by-layer offload loop below).
+        skip_layer_weights = []
+        deferred_layer_weights = {}  # {layer_id: [args, ...]}
+        for layer_id, ws in layer_weight_buckets.items():
+            if layer_id in non_skip_moe_modules:
+                deferred_layer_weights[layer_id] = ws
+            else:
+                skip_layer_weights.extend(ws)
+
+        # ---- Phase 0: create ExpertWeightStore + init pool ----
+        # Initialize acc_offload pool BEFORE weight file mmap to get the
+        # best contiguous huge pages. After mmap, page cache fragmentation
+        # causes HalMemCreate failures even when free DRAM is sufficient.
+        # Non-skip weights are still on meta device (zero DRAM usage).
+        from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
+        use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
+        use_pool_for_storage = True  # always pool mode for layered load
+
+        # Determine which layers use acc_offload pool vs PyTorch H2D.
+        # --moe-dram-acc-offload-layers N: first N offloaded layers use
+        # pool, rest use H2D. 0 = all offloaded layers use pool.
+        acc_offload_layers = getattr(
+            server_args, "moe_dram_acc_offload_layers", 0
+        )
+        non_skip_layer_ids = sorted(non_skip_moe_modules.keys())
+        if acc_offload_layers > 0:
+            pool_layer_ids = non_skip_layer_ids[:acc_offload_layers]
+        else:
+            pool_layer_ids = non_skip_layer_ids
+
+        # Auto-calculate pool size from meta tensor shapes.
+        total_moe_bytes = 0
+        for _, mod in model.named_modules():
+            if (isinstance(mod, FusedMoE)
+                    and getattr(mod, "moe_dram_offload", False)
+                    and mod.layer_id in pool_layer_ids):
+                for name, param in mod.named_parameters():
+                    if param.device.type == "meta":
+                        total_moe_bytes += (
+                            param.data.numel()
+                            * param.data.element_size()
+                        )
+        margin = 1.05
+        dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
+        h2d_count = len(non_skip_layer_ids) - len(pool_layer_ids)
+        logger.info(
+            f"[MoE DRAM Offload] Pool size: {dram_pool_gb:.1f} GB/rank "
+            f"(acc_offload layers={len(pool_layer_ids)}, "
+            f"H2D layers={h2d_count}, "
+            f"skip_layers={skip_layers}, margin={margin}x)"
+        )
+        shared_buffer_max_gb = getattr(
+            server_args, "moe_shared_buffer_max_gb", 0
+        )
+        _expert_store = ExpertWeightStore(
+            dram_pool_size_gb=dram_pool_gb,
+            use_acc_offload=use_acc_offload,
+            use_pool_for_storage=use_pool_for_storage,
+            shared_buffer_max_gb=shared_buffer_max_gb,
+        )
+        # Enable DRAM offload on non-skip modules + force pool init.
+        for _, mod in model.named_modules():
+            if (isinstance(mod, FusedMoE)
+                    and getattr(mod, "moe_dram_offload", False)):
+                mod.enable_dram_offload(_expert_store)
+        # Configure acc_offload vs H2D layers (if any) before pool init.
+        acc_offload_layers = getattr(
+            server_args, "moe_dram_acc_offload_layers", 0
+        )
+        if acc_offload_layers > 0:
+            _expert_store.set_acc_offload_layers(
+                acc_offload_layers,
+                sorted(non_skip_moe_modules.keys()),
+            )
+        _expert_store._ensure_initialize()
+        logger.info(
+            f"[MoE DRAM Offload] Pool initialized ({dram_pool_gb:.1f} GB). "
+            f"Starting layer-by-layer offload for "
+            f"{len(deferred_layer_weights)} non-skip MoE layers."
+        )
+
+        # ---- Phase 1: load non-layer + skip-layer weights ----
+        # Non-skip MoE params are on meta device, so load_weights skips them.
+        phase1_weights = non_layer_weights + skip_layer_weights
+        if is_nvfp4_online:
+            with temp_set_env(
+                TRTLLM_DISABLE_FP4_QUANT_FAST_MATH="1",
+                FLASHINFER_DISABLE_FP4_QUANT_FAST_MATH="1",
+            ):
+                model.load_weights(iter(phase1_weights))
+        else:
+            model.load_weights(iter(phase1_weights))
+
+        # ---- Phase 2: process skip-layer + non-MoE modules ----
+        for _, module in model.named_modules():
+            quant_method = getattr(module, "quant_method", None)
+            if quant_method is None:
+                continue
+            if (isinstance(module, FusedMoE)
+                    and getattr(module, "moe_dram_offload", False)):
+                continue  # deferred to phase 3
+            with device_loading_context(module, target_device):
+                quant_method.process_weights_after_loading(module)
+
+        # ---- Phase 3: layer-by-layer load + process + offload ----
+        for layer_id in sorted(deferred_layer_weights.keys()):
+            moe_mod = non_skip_moe_modules.get(layer_id)
+            layer_ws = deferred_layer_weights[layer_id]
+
+            if moe_mod is None:
+                # Non-MoE layer with weights: load normally.
+                model.load_weights(iter(layer_ws))
+                continue
+
+            # 4a. Materialize meta params → CPU (single layer only).
+            # Replace meta Parameter with a new CPU Parameter directly,
+            # bypassing Parameter.set_data() which rejects meta→CPU
+            # assignment with "incompatible tensor type". The .cpu()
+            # guard handles transfer_to_npu.py redirecting torch.empty
+            # to NPU even when device="cpu" is specified explicitly.
+            meta_params = [
+                (n, p) for n, p in moe_mod.named_parameters()
+                if p.device.type == "meta"
+            ]
+            for full_name, param in meta_params:
+                new_data = torch.empty(
+                    param.shape, dtype=param.dtype, device="cpu"
+                ).cpu()
+                new_param = torch.nn.Parameter(
+                    new_data, requires_grad=False
+                )
+                # Preserve custom attributes (weight_loader, etc.)
+                for key, value in param.__dict__.items():
+                    if not key.startswith("_"):
+                        setattr(new_param, key, value)
+                # Navigate to parent module for nested param names.
+                if "." in full_name:
+                    parts = full_name.split(".")
+                    parent = moe_mod
+                    for part in parts[:-1]:
+                        parent = getattr(parent, part)
+                    setattr(parent, parts[-1], new_param)
                 else:
-                    with device_loading_context(module, target_device):
-                        quant_method.process_weights_after_loading(module)
+                    setattr(moe_mod, full_name, new_param)
 
-                # Immediately offload FusedMoE weights to DRAM after
-                # processing to free HBM for subsequent layers.
-                # Skip layers where moe_dram_offload=False (skip_layers
-                # keeps them in HBM with NZ format — offloading would
-                # fail on non-contiguous NZ tensors).
-                if (
-                    _expert_store is not None
-                    and isinstance(module, FusedMoE)
-                    and getattr(module, "moe_dram_offload", False)
-                ):
-                    module.offload_expert_weights_to_dram()
-                    import gc
-                    gc.collect()
-                    if torch.npu.is_available():
-                        torch.npu.empty_cache()
+            # 4b. Load this layer's weights into the materialized params.
+            model.load_weights(iter(layer_ws))
 
-        if _expert_store is not None:
-            # Release any HBM cached during offload registration (mostly
-            # a no-op since no forward has run, but ensures clean state).
-            _expert_store.release_hbm_weights()
-            dram_gb = _expert_store.get_dram_usage_gb()
-            moe_layer_count = sum(
-                1 for _, m in model.named_modules() if isinstance(m, FusedMoE)
-            )
-            logger.info(
-                f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
-                f"Total DRAM usage: {dram_gb:.1f} GB"
-            )
+            # 4c. Process (ND transpose etc., runs on CPU).
+            moe_mod.quant_method.process_weights_after_loading(moe_mod)
+
+            # 4d. Offload to DRAM pool + free CPU params.
+            moe_mod.offload_expert_weights_to_dram()
+            gc.collect()
+            if torch.npu.is_available():
+                torch.npu.empty_cache()
+
+            # Release the layer's weight tensors to free CPU DRAM.
+            del deferred_layer_weights[layer_id]
+            gc.collect()
+
+        _expert_store.release_hbm_weights()
+        dram_gb = _expert_store.get_dram_usage_gb()
+        h2d_count = len(_expert_store._h2d_layer_ids)
+        moe_layer_count = sum(
+            1 for _, m in model.named_modules() if isinstance(m, FusedMoE)
+        )
+        logger.info(
+            f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
+            f"Total DRAM usage: {dram_gb:.1f} GB "
+            f"(acc_offload pool + {h2d_count} H2D tail layers)"
+        )
 
 
 class LayeredModelLoader(DefaultModelLoader):

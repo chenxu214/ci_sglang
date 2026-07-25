@@ -110,6 +110,36 @@ class ExpertWeightStore:
         # Statistics
         self._stats = {"dram_load": 0, "total_requests": 0}
 
+        # Hybrid storage: layers in _h2d_layer_ids use PyTorch H2D
+        # (torch.empty) instead of acc_offload pool. Configured via
+        # --moe-dram-acc-offload-layers: only the first N offloaded
+        # layers use the pool; the rest use H2D.
+        self._h2d_layer_ids: set = set()  # layer_ids that use PyTorch H2D
+
+    def set_acc_offload_layers(
+        self, acc_offload_layers: int, all_offloaded_layer_ids: list
+    ):
+        """Configure which layers use acc_offload pool vs PyTorch H2D.
+
+        Args:
+            acc_offload_layers: Number of offloaded layers (starting from
+                the first) to use acc_offload pool. 0 = all use pool.
+            all_offloaded_layer_ids: Sorted list of all layer_ids that
+                will be offloaded (non-skip). Layers after the first
+                `acc_offload_layers` will use PyTorch H2D.
+        """
+        if acc_offload_layers > 0 and all_offloaded_layer_ids:
+            sorted_ids = sorted(all_offloaded_layer_ids)
+            # First N layers use pool, rest use H2D
+            self._h2d_layer_ids = set(sorted_ids[acc_offload_layers:])
+            pool_ids = sorted_ids[:acc_offload_layers]
+            logger.info(
+                f"[ExpertWeightStore] acc_offload layers: "
+                f"{len(pool_ids)} ({pool_ids[0]}..{pool_ids[-1]}), "
+                f"H2D layers: {len(self._h2d_layer_ids)} "
+                f"({sorted(self._h2d_layer_ids)})"
+            )
+
     def _ensure_initialize(self):
         if not self._initialized:
             if torch.npu.is_available():
@@ -122,32 +152,61 @@ class ExpertWeightStore:
             self._initialized = True
 
     def _init_acc_offload(self):
-        """Initialize MemFabric acc_offload DRAM pool."""
+        """Initialize MemFabric acc_offload DRAM pool.
+
+        When multiple ranks initialize simultaneously, they compete for
+        huge pages allocation (HalMemCreate). Huge pages require
+        contiguous physical memory, so even if free DRAM is sufficient,
+        concurrent 140GB allocations can fail due to fragmentation /
+        kernel lock contention.
+
+        Serializing initialization via a barrier ensures each rank's
+        HalMemCreate completes before the next rank starts, avoiding
+        concurrent huge page allocation failures.
+        """
         try:
             from memfabric_hybrid import offload
+            import torch.distributed as dist
 
-            config = offload.OffloadConfig()
-            config.device_id = torch.npu.current_device()
-            config.size = self._dram_pool_size_bytes
-            ret = offload.initialize(config)
-            if ret == 0:
-                self._offload = offload
-                self._offload_initialized = True
-                logger.info(
-                    f"[ExpertWeightStore] acc_offload initialized: "
-                    f"device={config.device_id}, "
-                    f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB"
-                )
+            # Serialize acc_offload initialization across ranks to avoid
+            # concurrent huge pages allocation failures. Each rank waits
+            # for the previous rank to finish before starting its own
+            # HalMemCreate call.
+            if dist.is_initialized():
+                rank = dist.get_rank()
+                world_size = dist.get_world_size()
+                for i in range(world_size):
+                    if i == rank:
+                        self._do_acc_offload_init(offload)
+                    dist.barrier()
             else:
-                logger.warning(
-                    f"[ExpertWeightStore] acc_offload init failed (ret={ret}), "
-                    f"falling back to PyTorch H2D"
-                )
-                self.use_acc_offload = False
+                self._do_acc_offload_init(offload)
+
         except ImportError:
             logger.warning(
                 "[ExpertWeightStore] memfabric_hybrid not available, "
                 "falling back to PyTorch H2D"
+            )
+            self.use_acc_offload = False
+
+    def _do_acc_offload_init(self, offload):
+        """Actual acc_offload initialization (called by _init_acc_offload)."""
+        config = offload.OffloadConfig()
+        config.device_id = torch.npu.current_device()
+        config.size = self._dram_pool_size_bytes
+        ret = offload.initialize(config)
+        if ret == 0:
+            self._offload = offload
+            self._offload_initialized = True
+            logger.info(
+                f"[ExpertWeightStore] acc_offload initialized: "
+                f"device={config.device_id}, "
+                f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB"
+            )
+        else:
+            logger.warning(
+                f"[ExpertWeightStore] acc_offload init failed (ret={ret}), "
+                f"falling back to PyTorch H2D"
             )
             self.use_acc_offload = False
 
@@ -247,17 +306,19 @@ class ExpertWeightStore:
                 ).contiguous()
                 tensor = tensor.cpu()
 
-            if (
+            use_pool = (
                 self._use_pool_for_storage
                 and self.use_acc_offload
                 and self._offload_initialized
-            ):
-                # Allocate from acc_offload DRAM pool (full mode)
+                and layer_id not in self._h2d_layer_ids
+            )
+            if use_pool:
+                # Allocate from acc_offload DRAM pool.
                 dram_tensor = self._offload.empty(
                     tensor.shape, dtype=tensor.dtype
                 )
             else:
-                # Staging mode or fallback: PyTorch pinned memory.
+                # H2D tail layer or pool unavailable: PyTorch torch.empty.
                 dram_tensor = torch.empty(
                     tensor.shape, dtype=tensor.dtype, pin_memory=False
                 )
@@ -273,6 +334,101 @@ class ExpertWeightStore:
                 f"[ExpertWeightStore] D2H layer_id={layer_id} expert_id={expert_id}: "
                 f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
             )
+
+    def _batch_h2d_copy(
+        self,
+        pairs: List[Tuple[torch.Tensor, torch.Tensor]],
+        sync: bool = True,
+        layer_id: Optional[int] = None,
+    ) -> None:
+        """Batch H2D copy via acc_offload sparse_copy with PyTorch fallback.
+
+        Centralizes all H2D transfers so that sparse_copy constraints are
+        enforced in one place:
+          - size tensor MUST be 0-D scalar (matches reference usage)
+          - num_pairs MUST be even: if odd, split the last pair into two
+            halves (src_ptr + half, dst_ptr + half, len/2) to make it even
+          - sparse_copy runs on default stream (no stream context)
+
+        Args:
+            pairs: List of (src_cpu_tensor, dst_hbm_tensor) pairs.
+                   src/dst must have the same nbytes.
+            sync: Whether to synchronize after copy. Set False for async
+                  prefetch (caller records an event instead).
+            layer_id: If in _h2d_layer_ids, skip sparse_copy and use
+                      copy_() directly (H2D tail layers stored via
+                      torch.empty, not in acc_offload pool).
+        """
+        num_pairs = len(pairs)
+        if num_pairs == 0:
+            return
+
+        # H2D tail layers: src tensors are torch.empty (not in pool).
+        # Skip sparse_copy entirely — it would fail and waste time.
+        use_sparse = (
+            self.use_acc_offload
+            and self._offload_initialized
+            and (layer_id is None or layer_id not in self._h2d_layer_ids)
+        )
+
+        if use_sparse:
+            # Build (src_ptr, dst_ptr, nbytes) triples from pairs.
+            # If num_pairs is odd, split the last pair into two halves
+            # to make it even (sparse_copy requires even count).
+            src_ptrs = []
+            dst_ptrs = []
+            len_ptrs = []
+
+            for src, dst in pairs:
+                src_ptrs.append(src.data_ptr())
+                dst_ptrs.append(dst.data_ptr())
+                len_ptrs.append(src.nbytes)
+
+            if num_pairs % 2 != 0:
+                # Split last pair into two halves
+                last_src = src_ptrs[-1]
+                last_dst = dst_ptrs[-1]
+                last_len = len_ptrs[-1]
+                half = last_len // 2
+                # Replace last pair with two half-size pairs
+                src_ptrs[-1] = last_src
+                dst_ptrs[-1] = last_dst
+                len_ptrs[-1] = half
+                src_ptrs.append(last_src + half)
+                dst_ptrs.append(last_dst + half)
+                len_ptrs.append(half)
+                num_pairs += 1
+
+            src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
+            dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
+            len_t = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
+            # 0-D scalar, matches reference usage in local_dram_offload.py
+            size_t = torch.tensor(num_pairs, dtype=torch.int32, device="npu")
+
+            device = torch.device(f"npu:{torch.npu.current_device()}")
+            # sparse_copy on default stream (no stream context), matching
+            # the reference usage. Running on h2d_stream causes the kernel
+            # to execute on a different stream than its args tensors.
+            ret = self._offload.sparse_copy(
+                src_ptr_t, dst_ptr_t, len_t, size_t, device
+            )
+
+            if ret == 0:
+                if sync:
+                    torch.npu.synchronize()
+                return
+
+            logger.warning(
+                f"[ExpertWeightStore] sparse_copy ret={ret}, "
+                f"using copy_() fallback"
+            )
+
+        # Fallback: PyTorch H2D copy_ (runs on h2d_stream).
+        with torch.npu.stream(self._h2d_stream):
+            for src, dst in pairs:
+                dst.copy_(src, non_blocking=True)
+        if sync:
+            self._h2d_stream.synchronize()
 
     def batch_load_to_shared_buffer(
         self,
@@ -311,13 +467,9 @@ class ExpertWeightStore:
         if not missing:
             return results
 
-        # Build (src_ptr, dst_ptr, len) triples pointing directly into
-        # the shared buffers. This avoids allocating per-expert HBM tensors
-        # and the subsequent copy_ into shared buffers.
-        src_ptrs = []
-        dst_ptrs = []
-        len_ptrs = []
-
+        # Build (src_cpu, dst_hbm) pairs pointing directly into the shared
+        # buffers. _batch_h2d_copy handles sparse_copy + fallback + sync.
+        pairs = []
         for key in missing:
             eid = key[1]
             dram_weights = self.dram_store[key]
@@ -326,61 +478,13 @@ class ExpertWeightStore:
             for name, dram_tensor in dram_weights.items():
                 if name not in shared_buffers:
                     continue
-                # Destination: expert's slot in the shared buffer
                 dst_tensor = shared_buffers[name][eid]
                 expert_views[name] = dst_tensor
-
-                src_ptrs.append(dram_tensor.data_ptr())
-                dst_ptrs.append(dst_tensor.data_ptr())
-                len_ptrs.append(dram_tensor.nbytes)
+                pairs.append((dram_tensor, dst_tensor))
 
             results[eid] = expert_views
 
-        num_pairs = len(src_ptrs)
-        if num_pairs == 0:
-            return results
-
-        if self.use_acc_offload and self._offload_initialized:
-            src_tensor = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
-            dst_tensor = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
-            len_tensor = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
-            size_tensor = torch.tensor(num_pairs, dtype=torch.int32, device="npu")
-
-            device = torch.device(f"npu:{torch.npu.current_device()}")
-            with torch.npu.stream(self._h2d_stream):
-                ret = self._offload.sparse_copy(
-                    src_tensor, dst_tensor, len_tensor, size_tensor, device
-                )
-            self._h2d_stream.synchronize()
-
-            if ret != 0:
-                logger.error(
-                    f"[ExpertWeightStore] sparse_copy failed (ret={ret}), "
-                    f"falling back to PyTorch H2D"
-                )
-                # Fallback: PyTorch H2D into shared buffers
-                with torch.npu.stream(self._h2d_stream):
-                    for key in missing:
-                        eid = key[1]
-                        dram_weights = self.dram_store[key]
-                        for name, dram_tensor in dram_weights.items():
-                            if name in shared_buffers:
-                                shared_buffers[name][eid].copy_(
-                                    dram_tensor, non_blocking=True
-                                )
-                self._h2d_stream.synchronize()
-        else:
-            # PyTorch H2D directly into shared buffers
-            with torch.npu.stream(self._h2d_stream):
-                for key in missing:
-                    eid = key[1]
-                    dram_weights = self.dram_store[key]
-                    for name, dram_tensor in dram_weights.items():
-                        if name in shared_buffers:
-                            shared_buffers[name][eid].copy_(
-                                dram_tensor, non_blocking=True
-                            )
-            self._h2d_stream.synchronize()
+        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id)
 
         return results
 
@@ -417,15 +521,16 @@ class ExpertWeightStore:
                 full_shape, dtype=sample_tensor.dtype, device="npu"
             )
 
-        # Load each active expert from DRAM to HBM
+        # Build (src_cpu, dst_hbm) pairs for batch sparse_copy.
+        pairs = []
         for i, eid in enumerate(active_expert_ids):
             self._stats["total_requests"] += 1
             self._stats["dram_load"] += 1
             dram_weights = self.dram_store[(layer_id, eid)]
             for name in weight_names:
-                result[name][i].copy_(
-                    dram_weights[name], non_blocking=True
-                )
+                pairs.append((dram_weights[name], result[name][i]))
+
+        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id)
 
         return result
 
@@ -484,27 +589,27 @@ class ExpertWeightStore:
 
         expert_ids = list(range(num_experts))
 
+        # Build (src_cpu, dst_hbm) pairs for batch sparse_copy.
+        pairs = []
+        for eid in expert_ids:
+            key = (layer_id, eid)
+            dram_weights = self.dram_store[key]
+            for name, dram_tensor in dram_weights.items():
+                if name in buffers:
+                    pairs.append((dram_tensor, buffers[name][eid]))
+
         event = None
         if self._h2d_stream is not None:
             event = torch.npu.Event()
+            # Async batch H2D: sparse_copy runs on h2d_stream without sync.
+            # Caller waits on event (recorded below) before using buffers.
+            self._batch_h2d_copy(pairs, sync=False, layer_id=layer_id)
             with torch.npu.stream(self._h2d_stream):
-                for eid in expert_ids:
-                    key = (layer_id, eid)
-                    dram_weights = self.dram_store[key]
-                    for name, dram_tensor in dram_weights.items():
-                        if name in buffers:
-                            buffers[name][eid].copy_(
-                                dram_tensor, non_blocking=True
-                            )
                 event.record()
         else:
             # No h2d_stream (CPU-only): synchronous copy, no event needed.
-            for eid in expert_ids:
-                key = (layer_id, eid)
-                dram_weights = self.dram_store[key]
-                for name, dram_tensor in dram_weights.items():
-                    if name in buffers:
-                        buffers[name][eid].copy_(dram_tensor)
+            for src, dst in pairs:
+                dst.copy_(src)
 
         return buffers, event
 
