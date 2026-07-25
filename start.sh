@@ -7,10 +7,8 @@ sysctl -w kernel.sched_migration_cost_ns=50000
 export SGLANG_SET_CPU_AFFINITY=1
 export SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS=1
 
-MODEL_PATH=/home/weights/kimi-2.7-code/
+MODEL_PATH=/your/weight/path/
 tp=$1
-export SGLANG_KIMI_DECODE_CACHE_SLOTS=20
-export SGLANG_KIMI_PREFETCH_LAYERS=2
 
 unset https_proxy
 unset http_proxy
@@ -21,7 +19,6 @@ export SGLANG_MAMBA_CONV_DTYPE=bfloat16
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
-source /usr/local/memfabric_hybrid/set_env.sh
 
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_SOCKET_IFNAME=lo
@@ -54,6 +51,8 @@ sglang serve \
     --host 0.0.0.0 \
     --port 8880 \
     --moe-dram-offload \
+    --moe-dram-offload-skip-layers 20 \
+    --moe-dram-prefetch-layers 3 \
     --moe-a2a-backend deepep \
     --deepep-mode auto \
     --skip-server-warmup \
