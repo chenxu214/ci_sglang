@@ -482,18 +482,23 @@ class ExpertWeightStore:
 
         # No-caching path: load all from DRAM, use torch.stack
         if self._decode_cache_slots == 0:
-            tensors_by_name = {name: [] for name in weight_names}
-            for eid in active_expert_ids:
-                self._stats["total_requests"] += 1
-                self._stats["dram_load"] += 1
-                key = (layer_id, eid)
-                dram_weights = self.dram_store[key]
-                for name in weight_names:
-                    tensors_by_name[name].append(dram_weights[name])
-
+            # No caching: allocate NPU buffer and copy all from DRAM
+            sample_key = (layer_id, active_expert_ids[0])
             result = {}
             for name in weight_names:
-                result[name] = torch.stack(tensors_by_name[name], dim=0)
+                sample_tensor = self.dram_store[sample_key][name]
+                full_shape = (num_active,) + sample_tensor.shape
+                result[name] = torch.empty(
+                    full_shape, dtype=sample_tensor.dtype, device="npu"
+                )
+            for i, eid in enumerate(active_expert_ids):
+                self._stats["total_requests"] += 1
+                self._stats["dram_load"] += 1
+                dram_weights = self.dram_store[(layer_id, eid)]
+                for name in weight_names:
+                    result[name][i].copy_(
+                        dram_weights[name], non_blocking=True
+                    )
             return result
 
         # Cached path: pre-allocated buffers + LRU slot map
