@@ -877,7 +877,10 @@ class DefaultModelLoader(BaseModelLoader):
         import re
         from collections import defaultdict
 
-        from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+        from sglang.srt.layers.moe.fused_moe_triton.layer import (
+            FusedMoE,
+            _force_cpu_allocation,
+        )
 
         quant_config = getattr(model, "quant_config", None)
         is_nvfp4_online = getattr(quant_config, "is_nvfp4_online", False)
@@ -999,13 +1002,16 @@ class DefaultModelLoader(BaseModelLoader):
                 continue
 
             # 4a. Materialize meta params → CPU (single layer only).
-            for _, param in moe_mod.named_parameters():
-                if param.device.type == "meta":
-                    param.data = torch.empty(
-                        param.shape,
-                        dtype=param.dtype,
-                        device="cpu",
-                    )
+            # _force_cpu_allocation is required because transfer_to_npu.py
+            # patches torch.empty to redirect to NPU even when device="cpu"
+            # is specified explicitly.
+            with _force_cpu_allocation():
+                for _, param in moe_mod.named_parameters():
+                    if param.device.type == "meta":
+                        param.data = torch.empty(
+                            param.shape,
+                            dtype=param.dtype,
+                        )
 
             # 4b. Load this layer's weights into the materialized params.
             model.load_weights(iter(layer_ws))
