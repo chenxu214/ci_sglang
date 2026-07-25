@@ -1547,27 +1547,49 @@ class FusedMoE(torch.nn.Module):
             or self._expert_weight_store is None
         ):
             return
+        # Guard against double prefetch: if _prefetched_buffers already
+        # exists (e.g., start_prefill_prefetch called twice), skip to avoid
+        # orphaning the previous HBM buffer and triggering redundant H2D.
+        if hasattr(self, "_prefetched_buffers"):
+            return
         log_info_on_rank0(
             logger,
             f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
             f"num_experts={self.num_local_experts}",
         )
-        self._prefetched_buffers = self._expert_weight_store.prefetch_layer_to_buffer(
-            self.layer_id, self.num_local_experts
+        self._prefetched_buffers, self._prefetch_event = (
+            self._expert_weight_store.prefetch_layer_to_buffer(
+                self.layer_id, self.num_local_experts
+            )
         )
 
     def wait_prefill_prefetch(self):
-        """Block until this layer's prefetch H2D copy completes, then set weights."""
+        """Block until this layer's prefetch H2D copy completes, then set weights.
+
+        Uses a per-layer NPU event (recorded on h2d_stream after this
+        layer's copies) to synchronize only this layer's H2D, instead of
+        a global h2d_stream.synchronize() which would stall all in-flight
+        prefetches and destroy H2D/compute overlap.
+        """
         if (
             not self._dram_offload_enabled
             or self._expert_weight_store is None
+            or not hasattr(self, "_prefetched_buffers")
         ):
             return
         log_info_on_rank0(
             logger,
             f"[FusedMoE] wait_prefill_prefetch start layer_id={self.layer_id}",
         )
-        self._expert_weight_store.sync_prefetch()
+        event = getattr(self, "_prefetch_event", None)
+        if event is not None:
+            # Per-layer sync: make current (compute) stream wait for this
+            # layer's H2D copies only. Other layers' prefetches on h2d_stream
+            # continue in parallel.
+            event.wait()
+        else:
+            # Fallback (e.g., CPU-only path with no event): global sync.
+            self._expert_weight_store.sync_prefetch()
         for name, tensor in self._prefetched_buffers.items():
             setattr(self, name, tensor)
         log_info_on_rank0(
@@ -1597,6 +1619,8 @@ class FusedMoE(torch.nn.Module):
                     setattr(self, name, None)
             self._expert_weight_store.free_layer_buffers(self._prefetched_buffers)
             del self._prefetched_buffers
+            if hasattr(self, "_prefetch_event"):
+                del self._prefetch_event
         else:
             # N=0 prefill: _load_experts_on_demand set temp buffers.
             # Release weight references so caching allocator can reuse HBM.

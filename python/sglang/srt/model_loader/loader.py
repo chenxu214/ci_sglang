@@ -872,10 +872,14 @@ class DefaultModelLoader(BaseModelLoader):
                     f"skip_layers={skip_layers}, margin={margin}x, "
                     f"storage={'pool' if use_pool_for_storage else 'pinned'})"
                 )
+            shared_buffer_max_gb = getattr(
+                _server_args, "moe_shared_buffer_max_gb", 0
+            )
             _expert_store = ExpertWeightStore(
                 dram_pool_size_gb=dram_pool_gb,
                 use_acc_offload=use_acc_offload,
                 use_pool_for_storage=use_pool_for_storage,
+                shared_buffer_max_gb=shared_buffer_max_gb,
             )
             # Enable DRAM offload only for non-skip layers.
             # Skip layers keep weights in HBM (moe_dram_offload=False in __init__).
@@ -916,6 +920,9 @@ class DefaultModelLoader(BaseModelLoader):
                         torch.npu.empty_cache()
 
         if _expert_store is not None:
+            # Release any HBM cached during offload registration (mostly
+            # a no-op since no forward has run, but ensures clean state).
+            _expert_store.release_hbm_weights()
             dram_gb = _expert_store.get_dram_usage_gb()
             moe_layer_count = sum(
                 1 for _, m in model.named_modules() if isinstance(m, FusedMoE)
@@ -924,114 +931,6 @@ class DefaultModelLoader(BaseModelLoader):
                 f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers. "
                 f"Total DRAM usage: {dram_gb:.1f} GB"
             )
-
-
-def _maybe_enable_moe_dram_offload(model: nn.Module):
-    """Enable MoE expert weight offloading to Host DRAM if configured.
-
-    After process_weights_after_loading() completes, iterates over all
-    FusedMoE modules. If --moe-dram-offload is enabled, copies expert
-    weights to Host DRAM and enables on-demand loading.
-    """
-    from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
-    from sglang.srt.server_args import get_global_server_args
-
-    server_args = get_global_server_args()
-    if not getattr(server_args, "moe_dram_offload", False):
-        return
-
-    from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
-
-    # Check skip_layers: first N MoE layers keep weights in HBM.
-    skip_layers = getattr(server_args, "moe_dram_offload_skip_layers", 0)
-    use_pool_for_storage = (skip_layers == 0)
-
-    # Calculate DRAM pool size from actual MoE weight sizes.
-    # In TP mode, each rank already holds 1/world_size of the experts,
-    # so summing the current rank's MoE weights gives the per-rank pool
-    # requirement. acc_offload's buddy allocator needs the pool to be
-    # backed by physical memory, so we must not over-allocate.
-    use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
-    user_pool_gb = getattr(server_args, "moe_dram_pool_size_gb", None)
-
-    if user_pool_gb is not None:
-        dram_pool_gb = user_pool_gb
-        logger.info(
-            f"[MoE DRAM Offload] Using user-specified pool size: "
-            f"{dram_pool_gb:.1f} GB/rank"
-        )
-    else:
-        # Auto-calculate: sum MoE expert weights on this rank, EXCLUDING
-        # the first skip_layers (they stay in HBM, not offloaded to DRAM).
-        total_moe_bytes = 0
-        for _, module in model.named_modules():
-            if isinstance(module, FusedMoE):
-                if skip_layers > 0 and module.layer_id < skip_layers:
-                    continue
-                for name in module._get_expert_weight_names():
-                    param = getattr(module, name)
-                    total_moe_bytes += param.data.numel() * param.data.element_size()
-        margin = 1.2 if use_pool_for_storage else 1.0
-        dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
-        logger.info(
-            f"[MoE DRAM Offload] Auto-calculated pool size: "
-            f"{dram_pool_gb:.1f} GB/rank "
-            f"(MoE weights={total_moe_bytes / 1024**3:.1f} GB, "
-            f"skip_layers={skip_layers}, "
-            f"margin={margin}x, "
-            f"storage={'pool' if use_pool_for_storage else 'pinned'})"
-        )
-
-    shared_buffer_max_gb = getattr(
-        server_args, "moe_shared_buffer_max_gb", 0
-    )
-    expert_store = ExpertWeightStore(
-        dram_pool_size_gb=dram_pool_gb,
-        use_acc_offload=use_acc_offload,
-        use_pool_for_storage=use_pool_for_storage,
-        shared_buffer_max_gb=shared_buffer_max_gb,
-    )
-
-    # Get HBM usage before offload starts
-    import torch_npu  # noqa: F401  (ensures npu API available)
-    if torch.npu.is_available():
-        alloc_start = torch.npu.memory_allocated() / 1024**3
-    else:
-        alloc_start = 0.0
-    logger.info(
-        f"[MoE DRAM Offload] HBM before offload: alloc={alloc_start:.2f} GB"
-    )
-
-    moe_layer_count = 0
-    skipped_layer_count = 0
-    for _, module in model.named_modules():
-        if isinstance(module, FusedMoE):
-            if skip_layers > 0 and module.layer_id < skip_layers:
-                skipped_layer_count += 1
-                continue
-            module.enable_dram_offload(expert_store)
-            module.offload_expert_weights_to_dram()
-            moe_layer_count += 1
-
-    if moe_layer_count > 0:
-        dram_gb = expert_store.get_dram_usage_gb()
-        logger.info(
-            f"[MoE DRAM Offload] Enabled for {moe_layer_count} MoE layers"
-            f" (skipped {skipped_layer_count} layers to HBM). "
-            f"Total DRAM usage: {dram_gb:.1f} GB"
-        )
-        # Release HBM memory used during offload registration.
-        expert_store.release_hbm_weights()
-
-        if torch.npu.is_available():
-            alloc_end = torch.npu.memory_allocated() / 1024**3
-        else:
-            alloc_end = 0.0
-        logger.info(
-            f"[MoE DRAM Offload] After offload: "
-            f"HBM alloc={alloc_end:.2f} GB "
-            f"(freed {alloc_start - alloc_end:.2f} GB)"
-        )
 
 
 class LayeredModelLoader(DefaultModelLoader):

@@ -1007,6 +1007,14 @@ class KimiLinearModel(nn.Module):
             prefix=f"{prefix}.layers",
         )
 
+        # Number of MoE layers to async-prefetch at prefill start (env-tunable).
+        # 0 = no prefetch; each offloaded layer falls back to synchronous
+        # _load_experts_on_demand in forward. Set SGLANG_KIMI_PREFETCH_LAYERS>0
+        # to enable H2D/compute overlap for the first N offloaded MoE layers.
+        self._prefetch_layers = get_int_env_var(
+            "SGLANG_KIMI_PREFETCH_LAYERS", 0
+        )
+
         if self.pp_group.is_last_rank:
             self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             self.use_attn_residuals = (
@@ -1096,13 +1104,20 @@ class KimiLinearModel(nn.Module):
                     continue
                 if moe_count >= N:
                     break
-                layer.block_sparse_moe.start_prefill_prefetch()
+                layer.block_sparse_moe.experts.start_prefill_prefetch()
                 moe_count += 1
 
         for i in range(self.start_layer, self.end_layer):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
                 layer = self.layers[i]
+                # Wait for this layer's prefetch H2D to complete before
+                # compute. No-op for layers beyond the first N (no
+                # _prefetched_buffers) and for skip/HBM-resident layers.
+                if is_prefill and hasattr(layer, "block_sparse_moe"):
+                    experts = layer.block_sparse_moe.experts
+                    if getattr(experts, "_dram_offload_enabled", False):
+                        experts.wait_prefill_prefetch()
                 hidden_states, residual = layer(
                     positions=positions,
                     hidden_states=hidden_states,
@@ -1115,10 +1130,12 @@ class KimiLinearModel(nn.Module):
                     f"KimiMoE layer compute done (layer_idx={i}, "
                     f"mode={'prefill' if is_prefill else 'decode'})",
                 )
-                # After prefill compute, free this layer's HBM cache entries
-                # to cap HBM at ~(N+1) concurrent layers' worth of experts.
-                if is_prefill and moe is not None:
-                    moe.free_prefill_cache()
+                # After prefill compute, free this layer's prefetched HBM
+                # buffers to cap HBM at ~(N+1) concurrent layers' worth.
+                if is_prefill and hasattr(layer, "block_sparse_moe"):
+                    experts = layer.block_sparse_moe.experts
+                    if getattr(experts, "_dram_offload_enabled", False):
+                        experts.free_prefill_cache()
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(
