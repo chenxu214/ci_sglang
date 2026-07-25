@@ -517,7 +517,7 @@ def build_hybrid_mamba_stack(
         server_args.hicache_ratio,
         server_args.hicache_size,
         allocator_type=server_args.hicache_storage_backend,
-        layout=server_args.hicache_mem_layout,
+        layout="page_first_direct",
     )
     entries = [
         build_pool_entry(

@@ -2031,6 +2031,12 @@ class MambaPoolHost(HostKVCache):
                 layer_id=layer_id,
                 page_size=1,
             )
+        elif io_backend == "kernel_ascend":
+            host_indices = src_indices.to(dtype=torch.int64, device=src.device)
+            device_indices = dst_indices.to(dtype=torch.int64, device=dst.device)
+            # Host: [slot, layer, 1, *state]; device: [slot, *state].
+            values = src.select(1, layer_id).index_select(0, host_indices).select(1, 0)
+            dst.index_copy_(0, device_indices, values.to(device=dst.device))
         else:
             raise ValueError(f"Unsupported io_backend: {io_backend}")
 
@@ -2079,6 +2085,18 @@ class MambaPoolHost(HostKVCache):
                 dst_indices=dst_indices,
                 page_size=1,
             )
+        elif io_backend == "kernel_ascend":
+            device_indices = src_indices.to(dtype=torch.int64, device=src_layers.device)
+            host_indices = dst_indices.to(dtype=torch.int64, device=dst.device)
+            # Device: [layer, slot, *state]; host: [slot, layer, 1, *state].
+            values = (
+                src_layers.index_select(1, device_indices)
+                .movedim(0, 1)
+                .unsqueeze(2)
+                .contiguous()
+                .to(device=dst.device)
+            )
+            dst.index_copy_(0, host_indices, values)
         else:
             raise ValueError(f"Unsupported io_backend: {io_backend}")
 
@@ -2090,9 +2108,10 @@ class MambaPoolHost(HostKVCache):
         layer_id,
         io_backend="kernel",
     ):
-        if io_backend != "direct":
+        if io_backend not in ("direct", "kernel_ascend"):
             raise ValueError(
-                f"MambaPoolHost only supports io_backend='direct', "
+                "MambaPoolHost only supports io_backend='direct' or "
+                f"'kernel_ascend', "
                 f"got '{io_backend}'."
             )
         if self.layout in ["page_first", "page_first_direct"]:
@@ -2135,9 +2154,10 @@ class MambaPoolHost(HostKVCache):
     def backup_from_device_all_layer(
         self, device_pool, host_indices, device_indices, io_backend="kernel"
     ):
-        if io_backend != "direct":
+        if io_backend not in ("direct", "kernel_ascend"):
             raise ValueError(
-                f"MambaPoolHost only supports io_backend='direct', "
+                "MambaPoolHost only supports io_backend='direct' or "
+                f"'kernel_ascend', "
                 f"got '{io_backend}'."
             )
         if self.layout in ["page_first", "page_first_direct"]:
