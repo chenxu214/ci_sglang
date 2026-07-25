@@ -122,32 +122,61 @@ class ExpertWeightStore:
             self._initialized = True
 
     def _init_acc_offload(self):
-        """Initialize MemFabric acc_offload DRAM pool."""
+        """Initialize MemFabric acc_offload DRAM pool.
+
+        When multiple ranks initialize simultaneously, they compete for
+        huge pages allocation (HalMemCreate). Huge pages require
+        contiguous physical memory, so even if free DRAM is sufficient,
+        concurrent 140GB allocations can fail due to fragmentation /
+        kernel lock contention.
+
+        Serializing initialization via a barrier ensures each rank's
+        HalMemCreate completes before the next rank starts, avoiding
+        concurrent huge page allocation failures.
+        """
         try:
             from memfabric_hybrid import offload
+            import torch.distributed as dist
 
-            config = offload.OffloadConfig()
-            config.device_id = torch.npu.current_device()
-            config.size = self._dram_pool_size_bytes
-            ret = offload.initialize(config)
-            if ret == 0:
-                self._offload = offload
-                self._offload_initialized = True
-                logger.info(
-                    f"[ExpertWeightStore] acc_offload initialized: "
-                    f"device={config.device_id}, "
-                    f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB"
-                )
+            # Serialize acc_offload initialization across ranks to avoid
+            # concurrent huge pages allocation failures. Each rank waits
+            # for the previous rank to finish before starting its own
+            # HalMemCreate call.
+            if dist.is_initialized():
+                rank = dist.get_rank()
+                world_size = dist.get_world_size()
+                for i in range(world_size):
+                    if i == rank:
+                        self._do_acc_offload_init(offload)
+                    dist.barrier()
             else:
-                logger.warning(
-                    f"[ExpertWeightStore] acc_offload init failed (ret={ret}), "
-                    f"falling back to PyTorch H2D"
-                )
-                self.use_acc_offload = False
+                self._do_acc_offload_init(offload)
+
         except ImportError:
             logger.warning(
                 "[ExpertWeightStore] memfabric_hybrid not available, "
                 "falling back to PyTorch H2D"
+            )
+            self.use_acc_offload = False
+
+    def _do_acc_offload_init(self, offload):
+        """Actual acc_offload initialization (called by _init_acc_offload)."""
+        config = offload.OffloadConfig()
+        config.device_id = torch.npu.current_device()
+        config.size = self._dram_pool_size_bytes
+        ret = offload.initialize(config)
+        if ret == 0:
+            self._offload = offload
+            self._offload_initialized = True
+            logger.info(
+                f"[ExpertWeightStore] acc_offload initialized: "
+                f"device={config.device_id}, "
+                f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB"
+            )
+        else:
+            logger.warning(
+                f"[ExpertWeightStore] acc_offload init failed (ret={ret}), "
+                f"falling back to PyTorch H2D"
             )
             self.use_acc_offload = False
 
