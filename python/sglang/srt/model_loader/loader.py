@@ -877,10 +877,7 @@ class DefaultModelLoader(BaseModelLoader):
         import re
         from collections import defaultdict
 
-        from sglang.srt.layers.moe.fused_moe_triton.layer import (
-            FusedMoE,
-            _force_cpu_allocation,
-        )
+        from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 
         quant_config = getattr(model, "quant_config", None)
         is_nvfp4_online = getattr(quant_config, "is_nvfp4_online", False)
@@ -1002,16 +999,35 @@ class DefaultModelLoader(BaseModelLoader):
                 continue
 
             # 4a. Materialize meta params → CPU (single layer only).
-            # _force_cpu_allocation is required because transfer_to_npu.py
-            # patches torch.empty to redirect to NPU even when device="cpu"
-            # is specified explicitly.
-            with _force_cpu_allocation():
-                for _, param in moe_mod.named_parameters():
-                    if param.device.type == "meta":
-                        param.data = torch.empty(
-                            param.shape,
-                            dtype=param.dtype,
-                        )
+            # Replace meta Parameter with a new CPU Parameter directly,
+            # bypassing Parameter.set_data() which rejects meta→CPU
+            # assignment with "incompatible tensor type". The .cpu()
+            # guard handles transfer_to_npu.py redirecting torch.empty
+            # to NPU even when device="cpu" is specified explicitly.
+            meta_params = [
+                (n, p) for n, p in moe_mod.named_parameters()
+                if p.device.type == "meta"
+            ]
+            for full_name, param in meta_params:
+                new_data = torch.empty(
+                    param.shape, dtype=param.dtype, device="cpu"
+                ).cpu()
+                new_param = torch.nn.Parameter(
+                    new_data, requires_grad=False
+                )
+                # Preserve custom attributes (weight_loader, etc.)
+                for key, value in param.__dict__.items():
+                    if not key.startswith("_"):
+                        setattr(new_param, key, value)
+                # Navigate to parent module for nested param names.
+                if "." in full_name:
+                    parts = full_name.split(".")
+                    parent = moe_mod
+                    for part in parts[:-1]:
+                        parent = getattr(parent, part)
+                    setattr(parent, parts[-1], new_param)
+                else:
+                    setattr(moe_mod, full_name, new_param)
 
             # 4b. Load this layer's weights into the materialized params.
             model.load_weights(iter(layer_ws))
