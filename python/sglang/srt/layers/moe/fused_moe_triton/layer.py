@@ -1460,30 +1460,30 @@ class FusedMoE(torch.nn.Module):
         # + set() on CPU side to avoid the extra unique() kernel launch.
         global_expert_ids = list(set(topk_ids.view(-1).cpu().tolist()))
 
-        if not global_expert_ids:
-            return
-
         local_expert_ids = []
         for gid in global_expert_ids:
             lid = self._map_global_expert_id_to_local_expert_id(gid)
             if lid >= 0 and lid < self.num_local_experts:
                 local_expert_ids.append(lid)
 
-        if not local_expert_ids:
-            return
-
         # Determine weight names from a sample expert's stored weights.
-        sample_key = (self.layer_id, local_expert_ids[0])
+        # Use expert 0 as sample when no local experts are selected (can
+        # happen in DeepEP when pre-dispatch topk_ids don't include local
+        # experts, but post-dispatch may still route tokens here).
+        sample_eid = local_expert_ids[0] if local_expert_ids else 0
+        sample_key = (self.layer_id, sample_eid)
         if sample_key not in self._expert_weight_store.dram_store:
             return
         weight_names = list(
             self._expert_weight_store.dram_store[sample_key].keys()
         )
 
-        # Ensure shared HBM buffers exist (one per weight name).
-        # All MoE layers share the same buffer (reused across forwards).
-        # If budget is exceeded, get_shared_hbm_buffer returns None and
-        # we fall back to a temporary per-forward allocation.
+        # Always allocate [num_local_experts, ...] shared buffers and set
+        # them as layer weights — even when no local experts are selected.
+        # This ensures the weight shape is correct for the CANN kernel
+        # (group_list size == weight dim 0). Without this, stale weights
+        # from a previous decode (e.g., [num_active, ...]) would persist
+        # and cause a shape mismatch error.
         shared_buffers = {}
         for name in weight_names:
             sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
@@ -1499,10 +1499,26 @@ class FusedMoE(torch.nn.Module):
             shared_buffers[name] = buf
             setattr(self, name, buf)
 
+        # During prefill (_is_decode_mode == False), load ALL local experts
+        # into the shared buffer. DeepEP dispatch redistributes tokens
+        # post-routing, so pre-dispatch topk_ids may not include all experts
+        # that will receive tokens. Loading only selected experts leaves
+        # stale data (from a previous decode) in unselected slots, causing
+        # precision degradation. During decode, only selected experts are
+        # loaded (compact path handles weight extraction separately).
+        is_prefill = not self._expert_weight_store._is_decode_mode
+        if is_prefill:
+            load_expert_ids = list(range(self.num_local_experts))
+        else:
+            load_expert_ids = local_expert_ids
+
+        if not load_expert_ids:
+            return
+
         # Batch H2D directly into shared buffers (avoids extra HBM→HBM copy)
         self._expert_weight_store.batch_load_to_shared_buffer(
             layer_id=self.layer_id,
-            expert_ids=local_expert_ids,
+            expert_ids=load_expert_ids,
             shared_buffers=shared_buffers,
         )
 
