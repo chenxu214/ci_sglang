@@ -959,7 +959,7 @@ class DefaultModelLoader(BaseModelLoader):
                                 param.data.numel()
                                 * param.data.element_size()
                             )
-            margin = 1.2
+            margin = 1.05
             dram_pool_gb = (total_moe_bytes * margin) / (1024**3)
             logger.info(
                 f"[MoE DRAM Offload] Auto-calculated pool size: "
