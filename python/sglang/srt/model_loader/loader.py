@@ -915,32 +915,11 @@ class DefaultModelLoader(BaseModelLoader):
             else:
                 skip_layer_weights.extend(ws)
 
-        # ---- Phase 1: load non-layer + skip-layer weights ----
-        # Non-skip MoE params are on meta device, so load_weights skips them.
-        phase1_weights = non_layer_weights + skip_layer_weights
-        if is_nvfp4_online:
-            with temp_set_env(
-                TRTLLM_DISABLE_FP4_QUANT_FAST_MATH="1",
-                FLASHINFER_DISABLE_FP4_QUANT_FAST_MATH="1",
-            ):
-                model.load_weights(iter(phase1_weights))
-        else:
-            model.load_weights(iter(phase1_weights))
-
-        # ---- Phase 2: process skip-layer + non-MoE modules ----
-        for _, module in model.named_modules():
-            quant_method = getattr(module, "quant_method", None)
-            if quant_method is None:
-                continue
-            if (isinstance(module, FusedMoE)
-                    and getattr(module, "moe_dram_offload", False)):
-                continue  # deferred to phase 4
-            with device_loading_context(module, target_device):
-                quant_method.process_weights_after_loading(module)
-
-        # ---- Phase 3: create ExpertWeightStore + init pool ----
-        # At this point CPU DRAM has NO non-skip weights (they are on
-        # meta device), so pool initialization won't cause OOM.
+        # ---- Phase 0: create ExpertWeightStore + init pool ----
+        # Initialize acc_offload pool BEFORE weight file mmap to get the
+        # best contiguous huge pages. After mmap, page cache fragmentation
+        # causes HalMemCreate failures even when free DRAM is sufficient.
+        # Non-skip weights are still on meta device (zero DRAM usage).
         from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
         use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
         use_pool_for_storage = True  # always pool mode for layered load
@@ -988,7 +967,30 @@ class DefaultModelLoader(BaseModelLoader):
             f"{len(deferred_layer_weights)} non-skip MoE layers."
         )
 
-        # ---- Phase 4: layer-by-layer load + process + offload ----
+        # ---- Phase 1: load non-layer + skip-layer weights ----
+        # Non-skip MoE params are on meta device, so load_weights skips them.
+        phase1_weights = non_layer_weights + skip_layer_weights
+        if is_nvfp4_online:
+            with temp_set_env(
+                TRTLLM_DISABLE_FP4_QUANT_FAST_MATH="1",
+                FLASHINFER_DISABLE_FP4_QUANT_FAST_MATH="1",
+            ):
+                model.load_weights(iter(phase1_weights))
+        else:
+            model.load_weights(iter(phase1_weights))
+
+        # ---- Phase 2: process skip-layer + non-MoE modules ----
+        for _, module in model.named_modules():
+            quant_method = getattr(module, "quant_method", None)
+            if quant_method is None:
+                continue
+            if (isinstance(module, FusedMoE)
+                    and getattr(module, "moe_dram_offload", False)):
+                continue  # deferred to phase 3
+            with device_loading_context(module, target_device):
+                quant_method.process_weights_after_loading(module)
+
+        # ---- Phase 3: layer-by-layer load + process + offload ----
         for layer_id in sorted(deferred_layer_weights.keys()):
             moe_mod = non_skip_moe_modules.get(layer_id)
             layer_ws = deferred_layer_weights[layer_id]
