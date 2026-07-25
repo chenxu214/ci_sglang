@@ -110,6 +110,30 @@ class ExpertWeightStore:
         # Statistics
         self._stats = {"dram_load": 0, "total_requests": 0}
 
+        # Hybrid storage: last N offloaded layers use PyTorch H2D instead
+        # of acc_offload pool. Set via --moe-dram-offload-h2d-tail-layers.
+        # When > 0, register_expert checks layer_id to decide storage.
+        self._h2d_tail_layers = 0  # set via set_h2d_tail_layers()
+        self._h2d_layer_ids: set = set()  # layer_ids that use PyTorch H2D
+
+    def set_h2d_tail_layers(self, tail_layers: int, all_offloaded_layer_ids: list):
+        """Configure which layers use PyTorch H2D instead of acc_offload.
+
+        Args:
+            tail_layers: Number of last offloaded layers to use H2D.
+            all_offloaded_layer_ids: Sorted list of all layer_ids that
+                will be offloaded (non-skip). The last `tail_layers`
+                of these will use PyTorch H2D.
+        """
+        self._h2d_tail_layers = tail_layers
+        if tail_layers > 0 and all_offloaded_layer_ids:
+            sorted_ids = sorted(all_offloaded_layer_ids)
+            self._h2d_layer_ids = set(sorted_ids[-tail_layers:])
+            logger.info(
+                f"[ExpertWeightStore] H2D tail layers: {tail_layers}. "
+                f"Layer ids using PyTorch H2D: {sorted(self._h2d_layer_ids)}"
+            )
+
     def _ensure_initialize(self):
         if not self._initialized:
             if torch.npu.is_available():
@@ -276,17 +300,19 @@ class ExpertWeightStore:
                 ).contiguous()
                 tensor = tensor.cpu()
 
-            if (
+            use_pool = (
                 self._use_pool_for_storage
                 and self.use_acc_offload
                 and self._offload_initialized
-            ):
-                # Allocate from acc_offload DRAM pool (full mode)
+                and layer_id not in self._h2d_layer_ids
+            )
+            if use_pool:
+                # Allocate from acc_offload DRAM pool.
                 dram_tensor = self._offload.empty(
                     tensor.shape, dtype=tensor.dtype
                 )
             else:
-                # Staging mode or fallback: PyTorch pinned memory.
+                # H2D tail layer or pool unavailable: PyTorch torch.empty.
                 dram_tensor = torch.empty(
                     tensor.shape, dtype=tensor.dtype, pin_memory=False
                 )
@@ -307,6 +333,7 @@ class ExpertWeightStore:
         self,
         pairs: List[Tuple[torch.Tensor, torch.Tensor]],
         sync: bool = True,
+        layer_id: Optional[int] = None,
     ) -> None:
         """Batch H2D copy via acc_offload sparse_copy with PyTorch fallback.
 
@@ -321,17 +348,28 @@ class ExpertWeightStore:
                    src/dst must have the same nbytes.
             sync: Whether to synchronize h2d_stream after copy. Set False
                   for async prefetch (caller records an event instead).
+            layer_id: If in _h2d_layer_ids, skip sparse_copy and use
+                      copy_() directly (H2D tail layers stored via
+                      torch.empty, not in acc_offload pool).
         """
         num_pairs = len(pairs)
         if num_pairs == 0:
             return
 
-        # Pad to even count: sparse_copy drops the last weight if odd.
-        if num_pairs % 2 != 0:
-            pairs = pairs + [pairs[-1]]
-            num_pairs += 1
+        # H2D tail layers: src tensors are torch.empty (not in pool).
+        # Skip sparse_copy entirely — it would fail and waste time.
+        use_sparse = (
+            self.use_acc_offload
+            and self._offload_initialized
+            and (layer_id is None or layer_id not in self._h2d_layer_ids)
+        )
 
-        if self.use_acc_offload and self._offload_initialized:
+        if use_sparse:
+            # Pad to even count: sparse_copy drops the last weight if odd.
+            if num_pairs % 2 != 0:
+                pairs = pairs + [pairs[-1]]
+                num_pairs += 1
+
             src_ptrs = [s.data_ptr() for s, _ in pairs]
             dst_ptrs = [d.data_ptr() for _, d in pairs]
             len_ptrs = [s.nbytes for s, _ in pairs]
@@ -354,9 +392,9 @@ class ExpertWeightStore:
                     self._h2d_stream.synchronize()
                 return
 
-            logger.error(
-                f"[ExpertWeightStore] sparse_copy failed (ret={ret}), "
-                f"falling back to PyTorch H2D"
+            logger.warning(
+                f"[ExpertWeightStore] sparse_copy ret={ret}, "
+                f"using copy_() fallback"
             )
 
         # Fallback: PyTorch H2D copy_ (also runs on h2d_stream).
@@ -420,7 +458,7 @@ class ExpertWeightStore:
 
             results[eid] = expert_views
 
-        self._batch_h2d_copy(pairs, sync=True)
+        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id)
 
         return results
 
@@ -466,7 +504,7 @@ class ExpertWeightStore:
             for name in weight_names:
                 pairs.append((dram_weights[name], result[name][i]))
 
-        self._batch_h2d_copy(pairs, sync=True)
+        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id)
 
         return result
 
@@ -539,7 +577,7 @@ class ExpertWeightStore:
             event = torch.npu.Event()
             # Async batch H2D: sparse_copy runs on h2d_stream without sync.
             # Caller waits on event (recorded below) before using buffers.
-            self._batch_h2d_copy(pairs, sync=False)
+            self._batch_h2d_copy(pairs, sync=False, layer_id=layer_id)
             with torch.npu.stream(self._h2d_stream):
                 event.record()
         else:
