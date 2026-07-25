@@ -1078,36 +1078,45 @@ class KimiLinearModel(nn.Module):
                 ):
                     experts._expert_weight_store.set_cache_mode(is_prefill)
 
-        # Prefill prefetch coordination: pre-trigger async H2D copy of the
-        # full expert set for the first N MoE layers so they start loading
-        # before the compute loop begins. The ExpertWeightStore (created by
-        # --moe-dram-offload) handles the actual DRAM→HBM copy on its h2d_stream.
+        # Sliding-window prefetch: pre-trigger async H2D copy for the first
+        # N offloaded MoE layers (pipeline fill), then during the compute
+        # loop trigger prefetch for layer i+N when computing layer i. This
+        # keeps N layers' H2D copies in flight at all times, giving EVERY
+        # offloaded layer H2D/compute overlap — not just the first N.
+        offloaded_moe_indices: List[int] = []
         if is_prefill and N > 0:
-            moe_count = 0
             for i in range(self.start_layer, self.end_layer):
                 layer = self.layers[i]
-                if not hasattr(layer, "block_sparse_moe"):
-                    continue
-                # Skip layers in HBM (moe_dram_offload_skip_layers) —
-                # their weights are already on-device, no prefetch needed.
-                experts = layer.block_sparse_moe.experts
-                if not getattr(experts, "_dram_offload_enabled", False):
-                    continue
-                if moe_count >= N:
-                    break
-                layer.block_sparse_moe.experts.start_prefill_prefetch()
-                moe_count += 1
+                if hasattr(layer, "block_sparse_moe"):
+                    experts = layer.block_sparse_moe.experts
+                    if getattr(experts, "_dram_offload_enabled", False):
+                        offloaded_moe_indices.append(i)
+            # Pipeline fill: prefetch the first min(N, len) offloaded layers.
+            for k in range(min(N, len(offloaded_moe_indices))):
+                idx = offloaded_moe_indices[k]
+                self.layers[idx].block_sparse_moe.experts.start_prefill_prefetch()
 
+        moe_idx = 0  # Position in offloaded_moe_indices
         for i in range(self.start_layer, self.end_layer):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
                 layer = self.layers[i]
-                # Wait for this layer's prefetch H2D to complete before
-                # compute. No-op for layers beyond the first N (no
-                # _prefetched_buffers) and for skip/HBM-resident layers.
                 if is_prefill and hasattr(layer, "block_sparse_moe"):
                     experts = layer.block_sparse_moe.experts
                     if getattr(experts, "_dram_offload_enabled", False):
+                        # Sliding window: trigger prefetch for the layer N
+                        # positions ahead. By the time we finish computing
+                        # this layer and reach that layer, its H2D copy will
+                        # be in flight (or done), achieving overlap.
+                        if (
+                            N > 0
+                            and moe_idx + N < len(offloaded_moe_indices)
+                        ):
+                            next_idx = offloaded_moe_indices[moe_idx + N]
+                            self.layers[
+                                next_idx
+                            ].block_sparse_moe.experts.start_prefill_prefetch()
+                        # Wait for THIS layer's prefetch H2D to complete.
                         experts.wait_prefill_prefetch()
                 hidden_states, residual = layer(
                     positions=positions,
@@ -1127,6 +1136,7 @@ class KimiLinearModel(nn.Module):
                     experts = layer.block_sparse_moe.experts
                     if getattr(experts, "_dram_offload_enabled", False):
                         experts.free_prefill_cache()
+                        moe_idx += 1
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(
