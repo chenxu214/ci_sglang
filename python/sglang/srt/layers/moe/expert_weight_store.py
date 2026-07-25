@@ -193,7 +193,13 @@ class ExpertWeightStore:
         """Actual acc_offload initialization (called by _init_acc_offload)."""
         config = offload.OffloadConfig()
         config.device_id = torch.npu.current_device()
-        config.size = self._dram_pool_size_bytes
+        # OffloadConfig split the old `size` field into reserve_size +
+        # alloc_size when SHARED scene support was added (memfabric_hybrid
+        # commit b9ca8247). For the LOCAL scene each rank owns its own
+        # pool, so alloc_size must equal reserve_size.
+        config.scene = offload.Scene.LOCAL
+        config.reserve_size = self._dram_pool_size_bytes
+        config.alloc_size = self._dram_pool_size_bytes
         ret = offload.initialize(config)
         if ret == 0:
             self._offload = offload
