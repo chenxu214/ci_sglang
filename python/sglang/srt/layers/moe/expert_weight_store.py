@@ -251,7 +251,7 @@ class ExpertWeightStore:
             else:
                 # Staging mode or fallback: PyTorch pinned memory.
                 dram_tensor = torch.empty(
-                    tensor.shape, dtype=tensor.dtype, pin_memory=True
+                    tensor.shape, dtype=tensor.dtype, pin_memory=False
                 )
             dram_tensor.copy_(tensor)
             cpu_weights[name] = dram_tensor
