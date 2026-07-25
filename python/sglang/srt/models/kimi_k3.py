@@ -81,7 +81,6 @@ from sglang.srt.utils import is_npu, make_layers
 from sglang.srt.utils.common import (
     BumpAllocator,
     add_prefix,
-    get_int_env_var,
     log_info_on_rank0,
     log_debug_on_rank0,
     set_weight_attrs,
@@ -973,8 +972,8 @@ class KimiLinearModel(nn.Module):
 
         self.config = config
 
-        self._prefetch_layers = get_int_env_var(
-            "SGLANG_KIMI_PREFETCH_LAYERS", 10
+        self._prefetch_layers = getattr(
+            get_global_server_args(), "moe_dram_prefetch_layers", 0
         )
 
         self.padding_idx = config.pad_token_id
@@ -1005,14 +1004,6 @@ class KimiLinearModel(nn.Module):
             pp_rank=self.pp_group.rank_in_group,
             pp_size=self.pp_group.world_size,
             prefix=f"{prefix}.layers",
-        )
-
-        # Number of MoE layers to async-prefetch at prefill start (env-tunable).
-        # 0 = no prefetch; each offloaded layer falls back to synchronous
-        # _load_experts_on_demand in forward. Set SGLANG_KIMI_PREFETCH_LAYERS>0
-        # to enable H2D/compute overlap for the first N offloaded MoE layers.
-        self._prefetch_layers = get_int_env_var(
-            "SGLANG_KIMI_PREFETCH_LAYERS", 0
         )
 
         if self.pp_group.is_last_rank:

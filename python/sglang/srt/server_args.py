@@ -2062,6 +2062,15 @@ class ServerArgs:
         "back to per-forward allocation. Useful when DeepEP caches all "
         "experts and HBM would overflow.",
     ] = 0
+    moe_dram_prefetch_layers: A[
+        int,
+        "Number of offloaded MoE layers to async-prefetch at prefill "
+        "start. Prefetch loads all experts for the first N offloaded "
+        "layers from Host DRAM to HBM on a dedicated stream, overlapping "
+        "H2D transfer with compute. 0 (default) = no prefetch; each "
+        "offloaded layer falls back to synchronous on-demand loading. "
+        "Only effective when --moe-dram-offload is enabled.",
+    ] = 0
 
     # -------------------------------------------------------------------------
     # Cuda graphs

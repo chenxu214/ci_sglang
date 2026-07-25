@@ -441,7 +441,7 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
     if (
         getattr(layer, "_dram_offload_enabled", False)
         and layer._expert_weight_store is not None
-        and layer._expert_weight_store.hbm_cache_max_slots > 0
+        and layer._expert_weight_store._is_decode_mode
     ):
         group_list_cpu = group_list.cpu()
         active_mask = group_list_cpu > 0

@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Expert weight store for MoE DRAM offloading.
 
-Manages MoE expert weights in Host DRAM with an LRU cache in HBM.
-During forward, only the Top-K selected experts are loaded from
-Host DRAM to HBM on demand.
+Manages MoE expert weights in Host DRAM. During forward, only the
+Top-K selected experts are loaded from Host DRAM to HBM on demand.
 
 Two backends are supported:
   1. acc_offload (default when available): Uses MemFabric acc_offload
@@ -11,16 +10,24 @@ Two backends are supported:
      Higher performance due to 32-core parallelism and reduced API overhead.
   2. PyTorch H2D (fallback): Uses tensor.to("npu", non_blocking=True).
      No external dependency, works everywhere.
+
+Weight loading paths:
+  - Prefill (with prefetch): prefetch_layer_to_buffer() async-loads ALL
+    experts for the first N layers on h2d_stream. wait_prefill_prefetch()
+    synchronizes via per-layer NPU event before compute.
+  - Prefill (no prefetch, N=0): _load_experts_on_demand() loads Top-K
+    experts into shared HBM buffers synchronously per layer.
+  - Decode: build_active_weight_tensors() builds compact [num_active, ...]
+    tensors by loading only active experts from DRAM -- no HBM caching,
+    every decode step reads from Host DRAM in real time.
 """
 
 import logging
-from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch_npu
 
-from sglang.srt.utils.common import get_int_env_var
 from sglang.srt.hardware_backend.npu.utils import NPUACLFormat
 
 logger = logging.getLogger(__name__)
@@ -46,20 +53,10 @@ class ExpertWeightStore:
     """Manages MoE expert weights across Host DRAM and HBM.
 
     Weights are stored in Host DRAM after process_weights_after_loading().
-    An LRU cache in HBM holds recently-used experts. During forward,
-    only Top-K selected experts are loaded from DRAM to HBM.
-
-    LRU implementation:
-        self._per_layer_caches is a dict of OrderedDicts, one per layer_id.
-        Each layer's cache is an OrderedDict[expert_id, weights]. On cache
-        hit, move_to_end() moves the entry to the tail (most recently used).
-        On eviction, popitem(last=False) removes the head (least recently
-        used). The slot-count limit (20 for decode) is applied per-layer
-        so that cross-layer eviction does not occur during decode.
+    During forward, only Top-K selected experts are loaded from DRAM to HBM.
 
     Attributes:
         dram_store: {(layer_id, expert_id): {weight_name: cpu_tensor}}
-        _per_layer_caches: {layer_id: OrderedDict[expert_id, {name: hbm_tensor}]}
         h2d_stream: Dedicated NPU stream for H2D transfers
         use_acc_offload: Whether to use acc_offload sparse_copy
     """
@@ -72,29 +69,11 @@ class ExpertWeightStore:
         shared_buffer_max_gb: float = 0,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
-        # Per-layer LRU caches: {layer_id: OrderedDict[expert_id, weights]}
-        # Each layer has its own slot-count limit (20 for decode, unlimited
-        # for prefill). This prevents cross-layer eviction during decode.
-        self._per_layer_caches: Dict[int, OrderedDict] = {}
-        self.hbm_cache_used_bytes = 0
-        # Pre-allocated decode buffers: {layer_id: {name: [max_slots, ...]}}
-        # Reused across decode steps to avoid per-step torch.stack allocation.
-        self._decode_buffers: Dict[int, Dict[str, torch.Tensor]] = {}
-        # Slot map for decode: {layer_id: OrderedDict[expert_id, slot_index]}
-        # Replaces per-expert HBM tensors in LRU with int indices into
-        # _decode_buffers, eliminating double allocation.
-        self._decode_slot_maps: Dict[int, OrderedDict] = {}
 
-        # Slot-count limit for decode LRU (env-tunable). When > 0, evict by
-        # entry count in addition to byte-size. Set to 0 (unlimited) during
-        # prefill via set_cache_mode().
-        self._decode_cache_slots = get_int_env_var(
-            "SGLANG_KIMI_DECODE_CACHE_SLOTS", 20
-        )
-        self.hbm_cache_max_slots = self._decode_cache_slots
         # Decode mode flag: True during decode, False during prefill.
-        # Separate from hbm_cache_max_slots so that _decode_cache_slots=0
-        # (no caching) still enters the decode compact-tensor path.
+        # Used to select the weight loading path:
+        #   - Prefill: _load_experts_on_demand / prefetch_layer_to_buffer
+        #   - Decode: build_active_weight_tensors (compact, real-time)
         self._is_decode_mode = False
 
         # Dedicated stream for H2D transfers (separate from compute stream)
@@ -125,13 +104,13 @@ class ExpertWeightStore:
         self._shared_hbm_buffers: Dict[str, torch.Tensor] = {}
         self._shared_buffer_shapes: Dict[str, tuple] = {}
         # Budget (in bytes) for shared HBM buffers. 0 disables shared buffers
-        # entirely — all layers use per-forward allocation.
+        # entirely -- all layers use per-forward allocation.
         self._shared_buffer_max_bytes = int(shared_buffer_max_gb * 1024**3)
 
         # Statistics
-        self._stats = {"hbm_hit": 0, "dram_load": 0, "total_requests": 0}
+        self._stats = {"dram_load": 0, "total_requests": 0}
 
-    def _ensure_initialized(self):
+    def _ensure_initialize(self):
         if not self._initialized:
             if torch.npu.is_available():
                 self._h2d_stream = torch.npu.Stream()
@@ -141,12 +120,6 @@ class ExpertWeightStore:
                     self._init_acc_offload()
 
             self._initialized = True
-
-    def _get_layer_cache(self, layer_id: int) -> OrderedDict:
-        """Get (or create) the per-layer LRU OrderedDict."""
-        if layer_id not in self._per_layer_caches:
-            self._per_layer_caches[layer_id] = OrderedDict()
-        return self._per_layer_caches[layer_id]
 
     def _init_acc_offload(self):
         """Initialize MemFabric acc_offload DRAM pool."""
@@ -252,22 +225,22 @@ class ExpertWeightStore:
                      {"w13_weight": ..., "w2_weight": ...,
                       "w13_weight_scale": ..., "w2_weight_scale": ...}
         """
-        self._ensure_initialized()
+        self._ensure_initialize()
         key = (layer_id, expert_id)
 
         cpu_weights = {}
         total_bytes = 0
         for name, tensor in weights.items():
             # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
-            # copy_() or .cpu() — NPU raises "do not support internal format".
+            # copy_() or .cpu() -- NPU raises "do not support internal format".
             # npu_format_cast to ND may only change metadata without
             # reformatting storage, so .contiguous() forces a real ND copy.
             if tensor.device.type != "cpu":
                 # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
                 # Cast to ND first, then .contiguous() forces a real format
                 # conversion (not just metadata change). If this fails, raise
-                # immediately — a silent fallback to .contiguous() alone does
-                # NOT guarantee NZ→ND and would cause "do not support internal
+                # immediately -- a silent fallback to .contiguous() alone does
+                # NOT guarantee NZ->ND and would cause "do not support internal
                 # format" errors later in copy_().
                 tensor = torch_npu.npu_format_cast(
                     tensor, NPUACLFormat.ACL_FORMAT_ND
@@ -301,72 +274,6 @@ class ExpertWeightStore:
                 f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
             )
 
-    def get_expert_weights(
-        self, layer_id: int, expert_id: int
-    ) -> Optional[Dict[str, torch.Tensor]]:
-        """Get expert weights from HBM cache, loading from DRAM if needed.
-
-        Returns None if expert is not registered.
-        """
-        self._ensure_initialized()
-        key = (layer_id, expert_id)
-        self._stats["total_requests"] += 1
-
-        if key not in self.dram_store:
-            return None
-
-        # Check per-layer HBM LRU cache
-        lc = self._get_layer_cache(layer_id)
-        if expert_id in lc:
-            lc.move_to_end(expert_id)  # LRU: mark as recently used
-            self._stats["hbm_hit"] += 1
-            return lc[expert_id]
-
-        # Load from DRAM to HBM
-        self._stats["dram_load"] += 1
-        return self._load_to_hbm(key)
-
-    def batch_get_expert_weights(
-        self, layer_id: int, expert_ids: List[int]
-    ) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Batch load expert weights to HBM.
-
-        When acc_offload is enabled, uses sparse_copy (AICore AIV kernel
-        with MTE engine, 32-core parallel) for batch transfer.
-        Otherwise, uses PyTorch H2D on a dedicated stream.
-        """
-        self._ensure_initialized()
-        results = {}
-        missing = []
-
-        lc = self._get_layer_cache(layer_id)
-        for eid in expert_ids:
-            key = (layer_id, eid)
-            self._stats["total_requests"] += 1
-
-            if key not in self.dram_store:
-                continue
-
-            if eid in lc:
-                lc.move_to_end(eid)  # LRU: mark as recently used
-                self._stats["hbm_hit"] += 1
-                results[eid] = lc[eid]
-            else:
-                self._stats["dram_load"] += 1
-                missing.append(key)
-
-        if not missing:
-            return results
-
-        if self.use_acc_offload and self._offload_initialized:
-            # Use acc_offload sparse_copy (AICore MTE, 32-core parallel)
-            results.update(self._sparse_copy_batch(layer_id, missing))
-        else:
-            # Fallback: PyTorch H2D on dedicated stream
-            results.update(self._pytorch_h2d_batch(missing))
-
-        return results
-
     def batch_load_to_shared_buffer(
         self,
         layer_id: int,
@@ -375,9 +282,9 @@ class ExpertWeightStore:
     ) -> Dict[int, Dict[str, torch.Tensor]]:
         """Batch load expert weights directly into shared HBM buffers.
 
-        This avoids the extra HBM→HBM copy that batch_get_expert_weights +
-        _load_experts_on_demand would do. Weights are written directly
-        into shared_buffers[expert_id].
+        This avoids the extra HBM->HBM copy that a separate per-expert
+        allocation would do. Weights are written directly into
+        shared_buffers[expert_id].
 
         Args:
             layer_id: Layer index
@@ -385,9 +292,9 @@ class ExpertWeightStore:
             shared_buffers: {weight_name: HBM tensor of shape [num_experts, ...]}
 
         Returns:
-            {expert_id: {weight_name: view into shared_buffer}} for cache stats
+            {expert_id: {weight_name: view into shared_buffer}} for stats
         """
-        self._ensure_initialized()
+        self._ensure_initialize()
         results = {}
         missing = []
 
@@ -398,7 +305,6 @@ class ExpertWeightStore:
             if key not in self.dram_store:
                 continue
 
-            # Always load from DRAM for shared buffer path (no LRU check)
             self._stats["dram_load"] += 1
             missing.append(key)
 
@@ -486,11 +392,8 @@ class ExpertWeightStore:
     ) -> Dict[str, torch.Tensor]:
         """Build compact [num_active, ...] weight tensors for active experts.
 
-        When _decode_cache_slots > 0: uses pre-allocated _decode_buffers
-        with LRU slot map for cache hits (HBM→HBM on hit, DRAM→HBM on miss).
-
-        When _decode_cache_slots == 0: no caching, loads all active experts
-        from DRAM every step via torch.stack (no pre-allocated buffer).
+        Loads only the active (token-bearing) experts from Host DRAM to HBM
+        in real time. No HBM caching -- every decode step reads from DRAM.
 
         Args:
             layer_id: Layer index
@@ -500,320 +403,31 @@ class ExpertWeightStore:
         Returns:
             {weight_name: tensor of shape [num_active, ...]}
         """
-        self._ensure_initialized()
+        self._ensure_initialize()
 
         num_active = len(active_expert_ids)
+        sample_key = (layer_id, active_expert_ids[0])
 
-        # No-caching path: load all from DRAM, use torch.stack
-        if self._decode_cache_slots == 0:
-            # No caching: allocate NPU buffer and copy all from DRAM
-            sample_key = (layer_id, active_expert_ids[0])
-            result = {}
-            for name in weight_names:
-                sample_tensor = self.dram_store[sample_key][name]
-                full_shape = (num_active,) + sample_tensor.shape
-                result[name] = torch.empty(
-                    full_shape, dtype=sample_tensor.dtype, device="npu"
-                )
-            for i, eid in enumerate(active_expert_ids):
-                self._stats["total_requests"] += 1
-                self._stats["dram_load"] += 1
-                dram_weights = self.dram_store[(layer_id, eid)]
-                for name in weight_names:
-                    result[name][i].copy_(
-                        dram_weights[name], non_blocking=True
-                    )
-            return result
-
-        # Cached path: pre-allocated buffers + LRU slot map
-        max_slots = self._decode_cache_slots
-
-        # Get or create decode buffers
-        if layer_id not in self._decode_buffers:
-            sample_key = (layer_id, 0)
-            buffers = {}
-            for name in weight_names:
-                sample_tensor = self.dram_store[sample_key][name]
-                full_shape = (max_slots,) + sample_tensor.shape
-                buffers[name] = torch.empty(
-                    full_shape, dtype=sample_tensor.dtype, device="npu"
-                )
-            self._decode_buffers[layer_id] = buffers
-        buffers = self._decode_buffers[layer_id]
-
-        # Get or create slot map (LRU: expert_id → slot_index)
-        if layer_id not in self._decode_slot_maps:
-            self._decode_slot_maps[layer_id] = OrderedDict()
-        slot_map = self._decode_slot_maps[layer_id]
-
-        # Assign slots: hits reuse old slot, misses get free/evicted slot
-        assigned = {}  # {expert_id: slot_index}
-        for eid in active_expert_ids:
-            self._stats["total_requests"] += 1
-            if eid in slot_map:
-                self._stats["hbm_hit"] += 1
-                assigned[eid] = slot_map.pop(eid)
-            else:
-                self._stats["dram_load"] += 1
-
-        # Find free slots for misses (not in current slot_map or assigned)
-        used = set(slot_map.values()) | set(assigned.values())
-        free_slots = [s for s in range(max_slots) if s not in used]
-
-        for eid in active_expert_ids:
-            if eid not in assigned:
-                if free_slots:
-                    assigned[eid] = free_slots.pop(0)
-                elif slot_map:
-                    evicted_eid, evicted_slot = slot_map.popitem(last=False)
-                    assigned[eid] = evicted_slot
-                else:
-                    raise RuntimeError(
-                        f"No free decode buffer slots for layer {layer_id}, "
-                        f"num_active={num_active}, max_slots={max_slots}"
-                    )
-
-        # Load misses from DRAM directly into buffer slots (no per-expert
-        # tensor allocation, no _pytorch_h2d_batch / _sparse_copy_batch)
-        for eid in active_expert_ids:
-            if eid not in slot_map:  # miss
-                slot = assigned[eid]
-                key = (layer_id, eid)
-                dram_weights = self.dram_store[key]
-                for name, dram_tensor in dram_weights.items():
-                    if name in buffers:
-                        buffers[name][slot].copy_(
-                            dram_tensor, non_blocking=True
-                        )
-
-        # Compact: swap data to sequential positions 0..num_active-1.
-        # Uses swap (3-way via temp slot) to avoid data loss.
-        # slot_to_eid tracks which expert is at each slot for O(1) lookup.
-        temp_slot = max_slots - 1
-        slot_to_eid = {s: e for e, s in assigned.items()}
-
-        for i in range(num_active):
-            eid = active_expert_ids[i]
-            src_slot = assigned[eid]
-            if src_slot == i:
-                continue
-            # Swap buf[i] and buf[src_slot] via temp
-            for name in weight_names:
-                buf = buffers[name]
-                buf[temp_slot].copy_(buf[i])
-                buf[i].copy_(buf[src_slot])
-                buf[src_slot].copy_(buf[temp_slot])
-            # Update mappings
-            other_eid = slot_to_eid.get(i)
-            assigned[eid] = i
-            slot_to_eid[i] = eid
-            if other_eid is not None:
-                assigned[other_eid] = src_slot
-                slot_to_eid[src_slot] = other_eid
-
-        # Update slot map: all active experts at sequential positions
-        slot_map.clear()
-        for i, eid in enumerate(active_expert_ids):
-            slot_map[eid] = i
-
-        # Return views into pre-allocated buffer
+        # Allocate compact [num_active, ...] HBM buffers
         result = {}
         for name in weight_names:
-            result[name] = buffers[name][:num_active]
+            sample_tensor = self.dram_store[sample_key][name]
+            full_shape = (num_active,) + sample_tensor.shape
+            result[name] = torch.empty(
+                full_shape, dtype=sample_tensor.dtype, device="npu"
+            )
+
+        # Load each active expert from DRAM to HBM
+        for i, eid in enumerate(active_expert_ids):
+            self._stats["total_requests"] += 1
+            self._stats["dram_load"] += 1
+            dram_weights = self.dram_store[(layer_id, eid)]
+            for name in weight_names:
+                result[name][i].copy_(
+                    dram_weights[name], non_blocking=True
+                )
 
         return result
-
-    # ------------------------------------------------------------------
-    # acc_offload sparse_copy backend
-    # ------------------------------------------------------------------
-
-    def _sparse_copy_batch(
-        self, layer_id: int, missing_keys: List[Tuple[int, int]]
-    ) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Batch load experts using acc_offload sparse_copy.
-
-        Uses the AICore AIV kernel (OffloadSparseCopyOps) which runs
-        on 32 AIV cores with MTE engine for parallel GM→GM copy.
-        Data path: DRAM(via GVA) → MTE → UB → MTE → HBM.
-
-        Note: The kernel splits pairs into two halves (K and V).
-        All pairs are still copied, just split across two loops.
-        """
-        src_ptrs = []
-        dst_ptrs = []
-        len_ptrs = []
-        expert_results = {}
-
-        # Collect all (src, dst, len) pairs for all missing experts
-        for key in missing_keys:
-            eid = key[1]
-            dram_weights = self.dram_store[key]
-            hbm_weights = {}
-
-            for name, dram_tensor in dram_weights.items():
-                # Allocate HBM destination
-                hbm_tensor = torch.empty(
-                    dram_tensor.shape,
-                    dtype=dram_tensor.dtype,
-                    device="npu",
-                )
-                hbm_weights[name] = hbm_tensor
-
-                # Collect pointers
-                src_ptrs.append(dram_tensor.data_ptr())
-                dst_ptrs.append(hbm_tensor.data_ptr())
-                len_ptrs.append(dram_tensor.nbytes)
-
-            expert_results[eid] = hbm_weights
-            self._put_hbm_cache(key, hbm_weights)
-
-        if not src_ptrs:
-            return expert_results
-
-        # Build NPU tensors for sparse_copy arguments
-        num_pairs = len(src_ptrs)
-        src_tensor = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
-        dst_tensor = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
-        len_tensor = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
-        size_tensor = torch.tensor(num_pairs, dtype=torch.int32, device="npu")
-
-        # Execute sparse_copy on h2d_stream
-        device = torch.npu.current_device()
-        with torch.npu.stream(self._h2d_stream):
-            ret = self._offload.sparse_copy(
-                src_tensor, dst_tensor, len_tensor, size_tensor, device
-            )
-            if ret != 0:
-                logger.error(
-                    f"[ExpertWeightStore] sparse_copy failed (ret={ret}), "
-                    f"falling back to PyTorch H2D for this batch"
-                )
-                # Fallback: use PyTorch H2D for this batch
-                return self._pytorch_h2d_batch(missing_keys)
-
-        # Wait for sparse_copy to complete
-        self._h2d_stream.synchronize()
-
-        return expert_results
-
-    # ------------------------------------------------------------------
-    # PyTorch H2D backend (fallback)
-    # ------------------------------------------------------------------
-
-    def _pytorch_h2d_batch(
-        self, missing_keys: List[Tuple[int, int]]
-    ) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Batch load experts using PyTorch H2D (fallback)."""
-        results = {}
-
-        with torch.npu.stream(self._h2d_stream):
-            for key in missing_keys:
-                eid = key[1]
-                hbm_weights = self._load_to_hbm_unchecked(key)
-                results[eid] = hbm_weights
-                # Put into HBM cache so hbm_cache_used_bytes is updated
-                # and subsequent lookups get cache hits.
-                self._put_hbm_cache(key, hbm_weights)
-
-        self._h2d_stream.synchronize()
-
-        return results
-
-    def _load_to_hbm(
-        self, key: Tuple[int, int]
-    ) -> Dict[str, torch.Tensor]:
-        """Load a single expert from DRAM to HBM (with cache eviction)."""
-        hbm_weights = self._load_to_hbm_unchecked(key)
-        self._put_hbm_cache(key, hbm_weights)
-        return hbm_weights
-
-    def _load_to_hbm_unchecked(
-        self, key: Tuple[int, int]
-    ) -> Dict[str, torch.Tensor]:
-        """Copy expert weights from DRAM to HBM without cache management.
-
-        Uses PyTorch H2D (.to("npu")). For acc_offload path,
-        use _sparse_copy_batch instead.
-        """
-        dram_weights = self.dram_store[key]
-        hbm_weights = {}
-        for name, cpu_tensor in dram_weights.items():
-            hbm_tensor = cpu_tensor.to("npu", non_blocking=True)
-            hbm_weights[name] = hbm_tensor
-        return hbm_weights
-
-    def _put_hbm_cache(
-        self, key: Tuple[int, int], weights: Dict[str, torch.Tensor]
-    ):
-        """Put expert weights into per-layer HBM LRU cache, evicting if needed.
-
-        Eviction is per-layer: each layer's cache has its own slot-count limit
-        (20 for decode, unlimited for prefill). This prevents cross-layer
-        eviction during decode so that layer i's cached experts survive
-        while layers i+1..i+91 are processed.
-
-        Byte-size eviction is global (across all layers) as a safety net.
-        """
-        layer_id, expert_id = key
-        lc = self._get_layer_cache(layer_id)
-        weight_size = sum(t.nbytes for t in weights.values())
-
-        # Handle re-insertion (e.g., _sparse_copy_batch fallback to
-        # _pytorch_h2d_batch): remove old entry first to prevent
-        # false slot-count eviction and hbm_cache_used_bytes inflation.
-        if expert_id in lc:
-            old_weights = lc.pop(expert_id)
-            old_size = sum(t.nbytes for t in old_weights.values())
-            self.hbm_cache_used_bytes -= old_size
-            del old_weights
-
-        # Per-layer slot-count eviction (decode LRU: 20 experts max per layer)
-        if self.hbm_cache_max_slots > 0:
-            while (
-                len(lc) >= self.hbm_cache_max_slots
-                and len(lc) > 0
-            ):
-                evicted_eid, evicted_weights = lc.popitem(last=False)
-                evicted_size = sum(t.nbytes for t in evicted_weights.values())
-                self.hbm_cache_used_bytes -= evicted_size
-                del evicted_weights
-
-        lc[expert_id] = weights
-        self.hbm_cache_used_bytes += weight_size
-
-    def async_prefetch(self, layer_id: int, expert_ids: List[int]):
-        """Asynchronously prefetch experts for the next layer.
-
-        Submits H2D copies on the h2d_stream without blocking.
-        The next layer's forward will find these in HBM cache.
-        """
-        self._ensure_initialized()
-        if self._h2d_stream is None:
-            return
-
-        # Collect missing experts that need prefetching
-        missing = []
-        lc = self._get_layer_cache(layer_id)
-        for eid in expert_ids:
-            key = (layer_id, eid)
-            if key not in self.dram_store or eid in lc:
-                continue
-            missing.append(key)
-
-        if not missing:
-            return
-
-        if self.use_acc_offload and self._offload_initialized:
-            # Async sparse_copy (no synchronize, will complete before next use)
-            with torch.npu.stream(self._h2d_stream):
-                self._sparse_copy_batch(layer_id, missing)
-            # Note: no synchronize() here, prefetch is async
-        else:
-            # PyTorch H2D async prefetch
-            with torch.npu.stream(self._h2d_stream):
-                for key in missing:
-                    hbm_weights = self._load_to_hbm_unchecked(key)
-                    self._put_hbm_cache(key, hbm_weights)
 
     # ------------------------------------------------------------------
     # Prefill full-layer prefetch + cache mode management
@@ -822,25 +436,17 @@ class ExpertWeightStore:
     def set_cache_mode(self, is_prefill: bool):
         """Toggle between prefill and decode mode.
 
-        _is_decode_mode is a separate flag from hbm_cache_max_slots so that
-        _decode_cache_slots=0 (no caching) still enters the decode path.
+        Sets _is_decode_mode which controls the weight loading path:
+          - Prefill (is_prefill=True): _load_experts_on_demand /
+            prefetch_layer_to_buffer loads into [num_local_experts, ...] buffers
+          - Decode (is_prefill=False): build_active_weight_tensors builds
+            compact [num_active, ...] tensors directly from DRAM
         """
-        if is_prefill:
-            self._is_decode_mode = False
-            self.hbm_cache_max_slots = 0
-            self._decode_buffers.clear()
-            self._decode_slot_maps.clear()
-        else:
-            self._is_decode_mode = True
-            # hbm_cache_max_slots >= 1 for decode mode detection.
-            # When _decode_cache_slots=0 (no caching), use 1 as sentinel.
-            self.hbm_cache_max_slots = max(self._decode_cache_slots, 1)
-            self._per_layer_caches.clear()
-            self.hbm_cache_used_bytes = 0
+        self._is_decode_mode = not is_prefill
 
     def sync_prefetch(self):
         """Block until all pending h2d_stream operations complete."""
-        self._ensure_initialized()
+        self._ensure_initialize()
         if self._h2d_stream is not None:
             self._h2d_stream.synchronize()
 
@@ -850,21 +456,20 @@ class ExpertWeightStore:
         """Prefetch ALL experts for a layer into per-layer HBM buffers.
 
         Allocates [num_experts, ...] tensors and loads from DRAM on
-        h2d_stream (async, no sync). Does NOT use LRU cache. Caller must
-        wait on the returned event (or call sync_prefetch() if the event
-        is None) before using the buffers, and free_layer_buffers() after
-        compute to release HBM.
+        h2d_stream (async, no sync). Caller must wait on the returned
+        event (or call sync_prefetch() if the event is None) before using
+        the buffers, and free_layer_buffers() after compute to release HBM.
 
         Returns:
             (buffers, event): buffers is {weight_name: hbm_tensor of shape
             [num_experts, ...]}; event is an NPU event recorded on the
             h2d_stream after all H2D copies for this layer, or None when
             h2d_stream is unavailable (CPU-only). Use event.wait() on the
-            compute stream to synchronize ONLY this layer's prefetch —
+            compute stream to synchronize ONLY this layer's prefetch --
             avoids global h2d_stream.synchronize() which would stall all
             in-flight prefetches and destroy H2D/compute overlap.
         """
-        self._ensure_initialized()
+        self._ensure_initialize()
 
         sample_key = (layer_id, 0)
         weight_names = list(self.dram_store[sample_key].keys())
@@ -908,7 +513,7 @@ class ExpertWeightStore:
 
         Only clears Python references; the caching allocator reclaims and
         reuses the memory automatically. No gc.collect()/empty_cache() here
-        — empty_cache() triggers a device-wide sync on NPU, which waits for
+        -- empty_cache() triggers a device-wide sync on NPU, which waits for
         pending h2d_stream prefetch operations, destroying compute/prefetch
         overlap and causing multi-second stalls per layer.
         """
@@ -928,12 +533,9 @@ class ExpertWeightStore:
 
     def get_stats(self) -> dict:
         total = max(self._stats["total_requests"], 1)
-        cache_count = sum(len(lc) for lc in self._per_layer_caches.values())
         return {
-            "hbm_hit_rate": self._stats["hbm_hit"] / total,
             "dram_load_count": self._stats["dram_load"],
-            "hbm_cache_count": cache_count,
-            "hbm_cache_used_gb": self.hbm_cache_used_bytes / 1024**3,
+            "total_requests": self._stats["total_requests"],
             "dram_total_experts": len(self.dram_store),
             "backend": "acc_offload" if self.use_acc_offload else "pytorch_h2d",
         }
@@ -946,35 +548,22 @@ class ExpertWeightStore:
         return total / 1024**3
 
     def release_hbm_weights(self):
-        """Release all HBM cached weights and shared buffers.
+        """Release all HBM shared buffers.
 
         Called after offload registration to free HBM used during the
-        registration process. LRU cache and shared buffers should be
-        empty at this point (not yet used), so this is mostly gc +
-        empty_cache.
+        registration process. Shared buffers should be empty at this point
+        (not yet used), so this is mostly gc + empty_cache.
         """
-        cache_count = sum(
-            len(lc) for lc in self._per_layer_caches.values()
-        )
-        cache_gb = self.hbm_cache_used_bytes / 1024**3
         shared_buffer_count = len(self._shared_hbm_buffers)
         shared_buffer_bytes = sum(
             t.nbytes for t in self._shared_hbm_buffers.values()
         )
 
-        # Clear LRU caches and shared buffers
-        for lc in self._per_layer_caches.values():
-            lc.clear()
-        self._per_layer_caches.clear()
-        self.hbm_cache_used_bytes = 0
         self._shared_hbm_buffers.clear()
-        self._decode_buffers.clear()
-        self._decode_slot_maps.clear()
 
         logger.debug(
             f"[ExpertWeightStore] release_hbm_weights: "
-            f"cleared {cache_count} LRU entries ({cache_gb:.2f} GB), "
-            f"{shared_buffer_count} shared buffers "
+            f"cleared {shared_buffer_count} shared buffers "
             f"({shared_buffer_bytes / 1024**2:.1f} MB)"
         )
 
