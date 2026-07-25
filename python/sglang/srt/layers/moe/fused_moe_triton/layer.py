@@ -4,6 +4,7 @@
 
 import contextlib
 import logging
+import time
 from enum import Enum
 from functools import cached_property
 from typing import List, Optional, Tuple
@@ -1572,6 +1573,7 @@ class FusedMoE(torch.nn.Module):
             logger,
             f"[FusedMoE] wait_prefill_prefetch start layer_id={self.layer_id}",
         )
+        t0 = time.perf_counter()
         event = getattr(self, "_prefetch_event", None)
         if event is not None:
             # Per-layer sync: make current (compute) stream wait for this
@@ -1583,9 +1585,11 @@ class FusedMoE(torch.nn.Module):
             self._expert_weight_store.sync_prefetch()
         for name, tensor in self._prefetched_buffers.items():
             setattr(self, name, tensor)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
         log_info_on_rank0(
             logger,
-            f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id}",
+            f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id} "
+            f"elapsed={elapsed_ms:.2f} ms",
         )
 
     def free_prefill_cache(self):
