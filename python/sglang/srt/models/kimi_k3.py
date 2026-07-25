@@ -973,6 +973,10 @@ class KimiLinearModel(nn.Module):
 
         self.config = config
 
+        self._prefetch_layers = get_int_env_var(
+            "SGLANG_KIMI_PREFETCH_LAYERS", 10
+        )
+
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.pp_group = get_pp_group()
