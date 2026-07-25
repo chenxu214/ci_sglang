@@ -366,7 +366,12 @@ class FusedMoE(torch.nn.Module):
         self._dram_offload_enabled = False
         self._expert_weight_store = None
         if _moe_dram_offload:
-            with _force_cpu_allocation():
+            # Use meta device: weights are materialized layer-by-layer
+            # during load_weights_and_postprocess (see loader.py) to
+            # minimize CPU DRAM peak (pool + single layer, not pool +
+            # all non-skip layers). This avoids OOM when acc_offload pool
+            # is pre-allocated before all layers are offloaded.
+            with torch.device("meta"):
                 self.quant_method.create_weights(
                     layer=self,
                     num_experts=self.num_local_experts,
