@@ -1021,6 +1021,10 @@ class DefaultModelLoader(BaseModelLoader):
         gc.collect()
 
         # ---- Phase 3: layer-by-layer load + process + offload ----
+        import torch.distributed as dist
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+
         for layer_id in sorted(deferred_layer_weights.keys()):
             moe_mod = non_skip_moe_modules.get(layer_id)
             layer_ws = deferred_layer_weights[layer_id]
@@ -1028,6 +1032,9 @@ class DefaultModelLoader(BaseModelLoader):
             if moe_mod is None:
                 # Non-MoE layer with weights: load normally.
                 model.load_weights(iter(layer_ws))
+                del deferred_layer_weights[layer_id]
+                del layer_ws
+                gc.collect()
                 continue
 
             # 4a. Materialize meta params → CPU (single layer only).
@@ -1092,20 +1099,19 @@ class DefaultModelLoader(BaseModelLoader):
             # → ~236 GB) because glibc malloc holds freed memory.
             _expert_store._release_cpu_cache()
 
-            # Log host DRAM usage every 10 layers to track leaks.
-            if layer_id % 10 == 0:
-                try:
-                    with open("/proc/meminfo", "r") as f:
-                        for line in f:
-                            if line.startswith("MemAvailable:"):
-                                avail_gb = int(line.split()[1]) / 1024 / 1024
-                                logger.info(
-                                    f"[MoE DRAM Offload] After layer {layer_id}: "
-                                    f"host MemAvailable={avail_gb:.1f} GB"
-                                )
-                                break
-                except Exception:
-                    pass
+            # Log host DRAM usage every layer to track leaks.
+            try:
+                with open("/proc/meminfo", "r") as f:
+                    for line in f:
+                        if line.startswith("MemAvailable:"):
+                            avail_gb = int(line.split()[1]) / 1024 / 1024
+                            logger.info(
+                                f"[MoE DRAM Offload] After layer {layer_id}: "
+                                f"host MemAvailable={avail_gb:.1f} GB"
+                            )
+                            break
+            except Exception:
+                pass
 
         _expert_store.release_hbm_weights()
         dram_gb = _expert_store.get_dram_usage_gb()

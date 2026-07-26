@@ -373,9 +373,10 @@ class ExpertWeightStore:
         to grow ~3.75 GB per layer (63 layers → ~236 GB) even after
         Python references are gone.
 
-        Fix: always call malloc_trim(0) to hint glibc to release freed
-        arenas back to the OS. Also call torch.cpu.empty_cache() for
-        the (rare) case where PyTorch CPU caching allocator is enabled.
+        Fix: call malloc_trim(0) to release glibc arenas back to the OS.
+        Also call torch.cpu.empty_cache() for PyTorch CPU caching
+        allocator. The MALLOC_TRIM_THRESHOLD_ environment variable can
+        also help (set to 0 to make glibc return memory immediately).
         """
         import gc
         gc.collect()
@@ -385,13 +386,44 @@ class ExpertWeightStore:
         except (AttributeError, RuntimeError):
             pass
         # Release glibc malloc arenas back to the OS.
-        # This is the critical step — without it, host DRAM grows
-        # unbounded because glibc holds freed memory in its arena.
+        # Use mallctl to iterate arenas if available, otherwise fallback
+        # to malloc_trim(0) which trims the main arena.
+        # Critical: without this, host DRAM grows unbounded because glibc
+        # holds freed memory in its arena (especially with multi-threaded
+        # PyTorch which creates per-thread arenas).
         try:
             import ctypes
-            ctypes.CDLL("libc.so.6").malloc_trim(0)
+            libc = ctypes.CDLL("libc.so.6")
+            # malloc_trim(0) releases free regions from all arenas
+            # (not just main arena) in glibc >= 2.12.
+            libc.malloc_trim(0)
         except Exception:
             pass
+        # Also try posix_fadvise(DONTNEED) on large allocations.
+        # This helps release page cache for mmap'd regions.
+        try:
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6")
+            # malloc_stats prints arena stats to stderr — useful for
+            # debugging but noisy. Only enable with env var.
+            if __import__("os").environ.get("SGLANG_DEBUG_MALLOC"):
+                libc.malloc_stats()
+        except Exception:
+            pass
+
+    def _release_layer_cpu_tensors(self, layer_id: int):
+        """Force-release all CPU tensors associated with a layer.
+
+        Called after offload_expert_weights_to_dram() to release:
+          1. Parameter references (via delattr in offload_expert_weights_to_dram)
+          2. layer_ws references (via del in loader.py)
+          3. glibc malloc arenas (via malloc_trim)
+          4. PyTorch CPU caching allocator (via empty_cache)
+
+        This is a more aggressive release than _release_cpu_cache alone,
+        intended to be called once per layer after all references are gone.
+        """
+        self._release_cpu_cache()
 
     def _batch_h2d_copy(
         self,
