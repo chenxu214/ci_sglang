@@ -1565,16 +1565,32 @@ class Scheduler(
             prof_round = 0     # Current round index (0-based)
 
             import torch_npu
+            # Use torch_npu.profiler directly (NOT the patched torch.profiler).
+            # The patching mechanism (apply_torch_npu_patches) replaces
+            # torch.profiler.profile with torch_npu.profiler.profile, but
+            # patching ProfilerActivity.CUDA on an enum is unreliable and may
+            # not properly map to ProfilerActivity.NPU. Using torch_npu.profiler
+            # directly guarantees CANN profiling hooks are active and
+            # Device-side operator data is captured.
+            # Configuration matches npu_graph_runner._init_profile_context_and_memory_record
+            # which is known to produce Device-side data on Ascend NPU.
+            from torch_npu.profiler import ProfilerActivity as NpuProfilerActivity
+            from torch_npu.profiler import profile as npu_profile
 
             def _create_profiler(round_idx: int):
                 """Create a fresh profiler instance for one profiling round.
 
-                Follows the same configuration as SchedulerProfilerManager
-                (profiler_manager.py): no schedule, export_type=Text for
-                Device-side data, Level1 for CANN AscendCL + AI Core metrics.
+                Uses torch_npu.profiler directly with:
+                  - export_type=[Text] (LIST, not single value — a single
+                    value is silently ignored by CANN, causing Device-side
+                    data to not be exported)
+                  - ProfilerActivity.NPU (direct, not patched CUDA)
+                  - async_mode=True in trace handler (non-blocking export)
+                  - Absolute output path with directory pre-created
+                No schedule, no prof.step() — matches SchedulerProfilerManager.
                 """
                 experimental_config = torch_npu.profiler._ExperimentalConfig(
-                    export_type=torch_npu.profiler.ExportType.Text,
+                    export_type=[torch_npu.profiler.ExportType.Text],
                     profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
                     msprof_tx=False,
                     aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
@@ -1584,23 +1600,19 @@ class Scheduler(
                     record_op_args=False,
                     gc_detect_threshold=None,
                 )
-                round_path = f"profiling/round_{round_idx}"
-                # No schedule — simple start()/stop() like the existing
-                # SGLang profiler. The schedule mechanism requires exact
-                # prof.step() counts and interferes with multi-round restart.
-                return torch_npu.profiler.profile(
+                round_path = os.path.abspath(f"profiling/round_{round_idx}")
+                os.makedirs(round_path, exist_ok=True)
+                return npu_profile(
                     activities=[
-                        torch_npu.profiler.ProfilerActivity.CPU,
-                        torch_npu.profiler.ProfilerActivity.NPU,
+                        NpuProfilerActivity.CPU,
+                        NpuProfilerActivity.NPU,
                     ],
+                    with_stack=True,
+                    record_shapes=False,
                     on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
-                        round_path
+                        round_path,
+                        async_mode=True,
                     ),
-                    record_shapes=True,
-                    profile_memory=True,
-                    with_stack=False,
-                    with_flops=False,
-                    with_modules=False,
                     experimental_config=experimental_config,
                 )
 
@@ -1670,11 +1682,12 @@ class Scheduler(
                 batch_result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), batch_result))
 
-                # No schedule — just count batches and stop after prof_step.
-                # prof.step() is called for step markers in the trace (works
-                # even without a schedule).
+                # No schedule, no prof.step() — matches SchedulerProfilerManager
+                # which only calls start()/stop(). Calling prof.step() without
+                # a schedule can interfere with torch_npu profiler's internal
+                # state and may cause Device-side data to not be exported.
+                # Just count batches and stop after prof_step.
                 if enable_profiling and prof_cnt > 0 and is_prof_stage:
-                    prof.step()
                     prof_cnt += 1
                     if prof_cnt > prof_step:
                         torch.npu.synchronize()
