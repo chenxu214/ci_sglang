@@ -49,6 +49,75 @@ def _get_hbm_usage_gb() -> Tuple[float, float]:
     return allocated, reserved
 
 
+def _drop_kernel_page_cache() -> None:
+    """Drop kernel page cache to free contiguous physical memory.
+
+    Huge page allocation (HalMemCreate) requires physically contiguous 2MB
+    regions. When the kernel page cache is large (e.g. from safetensors
+    mmap during weight loading), fragmentation can cause allocation failures
+    even when MemAvailable looks sufficient.
+
+    This function:
+      1. Calls sync() to flush dirty pages to disk.
+      2. Writes "3" to /proc/sys/vm/drop_caches to free pagecache + slabs.
+         (requires root; silently skips if no permission)
+      3. Calls malloc_trim(0) to release glibc arenas back to OS.
+      4. Sleeps briefly to allow kernel reclaim to settle.
+      5. Logs before/after MemAvailable for observability.
+    """
+    import os
+    import time
+    import ctypes
+
+    def _read_mem_available_kb() -> int:
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1])
+        except Exception:
+            pass
+        return 0
+
+    before_kb = _read_mem_available_kb()
+
+    # 1. sync() — flush dirty pages to disk before dropping cache.
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        libc.sync()
+    except Exception:
+        pass
+
+    # 2. drop_caches — write 3 to free pagecache + dentries + inodes.
+    #    Requires root (CAP_SYS_ADMIN). Silently skip if not permitted.
+    try:
+        with open("/proc/sys/vm/drop_caches", "w") as f:
+            f.write("3")
+    except (PermissionError, OSError):
+        # Non-root user — cannot drop kernel cache. Best effort only.
+        pass
+    except Exception:
+        pass
+
+    # 3. malloc_trim(0) — release glibc malloc arenas back to OS.
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+    except Exception:
+        pass
+
+    # 4. Brief sleep to allow kernel reclaim to settle before huge page alloc.
+    time.sleep(5)
+
+    after_kb = _read_mem_available_kb()
+    delta_gb = (after_kb - before_kb) / 1024 / 1024
+    logger.info(
+        f"[ExpertWeightStore] Dropped kernel page cache: "
+        f"MemAvailable {before_kb / 1024 / 1024:.1f} GB -> "
+        f"{after_kb / 1024 / 1024:.1f} GB (delta={delta_gb:+.1f} GB)"
+    )
+
+
 class ExpertWeightStore:
     """Manages MoE expert weights across Host DRAM and HBM.
 
@@ -66,7 +135,6 @@ class ExpertWeightStore:
         dram_pool_size_gb: float = 1300.0,
         use_acc_offload: bool = True,
         use_pool_for_storage: bool = True,
-        shared_buffer_max_gb: float = 0,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
 
@@ -96,16 +164,6 @@ class ExpertWeightStore:
 
         # Track registered layers for warmup
         self._registered_layers: set = set()
-
-        # Shared HBM weight buffer: all MoE layers reuse the same buffer.
-        # Before each layer's forward, Top-K experts are loaded into it.
-        # This avoids allocating separate HBM tensors for all 80 layers.
-        # Key: weight_name, Value: HBM tensor of shape [num_experts, ...]
-        self._shared_hbm_buffers: Dict[str, torch.Tensor] = {}
-        self._shared_buffer_shapes: Dict[str, tuple] = {}
-        # Budget (in bytes) for shared HBM buffers. 0 disables shared buffers
-        # entirely -- all layers use per-forward allocation.
-        self._shared_buffer_max_bytes = int(shared_buffer_max_gb * 1024**3)
 
         # Statistics
         self._stats = {"dram_load": 0, "total_requests": 0}
@@ -190,81 +248,51 @@ class ExpertWeightStore:
             self.use_acc_offload = False
 
     def _do_acc_offload_init(self, offload):
-        """Actual acc_offload initialization (called by _init_acc_offload)."""
+        """Actual acc_offload initialization (called by _init_acc_offload).
+
+        Before each HalMemCreate attempt, we drop kernel page cache to free
+        up contiguous physical memory. Huge pages require physically
+        contiguous 2MB regions, and excessive file cache (from safetensors
+        mmap during weight loading) can cause allocation failure even when
+        MemAvailable looks sufficient.
+
+        We try up to 2 times, dropping cache before each attempt.
+        """
         config = offload.OffloadConfig()
         config.device_id = torch.npu.current_device()
         config.size = self._dram_pool_size_bytes
-        ret = offload.initialize(config)
-        if ret == 0:
-            self._offload = offload
-            self._offload_initialized = True
+
+        for attempt in range(2):
+            # Drop page cache before each attempt to maximize contiguous
+            # physical memory available for huge page allocation.
             logger.info(
-                f"[ExpertWeightStore] acc_offload initialized: "
-                f"device={config.device_id}, "
-                f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB"
+                f"[ExpertWeightStore] acc_offload init attempt {attempt + 1}/2, "
+                f"dropping page cache before HalMemCreate..."
             )
-        else:
+            _drop_kernel_page_cache()
+
+            ret = offload.initialize(config)
+            if ret == 0:
+                self._offload = offload
+                self._offload_initialized = True
+                logger.info(
+                    f"[ExpertWeightStore] acc_offload initialized: "
+                    f"device={config.device_id}, "
+                    f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB "
+                    f"(attempt={attempt + 1})"
+                )
+                return
             logger.warning(
-                f"[ExpertWeightStore] acc_offload init failed (ret={ret}), "
-                f"falling back to PyTorch H2D"
+                f"[ExpertWeightStore] acc_offload init attempt {attempt + 1} "
+                f"failed (ret={ret})"
             )
-            self.use_acc_offload = False
 
-    def _check_shared_buffer_budget(self, name: str, nbytes: int) -> bool:
-        """Check if allocating a shared buffer of nbytes would fit the budget.
-
-        0 = shared buffer disabled; all layers use per-forward allocation
-        (lowest HBM footprint, higher allocation overhead per forward).
-        """
-        if self._shared_buffer_max_bytes <= 0:
-            return False
-        current = sum(t.nbytes for t in self._shared_hbm_buffers.values())
-        if current + nbytes > self._shared_buffer_max_bytes:
-            logger.warning(
-                f"[ExpertWeightStore] Shared buffer '{name}' "
-                f"({nbytes / 1024**2:.1f} MB) would exceed budget "
-                f"({self._shared_buffer_max_bytes / 1024**3:.1f} GB, "
-                f"current={current / 1024**2:.1f} MB). "
-                f"Skipping shared buffer; will use per-forward allocation."
-            )
-            return False
-        return True
-
-    def get_shared_hbm_buffer(
-        self, name: str, shape: tuple, dtype: torch.dtype
-    ) -> Optional[torch.Tensor]:
-        """Get or create a shared HBM buffer for a weight name.
-
-        All MoE layers share the same buffer (same shape/dtype).
-        Before each layer's forward, Top-K experts are loaded into it.
-        This avoids allocating 80 separate HBM tensors (~160G total).
-        Instead, only one buffer (~2G) is allocated and reused.
-
-        Returns None if the buffer would exceed the HBM budget.
-        """
-        if name in self._shared_hbm_buffers:
-            return self._shared_hbm_buffers[name]
-
-        estimated_nbytes = (
-            int(torch.tensor(list(shape)).prod().item()) * dtype.itemsize
-            if shape else 0
+        # All attempts failed — fall back to PyTorch H2D.
+        logger.warning(
+            "[ExpertWeightStore] acc_offload init failed after retries, "
+            "falling back to PyTorch H2D"
         )
-        if not self._check_shared_buffer_budget(name, estimated_nbytes):
-            return None
-
-        target_device = "npu" if torch.npu.is_available() else "cpu"
-        self._shared_hbm_buffers[name] = torch.empty(
-            shape, dtype=dtype, device=target_device
-        )
-        self._shared_buffer_shapes[name] = shape
-        alloc_now, reserved_now = _get_hbm_usage_gb()
-        logger.info(
-            f"[ExpertWeightStore] Allocated shared HBM buffer '{name}': "
-            f"shape={shape}, dtype={dtype}, "
-            f"size={self._shared_hbm_buffers[name].nbytes / 1024**2:.1f} MB. "
-            f"HBM now: alloc={alloc_now:.2f} GB, reserved={reserved_now:.2f} GB"
-        )
-        return self._shared_hbm_buffers[name]
+        self.use_acc_offload = False
 
     def register_expert(
         self,
@@ -289,42 +317,64 @@ class ExpertWeightStore:
 
         cpu_weights = {}
         total_bytes = 0
-        for name, tensor in weights.items():
-            # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
-            # copy_() or .cpu() -- NPU raises "do not support internal format".
-            # npu_format_cast to ND may only change metadata without
-            # reformatting storage, so .contiguous() forces a real ND copy.
-            if tensor.device.type != "cpu":
-                # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
-                # Cast to ND first, then .contiguous() forces a real format
-                # conversion (not just metadata change). If this fails, raise
-                # immediately -- a silent fallback to .contiguous() alone does
-                # NOT guarantee NZ->ND and would cause "do not support internal
-                # format" errors later in copy_().
-                tensor = torch_npu.npu_format_cast(
-                    tensor, NPUACLFormat.ACL_FORMAT_ND
-                ).contiguous()
-                tensor = tensor.cpu()
+        # Track temporary CPU tensors (created by .cpu()) so we can release
+        # them explicitly after copying to the DRAM pool. Without this,
+        # PyTorch CPU caching allocator holds the memory and does not return
+        # it to the OS, causing host DRAM usage to grow unbounded.
+        #
+        # Note: We do NOT call torch.cpu.empty_cache() here because it would
+        # be invoked 896 times per layer (once per expert), causing significant
+        # overhead. The caller (offload_expert_weights_to_dram) is responsible
+        # for calling _release_cpu_cache() once after all experts are registered.
+        temp_cpu_tensors = []
+        try:
+            for name, tensor in weights.items():
+                # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
+                # copy_() or .cpu() -- NPU raises "do not support internal
+                # format". npu_format_cast to ND may only change metadata
+                # without reformatting storage, so .contiguous() forces a real
+                # ND copy.
+                if tensor.device.type != "cpu":
+                    # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
+                    # Cast to ND first, then .contiguous() forces a real format
+                    # conversion (not just metadata change). If this fails,
+                    # raise immediately -- a silent fallback to .contiguous()
+                    # alone does NOT guarantee NZ->ND and would cause "do not
+                    # support internal format" errors later in copy_().
+                    nd_tensor = torch_npu.npu_format_cast(
+                        tensor, NPUACLFormat.ACL_FORMAT_ND
+                    ).contiguous()
+                    cpu_tensor = nd_tensor.cpu()
+                    del nd_tensor
+                    temp_cpu_tensors.append(cpu_tensor)
+                else:
+                    cpu_tensor = tensor
 
-            use_pool = (
-                self._use_pool_for_storage
-                and self.use_acc_offload
-                and self._offload_initialized
-                and layer_id not in self._h2d_layer_ids
-            )
-            if use_pool:
-                # Allocate from acc_offload DRAM pool.
-                dram_tensor = self._offload.empty(
-                    tensor.shape, dtype=tensor.dtype
+                use_pool = (
+                    self._use_pool_for_storage
+                    and self.use_acc_offload
+                    and self._offload_initialized
+                    and layer_id not in self._h2d_layer_ids
                 )
-            else:
-                # H2D tail layer or pool unavailable: PyTorch torch.empty.
-                dram_tensor = torch.empty(
-                    tensor.shape, dtype=tensor.dtype, pin_memory=False
-                )
-            dram_tensor.copy_(tensor)
-            cpu_weights[name] = dram_tensor
-            total_bytes += dram_tensor.nbytes
+                if use_pool:
+                    # Allocate from acc_offload DRAM pool.
+                    dram_tensor = self._offload.empty(
+                        cpu_tensor.shape, dtype=cpu_tensor.dtype
+                    )
+                else:
+                    # H2D tail layer or pool unavailable: PyTorch torch.empty.
+                    dram_tensor = torch.empty(
+                        cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                    )
+                dram_tensor.copy_(cpu_tensor)
+                cpu_weights[name] = dram_tensor
+                total_bytes += dram_tensor.nbytes
+        finally:
+            # Release temporary CPU tensor Python references immediately.
+            # PyTorch CPU caching allocator may still hold the underlying
+            # memory; caller must invoke _release_cpu_cache() after the full
+            # layer registration loop to return it to the OS.
+            del temp_cpu_tensors
 
         self.dram_store[key] = cpu_weights
         self._registered_layers.add(layer_id)
@@ -334,6 +384,66 @@ class ExpertWeightStore:
                 f"[ExpertWeightStore] D2H layer_id={layer_id} expert_id={expert_id}: "
                 f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
             )
+
+    def _release_cpu_cache(self):
+        """Release CPU memory back to the OS after register_expert() calls.
+
+        PyTorch CPU tensors are allocated via glibc malloc (not PyTorch's
+        CPU caching allocator unless PYTORCH_CPU_ALLOC_CONF is set).
+        torch.cpu.empty_cache() only releases PyTorch's own caching
+        allocator cache — it does NOT touch glibc malloc's arena.
+
+        When a layer's CPU tensors (created by torch.empty(device="cpu")
+        in loader.py Phase 3a, and by .transpose().contiguous() in
+        process_weights_after_loading) are released via delattr +
+        gc.collect(), glibc malloc holds the freed memory in its arena
+        instead of returning it to the OS. This causes host DRAM usage
+        to grow ~3.75 GB per layer (63 layers → ~236 GB) even after
+        Python references are gone.
+
+        Fix: call malloc_trim(0) to release glibc arenas back to the OS.
+        Also call torch.cpu.empty_cache() for PyTorch CPU caching
+        allocator. The MALLOC_TRIM_THRESHOLD_ environment variable can
+        also help (set to 0 to make glibc return memory immediately).
+        """
+        import gc
+        gc.collect()
+        # Release PyTorch CPU caching allocator cache (no-op if disabled).
+        try:
+            torch.cpu.empty_cache()
+        except (AttributeError, RuntimeError):
+            pass
+        # Release glibc malloc arenas back to the OS.
+        # Critical: without this, host DRAM grows unbounded because glibc
+        # holds freed memory in its arena (especially with multi-threaded
+        # PyTorch which creates per-thread arenas).
+        try:
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6")
+            # malloc_trim(0) releases free regions from all arenas.
+            libc.malloc_trim(0)
+        except Exception:
+            pass
+        # Debug: print arena stats (set SGLANG_DEBUG_MALLOC=1 to enable).
+        try:
+            if __import__("os").environ.get("SGLANG_DEBUG_MALLOC"):
+                libc.malloc_stats()
+        except Exception:
+            pass
+
+    def _release_layer_cpu_tensors(self, layer_id: int):
+        """Force-release all CPU tensors associated with a layer.
+
+        Called after offload_expert_weights_to_dram() to release:
+          1. Parameter references (via delattr in offload_expert_weights_to_dram)
+          2. layer_ws references (via del in loader.py)
+          3. glibc malloc arenas (via malloc_trim)
+          4. PyTorch CPU caching allocator (via empty_cache)
+
+        This is a more aggressive release than _release_cpu_cache alone,
+        intended to be called once per layer after all references are gone.
+        """
+        self._release_cpu_cache()
 
     def _batch_h2d_copy(
         self,
@@ -430,17 +540,16 @@ class ExpertWeightStore:
         if sync:
             self._h2d_stream.synchronize()
 
-    def batch_load_to_shared_buffer(
+    def batch_load_to_hbm(
         self,
         layer_id: int,
         expert_ids: List[int],
         shared_buffers: Dict[str, torch.Tensor],
     ) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Batch load expert weights directly into shared HBM buffers.
+        """Batch load expert weights from DRAM to HBM buffers.
 
-        This avoids the extra HBM->HBM copy that a separate per-expert
-        allocation would do. Weights are written directly into
-        shared_buffers[expert_id].
+        Writes weights directly into the provided HBM buffers indexed by
+        expert_id, avoiding an extra HBM→HBM copy.
 
         Args:
             layer_id: Layer index
@@ -653,25 +762,11 @@ class ExpertWeightStore:
         return total / 1024**3
 
     def release_hbm_weights(self):
-        """Release all HBM shared buffers.
+        """Release HBM used during the registration process.
 
-        Called after offload registration to free HBM used during the
-        registration process. Shared buffers should be empty at this point
-        (not yet used), so this is mostly gc + empty_cache.
+        Called after offload registration. Shared buffers are not used
+        (per-forward allocation), so this is mostly gc + empty_cache.
         """
-        shared_buffer_count = len(self._shared_hbm_buffers)
-        shared_buffer_bytes = sum(
-            t.nbytes for t in self._shared_hbm_buffers.values()
-        )
-
-        self._shared_hbm_buffers.clear()
-
-        logger.debug(
-            f"[ExpertWeightStore] release_hbm_weights: "
-            f"cleared {shared_buffer_count} shared buffers "
-            f"({shared_buffer_bytes / 1024**2:.1f} MB)"
-        )
-
         import gc
         gc.collect()
         if torch.npu.is_available():

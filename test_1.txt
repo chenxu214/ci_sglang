@@ -1,0 +1,1602 @@
+[2026-07-26 12:04:24 TP0 EP0] [MoE DRAM Offload] Pool size: 96.1 GB/rank (acc_offload layers=50, H2D layers=0, skip_layers=30, margin=1.05x)
+[2026-07-26 12:04:24 TP0 EP0] [ExpertWeightStore] acc_offload layers: 50 (30..79), H2D layers: 0 ([])
+2026-07-26 12:04:24.676613 WARN [64106-64106][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:04:24.681061 WARN [64106-64106][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:04:24.685836 WARN [64106-64106][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:04:24.686087 WARN [64106-64106][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:04:24.692164 WARN [64106-64106][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:04:24 TP2 EP2] [MoE DRAM Offload] Pool size: 96.1 GB/rank (acc_offload layers=50, H2D layers=0, skip_layers=30, margin=1.05x)
+[2026-07-26 12:04:24 TP2 EP2] [ExpertWeightStore] acc_offload layers: 50 (30..79), H2D layers: 0 ([])
+[2026-07-26 12:04:24 TP3 EP3] [MoE DRAM Offload] Pool size: 96.1 GB/rank (acc_offload layers=50, H2D layers=0, skip_layers=30, margin=1.05x)
+[2026-07-26 12:04:24 TP3 EP3] [ExpertWeightStore] acc_offload layers: 50 (30..79), H2D layers: 0 ([])
+[2026-07-26 12:04:24 TP4 EP4] [MoE DRAM Offload] Pool size: 96.1 GB/rank (acc_offload layers=50, H2D layers=0, skip_layers=30, margin=1.05x)
+[2026-07-26 12:04:24 TP4 EP4] [ExpertWeightStore] acc_offload layers: 50 (30..79), H2D layers: 0 ([])
+[2026-07-26 12:04:29 TP0 EP0] [ExpertWeightStore] acc_offload initialized: device=0, dram_pool=96.1 GB
+/usr/local/python3.11.10/lib/python3.11/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+2026-07-26 12:04:31.176488 WARN [64107-64107][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:04:31.179241 WARN [64107-64107][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:04:31.182602 WARN [64107-64107][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:04:31.182784 WARN [64107-64107][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:04:31.187490 WARN [64107-64107][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:04:35 TP1 EP1] [ExpertWeightStore] acc_offload initialized: device=1, dram_pool=96.1 GB
+2026-07-26 12:04:35.585434 WARN [64108-64108][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:04:35.588115 WARN [64108-64108][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:04:35.591967 WARN [64108-64108][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:04:35.592161 WARN [64108-64108][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:04:35.596477 WARN [64108-64108][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:04:40 TP2 EP2] [ExpertWeightStore] acc_offload initialized: device=2, dram_pool=96.1 GB
+2026-07-26 12:04:40.042015 WARN [64109-64109][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:04:40.045403 WARN [64109-64109][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:04:40.048514 WARN [64109-64109][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:04:40.048661 WARN [64109-64109][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:04:40.053358 WARN [64109-64109][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:05:32 TP3 EP3] [ExpertWeightStore] acc_offload initialized: device=3, dram_pool=96.1 GB
+2026-07-26 12:05:32.738355 WARN [64110-64110][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:05:32.741439 WARN [64110-64110][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:05:32.746215 WARN [64110-64110][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:05:32.746406 WARN [64110-64110][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:05:32.753965 WARN [64110-64110][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:05:51 TP4 EP4] [ExpertWeightStore] acc_offload initialized: device=4, dram_pool=96.1 GB
+2026-07-26 12:05:51.305092 WARN [64111-64111][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:05:51.309020 WARN [64111-64111][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:05:51.314770 WARN [64111-64111][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:05:51.314935 WARN [64111-64111][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:05:51.326168 WARN [64111-64111][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:06:03 TP5 EP5] [ExpertWeightStore] acc_offload initialized: device=5, dram_pool=96.1 GB
+2026-07-26 12:06:03.556232 WARN [64112-64112][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:06:03.559589 WARN [64112-64112][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:06:03.563345 WARN [64112-64112][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:06:03.563496 WARN [64112-64112][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:06:03.570011 WARN [64112-64112][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:06:32 TP6 EP6] [ExpertWeightStore] acc_offload initialized: device=6, dram_pool=96.1 GB
+2026-07-26 12:06:32.095529 WARN [64113-64113][HYBM hybm_gva_version.cpp:47 LoadValueFromFile] driver version path is not a valid real path:/etc/ascend_install.info
+2026-07-26 12:06:32.121112 WARN [64113-64113][HYBM dl_hcom_api.cpp:84 LoadLibrary] Unable to open library [libhcom.so], libhcom.so: cannot open shared object file: No such file or directory
+2026-07-26 12:06:32.132940 WARN [64113-64113][HYBM hybm_entity_tag_info.cpp:143 GetTag2TagOpType] Not find opType from tag1:HYBM_DEFAULT_TAG_FOR_EMPTY to tag2:HYBM_DEFAULT_TAG_FOR_EMPTY
+2026-07-26 12:06:32.133126 WARN [64113-64113][HYBM hybm_data_op_sdma.cpp:49 Initialize] A5 or x86 not support batch extend copy now!
+2026-07-26 12:06:32.138946 WARN [64113-64113][HYBM hybm_vmm_based_segment.cpp:186 MallocFromHost] Not support giant page size change use huge page, memType:3
+[2026-07-26 12:06:36 TP7 EP7] [ExpertWeightStore] acc_offload initialized: device=7, dram_pool=96.1 GB
+[2026-07-26 12:06:36 TP7 EP7] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:06:36 TP1 EP1] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:06:36 TP2 EP2] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:06:36 TP4 EP4] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:06:36 TP3 EP3] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:06:36 TP0 EP0] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:06:36 TP6 EP6] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:06:36 TP5 EP5] [MoE DRAM Offload] Pool initialized (96.1 GB). Starting layer-by-layer offload for 50 non-skip MoE layers.
+[2026-07-26 12:08:13 TP4 EP4] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:13 TP4 EP4] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:15 TP4 EP4] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:18 TP4 EP4] [MoE DRAM Offload] After layer 30: host MemAvailable=193.2 GB, MemFree=35.8 GB, Cached=163.2 GB
+[2026-07-26 12:08:21 TP1 EP1] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:21 TP1 EP1] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:22 TP2 EP2] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:22 TP2 EP2] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:22 TP3 EP3] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:23 TP3 EP3] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:23 TP1 EP1] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:24 TP2 EP2] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:25 TP3 EP3] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:26 TP1 EP1] [MoE DRAM Offload] After layer 30: host MemAvailable=200.3 GB, MemFree=43.0 GB, Cached=163.1 GB
+[2026-07-26 12:08:26 TP2 EP2] [MoE DRAM Offload] After layer 30: host MemAvailable=199.2 GB, MemFree=41.3 GB, Cached=163.8 GB
+[2026-07-26 12:08:27 TP4 EP4] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:27 TP4 EP4] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:28 TP3 EP3] [MoE DRAM Offload] After layer 30: host MemAvailable=197.3 GB, MemFree=41.1 GB, Cached=162.5 GB
+[2026-07-26 12:08:29 TP4 EP4] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:30 TP5 EP5] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:31 TP0 EP0] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:31 TP5 EP5] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:31 TP0 EP0] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:32 TP7 EP7] [ExpertWeightStore] D2H layer_id=30 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:32 TP6 EP6] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:32 TP7 EP7] [ExpertWeightStore] D2H layer_id=30 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:33 TP5 EP5] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:33 TP0 EP0] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:34 TP7 EP7] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:34 TP6 EP6] [FusedMoE] Layer 30: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:37 TP0 EP0] [MoE DRAM Offload] After layer 30: host MemAvailable=201.3 GB, MemFree=46.3 GB, Cached=160.8 GB
+[2026-07-26 12:08:37 TP5 EP5] [MoE DRAM Offload] After layer 30: host MemAvailable=200.8 GB, MemFree=45.6 GB, Cached=161.0 GB
+[2026-07-26 12:08:37 TP7 EP7] [MoE DRAM Offload] After layer 30: host MemAvailable=200.3 GB, MemFree=45.1 GB, Cached=161.1 GB
+[2026-07-26 12:08:38 TP6 EP6] [MoE DRAM Offload] After layer 30: host MemAvailable=197.9 GB, MemFree=40.7 GB, Cached=163.0 GB
+[2026-07-26 12:08:41 TP4 EP4] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:42 TP4 EP4] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:44 TP4 EP4] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:47 TP4 EP4] [MoE DRAM Offload] After layer 32: host MemAvailable=191.3 GB, MemFree=38.4 GB, Cached=158.7 GB
+[2026-07-26 12:08:50 TP1 EP1] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:50 TP1 EP1] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:52 TP1 EP1] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:52 TP2 EP2] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:52 TP2 EP2] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:52 TP3 EP3] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:52 TP3 EP3] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:54 TP2 EP2] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:54 TP3 EP3] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:55 TP4 EP4] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:55 TP4 EP4] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:58 TP4 EP4] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:08:58 TP5 EP5] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:58 TP5 EP5] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:59 TP7 EP7] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:59 TP6 EP6] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:59 TP0 EP0] [ExpertWeightStore] D2H layer_id=31 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:59 TP7 EP7] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:08:59 TP6 EP6] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:00 TP0 EP0] [ExpertWeightStore] D2H layer_id=31 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:01 TP5 EP5] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:01 TP7 EP7] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:02 TP0 EP0] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:02 TP6 EP6] [FusedMoE] Layer 31: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:03 TP1 EP1] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:03 TP1 EP1] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:05 TP1 EP1] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:07 TP2 EP2] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:07 TP2 EP2] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:08 TP3 EP3] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:08 TP1 EP1] [MoE DRAM Offload] After layer 32: host MemAvailable=192.7 GB, MemFree=48.2 GB, Cached=151.5 GB
+[2026-07-26 12:09:08 TP3 EP3] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:09 TP4 EP4] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:09 TP2 EP2] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:09 TP4 EP4] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:10 TP3 EP3] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:11 TP4 EP4] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:12 TP2 EP2] [MoE DRAM Offload] After layer 32: host MemAvailable=190.3 GB, MemFree=48.7 GB, Cached=147.4 GB
+[2026-07-26 12:09:13 TP5 EP5] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:13 TP3 EP3] [MoE DRAM Offload] After layer 32: host MemAvailable=190.8 GB, MemFree=49.6 GB, Cached=147.6 GB
+[2026-07-26 12:09:13 TP5 EP5] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:14 TP7 EP7] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:14 TP7 EP7] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:14 TP0 EP0] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:14 TP4 EP4] [MoE DRAM Offload] After layer 34: host MemAvailable=190.4 GB, MemFree=48.6 GB, Cached=147.7 GB
+[2026-07-26 12:09:15 TP0 EP0] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:15 TP6 EP6] [ExpertWeightStore] D2H layer_id=32 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:15 TP6 EP6] [ExpertWeightStore] D2H layer_id=32 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:15 TP1 EP1] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:15 TP5 EP5] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:16 TP1 EP1] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:16 TP7 EP7] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:17 TP0 EP0] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:17 TP6 EP6] [FusedMoE] Layer 32: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:17 TP1 EP1] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:19 TP7 EP7] [MoE DRAM Offload] After layer 32: host MemAvailable=190.5 GB, MemFree=48.3 GB, Cached=148.0 GB
+[2026-07-26 12:09:19 TP5 EP5] [MoE DRAM Offload] After layer 32: host MemAvailable=190.3 GB, MemFree=48.1 GB, Cached=148.0 GB
+[2026-07-26 12:09:20 TP2 EP2] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:20 TP0 EP0] [MoE DRAM Offload] After layer 32: host MemAvailable=189.1 GB, MemFree=47.0 GB, Cached=149.2 GB
+[2026-07-26 12:09:20 TP2 EP2] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:20 TP3 EP3] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:21 TP3 EP3] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:21 TP6 EP6] [MoE DRAM Offload] After layer 32: host MemAvailable=187.9 GB, MemFree=45.6 GB, Cached=149.2 GB
+[2026-07-26 12:09:22 TP2 EP2] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:22 TP4 EP4] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:22 TP4 EP4] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:23 TP3 EP3] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:24 TP4 EP4] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:26 TP7 EP7] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:26 TP5 EP5] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:26 TP7 EP7] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:27 TP5 EP5] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:27 TP1 EP1] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:27 TP0 EP0] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:27 TP1 EP1] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:28 TP0 EP0] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:28 TP6 EP6] [ExpertWeightStore] D2H layer_id=33 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:28 TP6 EP6] [ExpertWeightStore] D2H layer_id=33 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:28 TP7 EP7] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:29 TP5 EP5] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:29 TP1 EP1] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:30 TP0 EP0] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:31 TP6 EP6] [FusedMoE] Layer 33: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:32 TP2 EP2] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:32 TP1 EP1] [MoE DRAM Offload] After layer 34: host MemAvailable=188.6 GB, MemFree=49.0 GB, Cached=145.5 GB
+[2026-07-26 12:09:32 TP2 EP2] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:33 TP3 EP3] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:33 TP3 EP3] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:34 TP2 EP2] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:34 TP4 EP4] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:34 TP4 EP4] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:35 TP3 EP3] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:37 TP4 EP4] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:37 TP2 EP2] [MoE DRAM Offload] After layer 34: host MemAvailable=181.2 GB, MemFree=42.5 GB, Cached=144.9 GB
+[2026-07-26 12:09:38 TP3 EP3] [MoE DRAM Offload] After layer 34: host MemAvailable=181.2 GB, MemFree=42.6 GB, Cached=144.8 GB
+[2026-07-26 12:09:38 TP1 EP1] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:39 TP7 EP7] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:39 TP1 EP1] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:39 TP7 EP7] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:39 TP5 EP5] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:39 TP4 EP4] [MoE DRAM Offload] After layer 36: host MemAvailable=181.1 GB, MemFree=42.3 GB, Cached=145.0 GB
+[2026-07-26 12:09:40 TP5 EP5] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:40 TP0 EP0] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:40 TP0 EP0] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:40 TP1 EP1] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:41 TP7 EP7] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:41 TP6 EP6] [ExpertWeightStore] D2H layer_id=34 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:42 TP6 EP6] [ExpertWeightStore] D2H layer_id=34 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:42 TP5 EP5] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:42 TP0 EP0] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:44 TP6 EP6] [FusedMoE] Layer 34: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:44 TP7 EP7] [MoE DRAM Offload] After layer 34: host MemAvailable=183.2 GB, MemFree=42.5 GB, Cached=146.6 GB
+[2026-07-26 12:09:44 TP2 EP2] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:44 TP2 EP2] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:44 TP3 EP3] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:45 TP3 EP3] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:45 TP5 EP5] [MoE DRAM Offload] After layer 34: host MemAvailable=183.3 GB, MemFree=42.4 GB, Cached=147.0 GB
+[2026-07-26 12:09:46 TP0 EP0] [MoE DRAM Offload] After layer 34: host MemAvailable=183.4 GB, MemFree=42.3 GB, Cached=147.0 GB
+[2026-07-26 12:09:46 TP2 EP2] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:46 TP4 EP4] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:46 TP3 EP3] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:46 TP4 EP4] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:47 TP6 EP6] [MoE DRAM Offload] After layer 34: host MemAvailable=183.5 GB, MemFree=42.0 GB, Cached=147.4 GB
+[2026-07-26 12:09:48 TP4 EP4] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:50 TP1 EP1] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:50 TP1 EP1] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:50 TP7 EP7] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:51 TP7 EP7] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:52 TP1 EP1] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:52 TP5 EP5] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:52 TP5 EP5] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:52 TP0 EP0] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:52 TP0 EP0] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:53 TP7 EP7] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:53 TP6 EP6] [ExpertWeightStore] D2H layer_id=35 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:54 TP6 EP6] [ExpertWeightStore] D2H layer_id=35 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:54 TP1 EP1] [MoE DRAM Offload] After layer 36: host MemAvailable=183.2 GB, MemFree=45.9 GB, Cached=143.2 GB
+[2026-07-26 12:09:54 TP5 EP5] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:55 TP0 EP0] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:55 TP2 EP2] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:55 TP3 EP3] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:56 TP2 EP2] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:56 TP3 EP3] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:56 TP6 EP6] [FusedMoE] Layer 35: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:57 TP2 EP2] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:58 TP3 EP3] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:09:58 TP4 EP4] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:09:58 TP4 EP4] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:00 TP2 EP2] [MoE DRAM Offload] After layer 36: host MemAvailable=183.3 GB, MemFree=43.8 GB, Cached=145.5 GB
+[2026-07-26 12:10:00 TP3 EP3] [MoE DRAM Offload] After layer 36: host MemAvailable=183.3 GB, MemFree=44.0 GB, Cached=145.3 GB
+[2026-07-26 12:10:01 TP1 EP1] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:01 TP4 EP4] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:01 TP1 EP1] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:02 TP7 EP7] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:02 TP7 EP7] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:03 TP1 EP1] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:04 TP4 EP4] [MoE DRAM Offload] After layer 38: host MemAvailable=182.8 GB, MemFree=44.0 GB, Cached=144.7 GB
+[2026-07-26 12:10:04 TP7 EP7] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:04 TP5 EP5] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:04 TP0 EP0] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:05 TP5 EP5] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:05 TP0 EP0] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:06 TP6 EP6] [ExpertWeightStore] D2H layer_id=36 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:06 TP6 EP6] [ExpertWeightStore] D2H layer_id=36 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:07 TP3 EP3] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:07 TP0 EP0] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:07 TP5 EP5] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:07 TP2 EP2] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:07 TP7 EP7] [MoE DRAM Offload] After layer 36: host MemAvailable=183.1 GB, MemFree=44.7 GB, Cached=144.4 GB
+[2026-07-26 12:10:07 TP3 EP3] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:07 TP2 EP2] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:08 TP6 EP6] [FusedMoE] Layer 36: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:09 TP3 EP3] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:09 TP2 EP2] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:10 TP0 EP0] [MoE DRAM Offload] After layer 36: host MemAvailable=183.4 GB, MemFree=44.4 GB, Cached=145.0 GB
+[2026-07-26 12:10:10 TP5 EP5] [MoE DRAM Offload] After layer 36: host MemAvailable=183.4 GB, MemFree=44.1 GB, Cached=145.2 GB
+[2026-07-26 12:10:11 TP4 EP4] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:11 TP4 EP4] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:12 TP6 EP6] [MoE DRAM Offload] After layer 36: host MemAvailable=183.5 GB, MemFree=44.8 GB, Cached=144.8 GB
+[2026-07-26 12:10:12 TP1 EP1] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:12 TP1 EP1] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:13 TP4 EP4] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:14 TP7 EP7] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:14 TP1 EP1] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:14 TP7 EP7] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:16 TP7 EP7] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:17 TP1 EP1] [MoE DRAM Offload] After layer 38: host MemAvailable=183.0 GB, MemFree=43.8 GB, Cached=145.2 GB
+[2026-07-26 12:10:17 TP5 EP5] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:17 TP0 EP0] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:17 TP5 EP5] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:17 TP0 EP0] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:18 TP6 EP6] [ExpertWeightStore] D2H layer_id=37 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:19 TP3 EP3] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:19 TP6 EP6] [ExpertWeightStore] D2H layer_id=37 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:19 TP3 EP3] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:19 TP2 EP2] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:19 TP2 EP2] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:20 TP0 EP0] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:20 TP5 EP5] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:21 TP3 EP3] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:21 TP6 EP6] [FusedMoE] Layer 37: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:21 TP2 EP2] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:23 TP1 EP1] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:23 TP1 EP1] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:24 TP3 EP3] [MoE DRAM Offload] After layer 38: host MemAvailable=183.8 GB, MemFree=46.5 GB, Cached=143.3 GB
+[2026-07-26 12:10:24 TP4 EP4] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:24 TP2 EP2] [MoE DRAM Offload] After layer 38: host MemAvailable=183.9 GB, MemFree=46.6 GB, Cached=143.3 GB
+[2026-07-26 12:10:24 TP4 EP4] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:25 TP1 EP1] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:26 TP7 EP7] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:26 TP7 EP7] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:26 TP4 EP4] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:28 TP7 EP7] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:29 TP4 EP4] [MoE DRAM Offload] After layer 40: host MemAvailable=183.6 GB, MemFree=45.7 GB, Cached=143.8 GB
+[2026-07-26 12:10:30 TP5 EP5] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:30 TP5 EP5] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:30 TP0 EP0] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:30 TP0 EP0] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:30 TP3 EP3] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:30 TP3 EP3] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:31 TP7 EP7] [MoE DRAM Offload] After layer 38: host MemAvailable=183.5 GB, MemFree=45.8 GB, Cached=143.7 GB
+[2026-07-26 12:10:31 TP2 EP2] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=38 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:31 TP2 EP2] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=38 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:32 TP5 EP5] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:32 TP0 EP0] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:32 TP3 EP3] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:33 TP2 EP2] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:34 TP6 EP6] [FusedMoE] Layer 38: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:35 TP1 EP1] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:35 TP1 EP1] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:35 TP0 EP0] [MoE DRAM Offload] After layer 38: host MemAvailable=184.2 GB, MemFree=47.9 GB, Cached=142.2 GB
+[2026-07-26 12:10:36 TP5 EP5] [MoE DRAM Offload] After layer 38: host MemAvailable=184.2 GB, MemFree=47.3 GB, Cached=142.7 GB
+[2026-07-26 12:10:36 TP4 EP4] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:37 TP1 EP1] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:37 TP4 EP4] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:37 TP6 EP6] [MoE DRAM Offload] After layer 38: host MemAvailable=184.2 GB, MemFree=46.4 GB, Cached=143.7 GB
+[2026-07-26 12:10:37 TP7 EP7] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:37 TP7 EP7] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:39 TP4 EP4] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:39 TP1 EP1] [MoE DRAM Offload] After layer 40: host MemAvailable=183.2 GB, MemFree=45.7 GB, Cached=143.5 GB
+[2026-07-26 12:10:39 TP7 EP7] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:42 TP3 EP3] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:42 TP5 EP5] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:42 TP3 EP3] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:42 TP5 EP5] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:42 TP0 EP0] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:43 TP0 EP0] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:43 TP2 EP2] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:43 TP2 EP2] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:43 TP6 EP6] [ExpertWeightStore] D2H layer_id=39 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:44 TP6 EP6] [ExpertWeightStore] D2H layer_id=39 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:44 TP3 EP3] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:45 TP5 EP5] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:45 TP0 EP0] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:45 TP2 EP2] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:46 TP1 EP1] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:46 TP6 EP6] [FusedMoE] Layer 39: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:46 TP1 EP1] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:47 TP3 EP3] [MoE DRAM Offload] After layer 40: host MemAvailable=184.2 GB, MemFree=46.8 GB, Cached=143.3 GB
+[2026-07-26 12:10:47 TP2 EP2] [MoE DRAM Offload] After layer 40: host MemAvailable=184.2 GB, MemFree=46.6 GB, Cached=143.6 GB
+[2026-07-26 12:10:48 TP1 EP1] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:49 TP7 EP7] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:49 TP4 EP4] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:49 TP7 EP7] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:49 TP4 EP4] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:51 TP7 EP7] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:52 TP4 EP4] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:54 TP3 EP3] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:54 TP7 EP7] [MoE DRAM Offload] After layer 40: host MemAvailable=183.9 GB, MemFree=45.9 GB, Cached=143.9 GB
+[2026-07-26 12:10:54 TP3 EP3] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:55 TP2 EP2] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:55 TP4 EP4] [MoE DRAM Offload] After layer 42: host MemAvailable=183.4 GB, MemFree=46.0 GB, Cached=143.7 GB
+[2026-07-26 12:10:55 TP5 EP5] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:55 TP2 EP2] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:55 TP0 EP0] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:55 TP5 EP5] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:55 TP0 EP0] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:56 TP3 EP3] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:56 TP6 EP6] [ExpertWeightStore] D2H layer_id=40 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:56 TP6 EP6] [ExpertWeightStore] D2H layer_id=40 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:57 TP2 EP2] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:57 TP1 EP1] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:57 TP1 EP1] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:10:57 TP0 EP0] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:58 TP5 EP5] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:58 TP6 EP6] [FusedMoE] Layer 40: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:10:59 TP1 EP1] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:00 TP0 EP0] [MoE DRAM Offload] After layer 40: host MemAvailable=184.7 GB, MemFree=48.4 GB, Cached=142.2 GB
+[2026-07-26 12:11:00 TP7 EP7] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:01 TP7 EP7] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:01 TP5 EP5] [MoE DRAM Offload] After layer 40: host MemAvailable=184.3 GB, MemFree=47.9 GB, Cached=142.4 GB
+[2026-07-26 12:11:02 TP6 EP6] [MoE DRAM Offload] After layer 40: host MemAvailable=184.2 GB, MemFree=47.4 GB, Cached=142.8 GB
+[2026-07-26 12:11:02 TP1 EP1] [MoE DRAM Offload] After layer 42: host MemAvailable=184.2 GB, MemFree=47.1 GB, Cached=143.1 GB
+[2026-07-26 12:11:02 TP4 EP4] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:02 TP4 EP4] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:03 TP7 EP7] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:05 TP4 EP4] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:05 TP3 EP3] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:06 TP3 EP3] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:07 TP2 EP2] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:07 TP2 EP2] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:07 TP3 EP3] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:08 TP0 EP0] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:08 TP5 EP5] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:08 TP0 EP0] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:08 TP5 EP5] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:08 TP6 EP6] [ExpertWeightStore] D2H layer_id=41 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:08 TP1 EP1] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:08 TP6 EP6] [ExpertWeightStore] D2H layer_id=41 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:09 TP1 EP1] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:09 TP2 EP2] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:10 TP0 EP0] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:10 TP3 EP3] [MoE DRAM Offload] After layer 42: host MemAvailable=184.1 GB, MemFree=47.7 GB, Cached=142.4 GB
+[2026-07-26 12:11:10 TP5 EP5] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:10 TP1 EP1] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:11 TP6 EP6] [FusedMoE] Layer 41: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:11 TP2 EP2] [MoE DRAM Offload] After layer 42: host MemAvailable=184.1 GB, MemFree=47.3 GB, Cached=142.8 GB
+[2026-07-26 12:11:12 TP7 EP7] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:12 TP7 EP7] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:14 TP7 EP7] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:15 TP4 EP4] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:15 TP4 EP4] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:17 TP3 EP3] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:17 TP7 EP7] [MoE DRAM Offload] After layer 42: host MemAvailable=183.8 GB, MemFree=47.3 GB, Cached=142.4 GB
+[2026-07-26 12:11:17 TP3 EP3] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:17 TP4 EP4] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:18 TP2 EP2] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:19 TP2 EP2] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:19 TP3 EP3] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:19 TP1 EP1] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:20 TP1 EP1] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:20 TP0 EP0] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:20 TP0 EP0] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:20 TP5 EP5] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:20 TP2 EP2] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:21 TP4 EP4] [MoE DRAM Offload] After layer 44: host MemAvailable=183.2 GB, MemFree=47.9 GB, Cached=141.8 GB
+[2026-07-26 12:11:21 TP5 EP5] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:21 TP6 EP6] [ExpertWeightStore] D2H layer_id=42 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:21 TP6 EP6] [ExpertWeightStore] D2H layer_id=42 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:21 TP1 EP1] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:23 TP0 EP0] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:23 TP5 EP5] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:23 TP6 EP6] [FusedMoE] Layer 42: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:24 TP7 EP7] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:24 TP7 EP7] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:24 TP1 EP1] [MoE DRAM Offload] After layer 44: host MemAvailable=184.1 GB, MemFree=49.0 GB, Cached=141.1 GB
+[2026-07-26 12:11:26 TP0 EP0] [MoE DRAM Offload] After layer 42: host MemAvailable=183.9 GB, MemFree=48.9 GB, Cached=141.0 GB
+[2026-07-26 12:11:26 TP7 EP7] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:26 TP5 EP5] [MoE DRAM Offload] After layer 42: host MemAvailable=184.0 GB, MemFree=48.7 GB, Cached=141.3 GB
+[2026-07-26 12:11:27 TP6 EP6] [MoE DRAM Offload] After layer 42: host MemAvailable=184.0 GB, MemFree=48.6 GB, Cached=141.4 GB
+[2026-07-26 12:11:28 TP4 EP4] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:28 TP4 EP4] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:28 TP3 EP3] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:29 TP3 EP3] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:30 TP2 EP2] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:30 TP1 EP1] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:31 TP4 EP4] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:31 TP3 EP3] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:31 TP2 EP2] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:31 TP1 EP1] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:32 TP0 EP0] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:32 TP2 EP2] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:32 TP1 EP1] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:33 TP0 EP0] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:33 TP5 EP5] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:33 TP3 EP3] [MoE DRAM Offload] After layer 44: host MemAvailable=183.6 GB, MemFree=47.7 GB, Cached=142.0 GB
+[2026-07-26 12:11:33 TP6 EP6] [ExpertWeightStore] D2H layer_id=43 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:33 TP5 EP5] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:34 TP6 EP6] [ExpertWeightStore] D2H layer_id=43 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:35 TP0 EP0] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:35 TP2 EP2] [MoE DRAM Offload] After layer 44: host MemAvailable=183.9 GB, MemFree=47.8 GB, Cached=142.2 GB
+[2026-07-26 12:11:35 TP7 EP7] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:35 TP7 EP7] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:36 TP5 EP5] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:36 TP6 EP6] [FusedMoE] Layer 43: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:37 TP7 EP7] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:40 TP3 EP3] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:40 TP3 EP3] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:40 TP7 EP7] [MoE DRAM Offload] After layer 44: host MemAvailable=184.5 GB, MemFree=49.9 GB, Cached=140.5 GB
+[2026-07-26 12:11:41 TP4 EP4] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:41 TP4 EP4] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:42 TP1 EP1] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:42 TP1 EP1] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:42 TP3 EP3] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:42 TP2 EP2] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:42 TP2 EP2] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:43 TP4 EP4] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:44 TP1 EP1] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:44 TP2 EP2] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:45 TP0 EP0] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:45 TP0 EP0] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:46 TP5 EP5] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:46 TP6 EP6] [ExpertWeightStore] D2H layer_id=44 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:46 TP5 EP5] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:46 TP6 EP6] [ExpertWeightStore] D2H layer_id=44 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:46 TP1 EP1] [MoE DRAM Offload] After layer 46: host MemAvailable=184.3 GB, MemFree=49.4 GB, Cached=140.9 GB
+[2026-07-26 12:11:46 TP4 EP4] [MoE DRAM Offload] After layer 46: host MemAvailable=184.1 GB, MemFree=49.1 GB, Cached=140.9 GB
+[2026-07-26 12:11:47 TP7 EP7] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:47 TP7 EP7] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:47 TP0 EP0] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:48 TP5 EP5] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:48 TP6 EP6] [FusedMoE] Layer 44: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:49 TP7 EP7] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:50 TP0 EP0] [MoE DRAM Offload] After layer 44: host MemAvailable=184.8 GB, MemFree=50.0 GB, Cached=140.7 GB
+[2026-07-26 12:11:51 TP3 EP3] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:52 TP5 EP5] [MoE DRAM Offload] After layer 44: host MemAvailable=184.9 GB, MemFree=50.6 GB, Cached=140.4 GB
+[2026-07-26 12:11:52 TP3 EP3] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:52 TP6 EP6] [MoE DRAM Offload] After layer 44: host MemAvailable=184.7 GB, MemFree=50.4 GB, Cached=140.4 GB
+[2026-07-26 12:11:53 TP1 EP1] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:53 TP1 EP1] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:53 TP3 EP3] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:54 TP4 EP4] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:54 TP2 EP2] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:54 TP4 EP4] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:54 TP2 EP2] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:55 TP1 EP1] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:56 TP3 EP3] [MoE DRAM Offload] After layer 46: host MemAvailable=183.7 GB, MemFree=48.6 GB, Cached=141.3 GB
+[2026-07-26 12:11:56 TP2 EP2] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:56 TP4 EP4] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:11:57 TP0 EP0] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:57 TP0 EP0] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:58 TP5 EP5] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:58 TP6 EP6] [ExpertWeightStore] D2H layer_id=45 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:58 TP2 EP2] [MoE DRAM Offload] After layer 46: host MemAvailable=184.3 GB, MemFree=48.9 GB, Cached=141.5 GB
+[2026-07-26 12:11:58 TP7 EP7] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:58 TP5 EP5] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:59 TP6 EP6] [ExpertWeightStore] D2H layer_id=45 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:59 TP7 EP7] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:11:59 TP0 EP0] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:01 TP7 EP7] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:01 TP5 EP5] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:01 TP6 EP6] [FusedMoE] Layer 45: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:03 TP3 EP3] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:03 TP3 EP3] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:03 TP7 EP7] [MoE DRAM Offload] After layer 46: host MemAvailable=184.8 GB, MemFree=47.9 GB, Cached=142.9 GB
+[2026-07-26 12:12:05 TP1 EP1] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:05 TP3 EP3] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:05 TP1 EP1] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:05 TP2 EP2] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:06 TP2 EP2] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:06 TP4 EP4] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:06 TP4 EP4] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:06 TP1 EP1] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:07 TP2 EP2] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:08 TP4 EP4] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:09 TP1 EP1] [MoE DRAM Offload] After layer 48: host MemAvailable=184.0 GB, MemFree=46.8 GB, Cached=143.2 GB
+[2026-07-26 12:12:09 TP0 EP0] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:09 TP0 EP0] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:10 TP7 EP7] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:10 TP7 EP7] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:11 TP5 EP5] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:11 TP6 EP6] [ExpertWeightStore] D2H layer_id=46 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:11 TP5 EP5] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:11 TP6 EP6] [ExpertWeightStore] D2H layer_id=46 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:11 TP4 EP4] [MoE DRAM Offload] After layer 48: host MemAvailable=184.7 GB, MemFree=47.1 GB, Cached=143.5 GB
+[2026-07-26 12:12:11 TP0 EP0] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:12 TP7 EP7] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:13 TP6 EP6] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:13 TP5 EP5] [FusedMoE] Layer 46: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:14 TP3 EP3] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:14 TP0 EP0] [MoE DRAM Offload] After layer 46: host MemAvailable=184.6 GB, MemFree=47.1 GB, Cached=143.5 GB
+[2026-07-26 12:12:14 TP3 EP3] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:16 TP1 EP1] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:16 TP1 EP1] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:16 TP3 EP3] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:16 TP6 EP6] [MoE DRAM Offload] After layer 46: host MemAvailable=184.8 GB, MemFree=46.7 GB, Cached=144.1 GB
+[2026-07-26 12:12:17 TP5 EP5] [MoE DRAM Offload] After layer 46: host MemAvailable=184.7 GB, MemFree=46.6 GB, Cached=144.1 GB
+[2026-07-26 12:12:17 TP2 EP2] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:17 TP2 EP2] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:18 TP1 EP1] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:18 TP4 EP4] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:18 TP4 EP4] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:19 TP3 EP3] [MoE DRAM Offload] After layer 48: host MemAvailable=184.4 GB, MemFree=46.1 GB, Cached=144.3 GB
+[2026-07-26 12:12:19 TP2 EP2] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:20 TP4 EP4] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:21 TP0 EP0] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:21 TP0 EP0] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:21 TP2 EP2] [MoE DRAM Offload] After layer 48: host MemAvailable=184.8 GB, MemFree=46.2 GB, Cached=144.6 GB
+[2026-07-26 12:12:22 TP7 EP7] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:22 TP7 EP7] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:23 TP6 EP6] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:23 TP5 EP5] [ExpertWeightStore] D2H layer_id=47 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:23 TP0 EP0] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:23 TP6 EP6] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:24 TP5 EP5] [ExpertWeightStore] D2H layer_id=47 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:24 TP7 EP7] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:25 TP3 EP3] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:26 TP6 EP6] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:26 TP3 EP3] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:26 TP5 EP5] [FusedMoE] Layer 47: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:27 TP7 EP7] [MoE DRAM Offload] After layer 48: host MemAvailable=184.7 GB, MemFree=47.3 GB, Cached=143.4 GB
+[2026-07-26 12:12:27 TP1 EP1] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:27 TP1 EP1] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:28 TP3 EP3] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:29 TP2 EP2] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:29 TP1 EP1] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:29 TP2 EP2] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:31 TP4 EP4] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:31 TP4 EP4] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:31 TP2 EP2] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:31 TP1 EP1] [MoE DRAM Offload] After layer 50: host MemAvailable=184.5 GB, MemFree=46.0 GB, Cached=144.5 GB
+[2026-07-26 12:12:33 TP4 EP4] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:33 TP0 EP0] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:33 TP7 EP7] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:33 TP0 EP0] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:34 TP7 EP7] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:35 TP6 EP6] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:35 TP7 EP7] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:36 TP0 EP0] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:36 TP4 EP4] [MoE DRAM Offload] After layer 50: host MemAvailable=184.4 GB, MemFree=45.9 GB, Cached=144.6 GB
+[2026-07-26 12:12:36 TP6 EP6] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:36 TP5 EP5] [ExpertWeightStore] D2H layer_id=48 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:36 TP5 EP5] [ExpertWeightStore] D2H layer_id=48 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:37 TP3 EP3] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:37 TP3 EP3] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:38 TP6 EP6] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:38 TP1 EP1] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:38 TP1 EP1] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:38 TP5 EP5] [FusedMoE] Layer 48: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:38 TP0 EP0] [MoE DRAM Offload] After layer 48: host MemAvailable=184.8 GB, MemFree=46.7 GB, Cached=144.1 GB
+[2026-07-26 12:12:39 TP3 EP3] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:40 TP1 EP1] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:40 TP2 EP2] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:41 TP2 EP2] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:41 TP6 EP6] [MoE DRAM Offload] After layer 48: host MemAvailable=185.5 GB, MemFree=48.7 GB, Cached=142.9 GB
+[2026-07-26 12:12:41 TP3 EP3] [MoE DRAM Offload] After layer 50: host MemAvailable=185.5 GB, MemFree=48.7 GB, Cached=142.8 GB
+[2026-07-26 12:12:42 TP5 EP5] [MoE DRAM Offload] After layer 48: host MemAvailable=185.5 GB, MemFree=48.2 GB, Cached=143.4 GB
+[2026-07-26 12:12:42 TP2 EP2] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:43 TP4 EP4] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:43 TP4 EP4] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:45 TP2 EP2] [MoE DRAM Offload] After layer 50: host MemAvailable=185.1 GB, MemFree=50.3 GB, Cached=140.8 GB
+[2026-07-26 12:12:45 TP7 EP7] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:45 TP7 EP7] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:45 TP4 EP4] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:45 TP0 EP0] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:45 TP0 EP0] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:47 TP7 EP7] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:47 TP0 EP0] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:48 TP6 EP6] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:48 TP6 EP6] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:48 TP3 EP3] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:48 TP5 EP5] [ExpertWeightStore] D2H layer_id=49 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:48 TP3 EP3] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:49 TP5 EP5] [ExpertWeightStore] D2H layer_id=49 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:49 TP7 EP7] [MoE DRAM Offload] After layer 50: host MemAvailable=185.3 GB, MemFree=52.9 GB, Cached=138.4 GB
+[2026-07-26 12:12:50 TP1 EP1] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:50 TP6 EP6] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:50 TP1 EP1] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:50 TP3 EP3] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:51 TP5 EP5] [FusedMoE] Layer 49: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:52 TP1 EP1] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:52 TP2 EP2] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:52 TP2 EP2] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:54 TP2 EP2] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:54 TP1 EP1] [MoE DRAM Offload] After layer 52: host MemAvailable=185.3 GB, MemFree=50.7 GB, Cached=140.7 GB
+[2026-07-26 12:12:55 TP4 EP4] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:56 TP4 EP4] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:56 TP7 EP7] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:56 TP7 EP7] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:57 TP0 EP0] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:57 TP0 EP0] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:12:58 TP4 EP4] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:58 TP7 EP7] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:12:59 TP3 EP3] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:00 TP0 EP0] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:00 TP3 EP3] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:00 TP6 EP6] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:00 TP6 EP6] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:00 TP4 EP4] [MoE DRAM Offload] After layer 52: host MemAvailable=184.7 GB, MemFree=50.6 GB, Cached=140.1 GB
+[2026-07-26 12:13:01 TP5 EP5] [ExpertWeightStore] D2H layer_id=50 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:01 TP5 EP5] [ExpertWeightStore] D2H layer_id=50 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:01 TP1 EP1] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:01 TP3 EP3] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:01 TP1 EP1] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:02 TP6 EP6] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:02 TP0 EP0] [MoE DRAM Offload] After layer 50: host MemAvailable=185.2 GB, MemFree=49.9 GB, Cached=141.3 GB
+[2026-07-26 12:13:03 TP1 EP1] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:03 TP5 EP5] [FusedMoE] Layer 50: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:04 TP2 EP2] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:04 TP3 EP3] [MoE DRAM Offload] After layer 52: host MemAvailable=185.4 GB, MemFree=50.4 GB, Cached=141.0 GB
+[2026-07-26 12:13:04 TP2 EP2] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:05 TP6 EP6] [MoE DRAM Offload] After layer 50: host MemAvailable=185.6 GB, MemFree=50.1 GB, Cached=141.6 GB
+[2026-07-26 12:13:06 TP2 EP2] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:06 TP5 EP5] [MoE DRAM Offload] After layer 50: host MemAvailable=185.6 GB, MemFree=50.4 GB, Cached=141.2 GB
+[2026-07-26 12:13:07 TP4 EP4] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:08 TP7 EP7] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:08 TP4 EP4] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:08 TP7 EP7] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:08 TP2 EP2] [MoE DRAM Offload] After layer 52: host MemAvailable=185.1 GB, MemFree=51.4 GB, Cached=139.7 GB
+[2026-07-26 12:13:09 TP0 EP0] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:10 TP0 EP0] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:10 TP7 EP7] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:10 TP4 EP4] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:11 TP3 EP3] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:11 TP3 EP3] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:12 TP0 EP0] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:12 TP6 EP6] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:12 TP6 EP6] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:12 TP7 EP7] [MoE DRAM Offload] After layer 52: host MemAvailable=185.3 GB, MemFree=51.4 GB, Cached=139.9 GB
+[2026-07-26 12:13:13 TP1 EP1] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:13 TP3 EP3] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:13 TP1 EP1] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:13 TP5 EP5] [ExpertWeightStore] D2H layer_id=51 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:13 TP5 EP5] [ExpertWeightStore] D2H layer_id=51 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:14 TP6 EP6] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:14 TP1 EP1] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:15 TP2 EP2] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:15 TP2 EP2] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:16 TP5 EP5] [FusedMoE] Layer 51: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:17 TP2 EP2] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:17 TP1 EP1] [MoE DRAM Offload] After layer 54: host MemAvailable=185.4 GB, MemFree=50.3 GB, Cached=141.1 GB
+[2026-07-26 12:13:19 TP7 EP7] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:19 TP7 EP7] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:20 TP4 EP4] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:20 TP4 EP4] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:21 TP7 EP7] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:21 TP0 EP0] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:22 TP0 EP0] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:22 TP3 EP3] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:22 TP4 EP4] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:22 TP3 EP3] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:24 TP1 EP1] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:24 TP0 EP0] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:24 TP3 EP3] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:24 TP1 EP1] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:24 TP6 EP6] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:24 TP6 EP6] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:25 TP4 EP4] [MoE DRAM Offload] After layer 54: host MemAvailable=185.3 GB, MemFree=52.0 GB, Cached=139.3 GB
+[2026-07-26 12:13:25 TP1 EP1] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:25 TP5 EP5] [ExpertWeightStore] D2H layer_id=52 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:26 TP5 EP5] [ExpertWeightStore] D2H layer_id=52 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:26 TP2 EP2] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:26 TP2 EP2] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:26 TP3 EP3] [MoE DRAM Offload] After layer 54: host MemAvailable=185.7 GB, MemFree=51.5 GB, Cached=140.3 GB
+[2026-07-26 12:13:26 TP0 EP0] [MoE DRAM Offload] After layer 52: host MemAvailable=185.8 GB, MemFree=50.7 GB, Cached=141.1 GB
+[2026-07-26 12:13:27 TP6 EP6] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:28 TP2 EP2] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:28 TP5 EP5] [FusedMoE] Layer 52: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:30 TP6 EP6] [MoE DRAM Offload] After layer 52: host MemAvailable=185.9 GB, MemFree=52.4 GB, Cached=139.5 GB
+[2026-07-26 12:13:30 TP2 EP2] [MoE DRAM Offload] After layer 54: host MemAvailable=185.8 GB, MemFree=52.7 GB, Cached=139.1 GB
+[2026-07-26 12:13:30 TP7 EP7] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:31 TP7 EP7] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:31 TP5 EP5] [MoE DRAM Offload] After layer 52: host MemAvailable=185.9 GB, MemFree=51.8 GB, Cached=140.1 GB
+[2026-07-26 12:13:32 TP4 EP4] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:32 TP4 EP4] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:32 TP7 EP7] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:33 TP3 EP3] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:33 TP3 EP3] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:33 TP0 EP0] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:34 TP0 EP0] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:34 TP4 EP4] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:34 TP1 EP1] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:35 TP1 EP1] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:35 TP3 EP3] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:35 TP7 EP7] [MoE DRAM Offload] After layer 54: host MemAvailable=184.9 GB, MemFree=51.0 GB, Cached=139.8 GB
+[2026-07-26 12:13:36 TP0 EP0] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:36 TP1 EP1] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:36 TP6 EP6] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:37 TP6 EP6] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:37 TP2 EP2] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:38 TP2 EP2] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:38 TP5 EP5] [ExpertWeightStore] D2H layer_id=53 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:38 TP5 EP5] [ExpertWeightStore] D2H layer_id=53 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:39 TP1 EP1] [MoE DRAM Offload] After layer 56: host MemAvailable=185.8 GB, MemFree=50.5 GB, Cached=141.4 GB
+[2026-07-26 12:13:39 TP6 EP6] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:39 TP2 EP2] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:40 TP5 EP5] [FusedMoE] Layer 53: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:42 TP7 EP7] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:42 TP7 EP7] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:44 TP7 EP7] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:44 TP4 EP4] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:44 TP3 EP3] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:44 TP4 EP4] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:44 TP3 EP3] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:45 TP0 EP0] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:45 TP0 EP0] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:45 TP1 EP1] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:46 TP1 EP1] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:46 TP3 EP3] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:46 TP4 EP4] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:47 TP0 EP0] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:47 TP1 EP1] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:48 TP3 EP3] [MoE DRAM Offload] After layer 56: host MemAvailable=185.3 GB, MemFree=50.8 GB, Cached=140.7 GB
+[2026-07-26 12:13:48 TP6 EP6] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:49 TP4 EP4] [MoE DRAM Offload] After layer 56: host MemAvailable=185.6 GB, MemFree=51.0 GB, Cached=140.7 GB
+[2026-07-26 12:13:49 TP2 EP2] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:49 TP6 EP6] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:49 TP2 EP2] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:50 TP5 EP5] [ExpertWeightStore] D2H layer_id=54 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:50 TP0 EP0] [MoE DRAM Offload] After layer 54: host MemAvailable=185.6 GB, MemFree=50.4 GB, Cached=141.3 GB
+[2026-07-26 12:13:50 TP5 EP5] [ExpertWeightStore] D2H layer_id=54 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:51 TP2 EP2] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:51 TP6 EP6] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:52 TP5 EP5] [FusedMoE] Layer 54: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:53 TP2 EP2] [MoE DRAM Offload] After layer 56: host MemAvailable=185.7 GB, MemFree=51.2 GB, Cached=140.5 GB
+[2026-07-26 12:13:53 TP7 EP7] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:53 TP7 EP7] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:54 TP6 EP6] [MoE DRAM Offload] After layer 54: host MemAvailable=185.8 GB, MemFree=51.9 GB, Cached=140.0 GB
+[2026-07-26 12:13:55 TP7 EP7] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:55 TP3 EP3] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:55 TP3 EP3] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:56 TP5 EP5] [MoE DRAM Offload] After layer 54: host MemAvailable=185.2 GB, MemFree=50.9 GB, Cached=140.4 GB
+[2026-07-26 12:13:56 TP4 EP4] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:56 TP4 EP4] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:57 TP1 EP1] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:57 TP1 EP1] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:57 TP3 EP3] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:57 TP0 EP0] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:57 TP0 EP0] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:13:57 TP7 EP7] [MoE DRAM Offload] After layer 56: host MemAvailable=185.3 GB, MemFree=51.2 GB, Cached=140.1 GB
+[2026-07-26 12:13:58 TP4 EP4] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:58 TP1 EP1] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:13:59 TP0 EP0] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:00 TP2 EP2] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:00 TP2 EP2] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:00 TP6 EP6] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:01 TP1 EP1] [MoE DRAM Offload] After layer 58: host MemAvailable=185.4 GB, MemFree=51.8 GB, Cached=139.7 GB
+[2026-07-26 12:14:01 TP6 EP6] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:02 TP2 EP2] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:02 TP5 EP5] [ExpertWeightStore] D2H layer_id=55 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:02 TP5 EP5] [ExpertWeightStore] D2H layer_id=55 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:03 TP6 EP6] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:04 TP7 EP7] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:04 TP7 EP7] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:05 TP5 EP5] [FusedMoE] Layer 55: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:06 TP3 EP3] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:06 TP7 EP7] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:06 TP3 EP3] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:08 TP1 EP1] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:08 TP1 EP1] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:08 TP4 EP4] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:08 TP3 EP3] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:08 TP4 EP4] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:09 TP0 EP0] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:09 TP0 EP0] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:09 TP1 EP1] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:10 TP4 EP4] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:10 TP3 EP3] [MoE DRAM Offload] After layer 58: host MemAvailable=185.8 GB, MemFree=50.1 GB, Cached=141.7 GB
+[2026-07-26 12:14:11 TP0 EP0] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:11 TP2 EP2] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:12 TP2 EP2] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:13 TP6 EP6] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:13 TP4 EP4] [MoE DRAM Offload] After layer 58: host MemAvailable=186.1 GB, MemFree=49.8 GB, Cached=142.3 GB
+[2026-07-26 12:14:13 TP6 EP6] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:13 TP2 EP2] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:14 TP0 EP0] [MoE DRAM Offload] After layer 56: host MemAvailable=186.1 GB, MemFree=49.6 GB, Cached=142.5 GB
+[2026-07-26 12:14:14 TP5 EP5] [ExpertWeightStore] D2H layer_id=56 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:14 TP5 EP5] [ExpertWeightStore] D2H layer_id=56 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:15 TP6 EP6] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:15 TP7 EP7] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:15 TP7 EP7] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:15 TP2 EP2] [MoE DRAM Offload] After layer 58: host MemAvailable=185.2 GB, MemFree=49.7 GB, Cached=142.1 GB
+[2026-07-26 12:14:17 TP5 EP5] [FusedMoE] Layer 56: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:17 TP3 EP3] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:17 TP7 EP7] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:17 TP3 EP3] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:18 TP6 EP6] [MoE DRAM Offload] After layer 56: host MemAvailable=185.7 GB, MemFree=49.2 GB, Cached=142.5 GB
+[2026-07-26 12:14:18 TP1 EP1] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:18 TP1 EP1] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:19 TP3 EP3] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:20 TP7 EP7] [MoE DRAM Offload] After layer 58: host MemAvailable=185.9 GB, MemFree=48.9 GB, Cached=143.0 GB
+[2026-07-26 12:14:20 TP4 EP4] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:20 TP5 EP5] [MoE DRAM Offload] After layer 56: host MemAvailable=186.0 GB, MemFree=49.0 GB, Cached=143.0 GB
+[2026-07-26 12:14:20 TP1 EP1] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:20 TP4 EP4] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:21 TP0 EP0] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:21 TP0 EP0] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:22 TP4 EP4] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:22 TP1 EP1] [MoE DRAM Offload] After layer 60: host MemAvailable=185.8 GB, MemFree=48.7 GB, Cached=143.1 GB
+[2026-07-26 12:14:23 TP2 EP2] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:23 TP0 EP0] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:23 TP2 EP2] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:25 TP2 EP2] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:25 TP6 EP6] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:25 TP6 EP6] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:26 TP7 EP7] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:26 TP5 EP5] [ExpertWeightStore] D2H layer_id=57 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:27 TP7 EP7] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:27 TP5 EP5] [ExpertWeightStore] D2H layer_id=57 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:27 TP6 EP6] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:28 TP3 EP3] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:28 TP3 EP3] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:28 TP7 EP7] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:29 TP1 EP1] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:29 TP5 EP5] [FusedMoE] Layer 57: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:29 TP1 EP1] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:30 TP3 EP3] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:31 TP1 EP1] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:32 TP4 EP4] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:32 TP4 EP4] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:32 TP3 EP3] [MoE DRAM Offload] After layer 60: host MemAvailable=185.7 GB, MemFree=47.7 GB, Cached=144.2 GB
+[2026-07-26 12:14:33 TP0 EP0] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:33 TP0 EP0] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:34 TP4 EP4] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:34 TP2 EP2] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:34 TP2 EP2] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:35 TP0 EP0] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:36 TP2 EP2] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:36 TP4 EP4] [MoE DRAM Offload] After layer 60: host MemAvailable=185.6 GB, MemFree=46.8 GB, Cached=144.8 GB
+[2026-07-26 12:14:37 TP7 EP7] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:38 TP0 EP0] [MoE DRAM Offload] After layer 58: host MemAvailable=186.6 GB, MemFree=47.4 GB, Cached=145.2 GB
+[2026-07-26 12:14:38 TP6 EP6] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:38 TP7 EP7] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:38 TP6 EP6] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:38 TP2 EP2] [MoE DRAM Offload] After layer 60: host MemAvailable=186.4 GB, MemFree=46.8 GB, Cached=145.6 GB
+[2026-07-26 12:14:39 TP5 EP5] [ExpertWeightStore] D2H layer_id=58 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:39 TP5 EP5] [ExpertWeightStore] D2H layer_id=58 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:39 TP3 EP3] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:39 TP3 EP3] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:39 TP7 EP7] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:40 TP1 EP1] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:40 TP1 EP1] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:40 TP6 EP6] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:41 TP3 EP3] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:41 TP5 EP5] [FusedMoE] Layer 58: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:41 TP1 EP1] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:42 TP7 EP7] [MoE DRAM Offload] After layer 60: host MemAvailable=185.9 GB, MemFree=46.4 GB, Cached=145.6 GB
+[2026-07-26 12:14:43 TP6 EP6] [MoE DRAM Offload] After layer 58: host MemAvailable=186.0 GB, MemFree=46.3 GB, Cached=145.7 GB
+[2026-07-26 12:14:44 TP1 EP1] [MoE DRAM Offload] After layer 62: host MemAvailable=186.8 GB, MemFree=46.9 GB, Cached=146.1 GB
+[2026-07-26 12:14:44 TP4 EP4] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:44 TP4 EP4] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:44 TP5 EP5] [MoE DRAM Offload] After layer 58: host MemAvailable=186.6 GB, MemFree=46.4 GB, Cached=146.4 GB
+[2026-07-26 12:14:44 TP0 EP0] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:45 TP0 EP0] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:46 TP2 EP2] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:46 TP2 EP2] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:46 TP4 EP4] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:47 TP0 EP0] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:47 TP2 EP2] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:48 TP7 EP7] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:49 TP7 EP7] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:50 TP3 EP3] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:50 TP3 EP3] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:50 TP6 EP6] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:50 TP7 EP7] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:51 TP6 EP6] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:51 TP1 EP1] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:51 TP5 EP5] [ExpertWeightStore] D2H layer_id=59 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:51 TP1 EP1] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:51 TP5 EP5] [ExpertWeightStore] D2H layer_id=59 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:52 TP3 EP3] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:52 TP1 EP1] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:53 TP6 EP6] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:53 TP5 EP5] [FusedMoE] Layer 59: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:54 TP3 EP3] [MoE DRAM Offload] After layer 62: host MemAvailable=186.4 GB, MemFree=44.9 GB, Cached=147.6 GB
+[2026-07-26 12:14:56 TP4 EP4] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:56 TP4 EP4] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:56 TP0 EP0] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:56 TP0 EP0] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:57 TP2 EP2] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:57 TP2 EP2] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:14:58 TP4 EP4] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:58 TP0 EP0] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:59 TP2 EP2] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:14:59 TP7 EP7] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:00 TP7 EP7] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:00 TP4 EP4] [MoE DRAM Offload] After layer 62: host MemAvailable=185.7 GB, MemFree=43.6 GB, Cached=148.1 GB
+[2026-07-26 12:15:01 TP3 EP3] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:01 TP2 EP2] [MoE DRAM Offload] After layer 62: host MemAvailable=185.7 GB, MemFree=43.5 GB, Cached=148.2 GB
+[2026-07-26 12:15:01 TP3 EP3] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:01 TP0 EP0] [MoE DRAM Offload] After layer 60: host MemAvailable=186.0 GB, MemFree=43.6 GB, Cached=148.5 GB
+[2026-07-26 12:15:01 TP7 EP7] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:01 TP1 EP1] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:02 TP1 EP1] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:03 TP3 EP3] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:03 TP5 EP5] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:03 TP6 EP6] [ExpertWeightStore] D2H layer_id=60 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:03 TP5 EP5] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:03 TP6 EP6] [ExpertWeightStore] D2H layer_id=60 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:03 TP1 EP1] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:04 TP7 EP7] [MoE DRAM Offload] After layer 62: host MemAvailable=185.8 GB, MemFree=43.2 GB, Cached=148.6 GB
+[2026-07-26 12:15:05 TP6 EP6] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:05 TP5 EP5] [FusedMoE] Layer 60: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:05 TP1 EP1] [MoE DRAM Offload] After layer 64: host MemAvailable=186.1 GB, MemFree=43.5 GB, Cached=148.6 GB
+[2026-07-26 12:15:08 TP4 EP4] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:08 TP6 EP6] [MoE DRAM Offload] After layer 60: host MemAvailable=185.8 GB, MemFree=42.5 GB, Cached=149.3 GB
+[2026-07-26 12:15:08 TP0 EP0] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:08 TP4 EP4] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:08 TP2 EP2] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:08 TP5 EP5] [MoE DRAM Offload] After layer 60: host MemAvailable=185.7 GB, MemFree=42.6 GB, Cached=149.2 GB
+[2026-07-26 12:15:08 TP0 EP0] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:08 TP2 EP2] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:10 TP4 EP4] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:10 TP2 EP2] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:10 TP0 EP0] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:10 TP7 EP7] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:11 TP7 EP7] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:12 TP3 EP3] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:12 TP3 EP3] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:12 TP1 EP1] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:12 TP7 EP7] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:13 TP1 EP1] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:14 TP3 EP3] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:14 TP1 EP1] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:15 TP5 EP5] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:15 TP5 EP5] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:16 TP6 EP6] [ExpertWeightStore] D2H layer_id=61 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:16 TP3 EP3] [MoE DRAM Offload] After layer 64: host MemAvailable=185.8 GB, MemFree=42.4 GB, Cached=149.8 GB
+[2026-07-26 12:15:16 TP6 EP6] [ExpertWeightStore] D2H layer_id=61 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:17 TP5 EP5] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:18 TP6 EP6] [FusedMoE] Layer 61: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:19 TP2 EP2] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:19 TP2 EP2] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:19 TP4 EP4] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:19 TP4 EP4] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:20 TP0 EP0] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:20 TP0 EP0] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:21 TP2 EP2] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:21 TP4 EP4] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:22 TP0 EP0] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:22 TP7 EP7] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:22 TP7 EP7] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:23 TP2 EP2] [MoE DRAM Offload] After layer 64: host MemAvailable=185.8 GB, MemFree=42.4 GB, Cached=149.6 GB
+[2026-07-26 12:15:23 TP3 EP3] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:23 TP1 EP1] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:23 TP3 EP3] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:23 TP1 EP1] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:24 TP7 EP7] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:24 TP4 EP4] [MoE DRAM Offload] After layer 64: host MemAvailable=186.2 GB, MemFree=42.2 GB, Cached=150.1 GB
+[2026-07-26 12:15:24 TP0 EP0] [MoE DRAM Offload] After layer 62: host MemAvailable=186.2 GB, MemFree=42.1 GB, Cached=150.3 GB
+[2026-07-26 12:15:25 TP3 EP3] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:25 TP1 EP1] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:26 TP7 EP7] [MoE DRAM Offload] After layer 64: host MemAvailable=186.4 GB, MemFree=41.9 GB, Cached=150.5 GB
+[2026-07-26 12:15:27 TP1 EP1] [MoE DRAM Offload] After layer 66: host MemAvailable=186.3 GB, MemFree=41.8 GB, Cached=150.5 GB
+[2026-07-26 12:15:27 TP5 EP5] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:27 TP5 EP5] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:28 TP6 EP6] [ExpertWeightStore] D2H layer_id=62 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:28 TP6 EP6] [ExpertWeightStore] D2H layer_id=62 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:29 TP5 EP5] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:30 TP2 EP2] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:30 TP6 EP6] [FusedMoE] Layer 62: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:30 TP2 EP2] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:31 TP0 EP0] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:31 TP4 EP4] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:31 TP0 EP0] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:32 TP4 EP4] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:32 TP2 EP2] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:32 TP5 EP5] [MoE DRAM Offload] After layer 62: host MemAvailable=186.9 GB, MemFree=42.9 GB, Cached=150.0 GB
+[2026-07-26 12:15:33 TP7 EP7] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:33 TP7 EP7] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:33 TP6 EP6] [MoE DRAM Offload] After layer 62: host MemAvailable=187.0 GB, MemFree=42.8 GB, Cached=150.2 GB
+[2026-07-26 12:15:33 TP0 EP0] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:33 TP4 EP4] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:34 TP3 EP3] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:34 TP1 EP1] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:34 TP3 EP3] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:34 TP1 EP1] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:35 TP7 EP7] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:36 TP3 EP3] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:36 TP1 EP1] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:38 TP3 EP3] [MoE DRAM Offload] After layer 66: host MemAvailable=187.2 GB, MemFree=42.4 GB, Cached=150.9 GB
+[2026-07-26 12:15:39 TP5 EP5] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:39 TP5 EP5] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:41 TP6 EP6] [ExpertWeightStore] D2H layer_id=63 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:41 TP6 EP6] [ExpertWeightStore] D2H layer_id=63 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:41 TP5 EP5] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:41 TP2 EP2] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:42 TP2 EP2] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:43 TP6 EP6] [FusedMoE] Layer 63: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:43 TP4 EP4] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:43 TP0 EP0] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:43 TP4 EP4] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:43 TP2 EP2] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:43 TP0 EP0] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:44 TP7 EP7] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:44 TP7 EP7] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:45 TP3 EP3] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:45 TP3 EP3] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:45 TP1 EP1] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:45 TP4 EP4] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:45 TP0 EP0] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:45 TP2 EP2] [MoE DRAM Offload] After layer 66: host MemAvailable=186.9 GB, MemFree=43.3 GB, Cached=149.6 GB
+[2026-07-26 12:15:45 TP1 EP1] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:46 TP7 EP7] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:46 TP3 EP3] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:47 TP1 EP1] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:47 TP4 EP4] [MoE DRAM Offload] After layer 66: host MemAvailable=187.1 GB, MemFree=43.6 GB, Cached=149.6 GB
+[2026-07-26 12:15:48 TP0 EP0] [MoE DRAM Offload] After layer 64: host MemAvailable=187.1 GB, MemFree=43.6 GB, Cached=149.6 GB
+[2026-07-26 12:15:48 TP7 EP7] [MoE DRAM Offload] After layer 66: host MemAvailable=187.3 GB, MemFree=42.9 GB, Cached=150.5 GB
+[2026-07-26 12:15:49 TP1 EP1] [MoE DRAM Offload] After layer 68: host MemAvailable=187.5 GB, MemFree=43.1 GB, Cached=150.8 GB
+[2026-07-26 12:15:51 TP5 EP5] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:51 TP5 EP5] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:52 TP2 EP2] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:53 TP2 EP2] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:53 TP6 EP6] [ExpertWeightStore] D2H layer_id=64 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:53 TP5 EP5] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:53 TP6 EP6] [ExpertWeightStore] D2H layer_id=64 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:54 TP2 EP2] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:54 TP4 EP4] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:55 TP0 EP0] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:55 TP7 EP7] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:55 TP4 EP4] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:55 TP0 EP0] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:55 TP7 EP7] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:55 TP6 EP6] [FusedMoE] Layer 64: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:56 TP3 EP3] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:56 TP3 EP3] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:56 TP5 EP5] [MoE DRAM Offload] After layer 64: host MemAvailable=187.2 GB, MemFree=43.3 GB, Cached=150.0 GB
+[2026-07-26 12:15:56 TP1 EP1] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:56 TP1 EP1] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:15:57 TP4 EP4] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:57 TP7 EP7] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:57 TP0 EP0] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:57 TP3 EP3] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:58 TP1 EP1] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:15:58 TP6 EP6] [MoE DRAM Offload] After layer 64: host MemAvailable=186.5 GB, MemFree=42.4 GB, Cached=150.7 GB
+[2026-07-26 12:16:00 TP3 EP3] [MoE DRAM Offload] After layer 68: host MemAvailable=187.7 GB, MemFree=42.7 GB, Cached=151.1 GB
+[2026-07-26 12:16:03 TP5 EP5] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:03 TP5 EP5] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:04 TP2 EP2] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:04 TP2 EP2] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:05 TP5 EP5] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:05 TP2 EP2] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:05 TP6 EP6] [ExpertWeightStore] D2H layer_id=65 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:06 TP6 EP6] [ExpertWeightStore] D2H layer_id=65 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:06 TP7 EP7] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:06 TP7 EP7] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:06 TP0 EP0] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:06 TP4 EP4] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:07 TP0 EP0] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:07 TP4 EP4] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:07 TP3 EP3] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:07 TP3 EP3] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:07 TP1 EP1] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:07 TP2 EP2] [MoE DRAM Offload] After layer 68: host MemAvailable=187.3 GB, MemFree=42.7 GB, Cached=150.6 GB
+[2026-07-26 12:16:07 TP1 EP1] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:08 TP6 EP6] [FusedMoE] Layer 65: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:08 TP7 EP7] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:08 TP4 EP4] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:09 TP0 EP0] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:09 TP3 EP3] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:09 TP1 EP1] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:10 TP7 EP7] [MoE DRAM Offload] After layer 68: host MemAvailable=187.7 GB, MemFree=43.2 GB, Cached=150.6 GB
+[2026-07-26 12:16:11 TP1 EP1] [MoE DRAM Offload] After layer 70: host MemAvailable=187.5 GB, MemFree=42.9 GB, Cached=150.8 GB
+[2026-07-26 12:16:11 TP4 EP4] [MoE DRAM Offload] After layer 68: host MemAvailable=187.3 GB, MemFree=42.9 GB, Cached=150.9 GB
+[2026-07-26 12:16:11 TP0 EP0] [MoE DRAM Offload] After layer 66: host MemAvailable=187.9 GB, MemFree=43.2 GB, Cached=150.7 GB
+[2026-07-26 12:16:14 TP5 EP5] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:15 TP5 EP5] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:15 TP2 EP2] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:15 TP2 EP2] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:16 TP2 EP2] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:17 TP5 EP5] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:18 TP7 EP7] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:18 TP7 EP7] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:18 TP6 EP6] [ExpertWeightStore] D2H layer_id=66 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:18 TP3 EP3] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:18 TP0 EP0] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:18 TP6 EP6] [ExpertWeightStore] D2H layer_id=66 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:18 TP3 EP3] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:18 TP1 EP1] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:19 TP0 EP0] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:19 TP4 EP4] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:19 TP1 EP1] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:19 TP4 EP4] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:19 TP5 EP5] [MoE DRAM Offload] After layer 66: host MemAvailable=186.9 GB, MemFree=42.2 GB, Cached=150.8 GB
+[2026-07-26 12:16:19 TP7 EP7] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:20 TP3 EP3] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:20 TP1 EP1] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:20 TP6 EP6] [FusedMoE] Layer 66: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:20 TP0 EP0] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:21 TP4 EP4] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:22 TP3 EP3] [MoE DRAM Offload] After layer 70: host MemAvailable=187.6 GB, MemFree=42.7 GB, Cached=150.9 GB
+[2026-07-26 12:16:23 TP6 EP6] [MoE DRAM Offload] After layer 66: host MemAvailable=187.6 GB, MemFree=42.4 GB, Cached=151.3 GB
+[2026-07-26 12:16:26 TP5 EP5] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:26 TP2 EP2] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:26 TP5 EP5] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:26 TP2 EP2] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:27 TP2 EP2] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:28 TP5 EP5] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:28 TP7 EP7] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:28 TP7 EP7] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:29 TP3 EP3] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:29 TP1 EP1] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:29 TP3 EP3] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:29 TP2 EP2] [MoE DRAM Offload] After layer 70: host MemAvailable=187.6 GB, MemFree=41.7 GB, Cached=151.9 GB
+[2026-07-26 12:16:30 TP1 EP1] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:30 TP0 EP0] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:30 TP7 EP7] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:30 TP4 EP4] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:30 TP0 EP0] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:30 TP6 EP6] [ExpertWeightStore] D2H layer_id=67 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:30 TP4 EP4] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=67 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:31 TP3 EP3] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:31 TP1 EP1] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:32 TP0 EP0] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:32 TP4 EP4] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:32 TP6 EP6] [FusedMoE] Layer 67: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:32 TP7 EP7] [MoE DRAM Offload] After layer 70: host MemAvailable=187.3 GB, MemFree=41.2 GB, Cached=152.2 GB
+[2026-07-26 12:16:33 TP1 EP1] [MoE DRAM Offload] After layer 72: host MemAvailable=187.3 GB, MemFree=41.3 GB, Cached=152.0 GB
+[2026-07-26 12:16:35 TP0 EP0] [MoE DRAM Offload] After layer 68: host MemAvailable=187.5 GB, MemFree=41.3 GB, Cached=152.3 GB
+[2026-07-26 12:16:35 TP4 EP4] [MoE DRAM Offload] After layer 70: host MemAvailable=187.6 GB, MemFree=41.2 GB, Cached=152.5 GB
+[2026-07-26 12:16:37 TP2 EP2] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:37 TP2 EP2] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:37 TP5 EP5] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:38 TP5 EP5] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:38 TP2 EP2] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:39 TP7 EP7] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:39 TP7 EP7] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:40 TP5 EP5] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:40 TP3 EP3] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:40 TP1 EP1] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:40 TP3 EP3] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:40 TP1 EP1] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:41 TP7 EP7] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:41 TP4 EP4] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:41 TP4 EP4] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:41 TP0 EP0] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:41 TP3 EP3] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:42 TP1 EP1] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:42 TP0 EP0] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:42 TP5 EP5] [MoE DRAM Offload] After layer 68: host MemAvailable=186.7 GB, MemFree=39.4 GB, Cached=153.9 GB
+[2026-07-26 12:16:42 TP6 EP6] [ExpertWeightStore] D2H layer_id=68 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:43 TP6 EP6] [ExpertWeightStore] D2H layer_id=68 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:43 TP4 EP4] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:44 TP0 EP0] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:44 TP3 EP3] [MoE DRAM Offload] After layer 72: host MemAvailable=188.0 GB, MemFree=40.3 GB, Cached=153.9 GB
+[2026-07-26 12:16:45 TP6 EP6] [FusedMoE] Layer 68: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:47 TP6 EP6] [MoE DRAM Offload] After layer 68: host MemAvailable=187.9 GB, MemFree=39.4 GB, Cached=154.6 GB
+[2026-07-26 12:16:48 TP2 EP2] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:48 TP2 EP2] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:49 TP5 EP5] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:49 TP2 EP2] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:49 TP5 EP5] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:50 TP7 EP7] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:50 TP7 EP7] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:51 TP3 EP3] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:51 TP1 EP1] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:51 TP3 EP3] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:51 TP1 EP1] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:51 TP2 EP2] [MoE DRAM Offload] After layer 72: host MemAvailable=187.1 GB, MemFree=38.3 GB, Cached=154.9 GB
+[2026-07-26 12:16:51 TP5 EP5] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:52 TP7 EP7] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:52 TP4 EP4] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:52 TP3 EP3] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:52 TP1 EP1] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:52 TP4 EP4] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:53 TP0 EP0] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:53 TP0 EP0] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:54 TP7 EP7] [MoE DRAM Offload] After layer 72: host MemAvailable=187.7 GB, MemFree=39.3 GB, Cached=154.4 GB
+[2026-07-26 12:16:54 TP4 EP4] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:54 TP1 EP1] [MoE DRAM Offload] After layer 74: host MemAvailable=187.6 GB, MemFree=39.3 GB, Cached=154.4 GB
+[2026-07-26 12:16:54 TP6 EP6] [ExpertWeightStore] D2H layer_id=69 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:55 TP6 EP6] [ExpertWeightStore] D2H layer_id=69 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:55 TP0 EP0] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:57 TP6 EP6] [FusedMoE] Layer 69: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:16:57 TP4 EP4] [MoE DRAM Offload] After layer 72: host MemAvailable=187.9 GB, MemFree=39.5 GB, Cached=154.4 GB
+[2026-07-26 12:16:58 TP0 EP0] [MoE DRAM Offload] After layer 70: host MemAvailable=188.2 GB, MemFree=39.5 GB, Cached=154.8 GB
+[2026-07-26 12:16:59 TP2 EP2] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:16:59 TP2 EP2] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:00 TP2 EP2] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:01 TP7 EP7] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:01 TP7 EP7] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:01 TP5 EP5] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:02 TP3 EP3] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:02 TP5 EP5] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:02 TP1 EP1] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:02 TP3 EP3] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:02 TP1 EP1] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:03 TP7 EP7] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:03 TP3 EP3] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:03 TP1 EP1] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:04 TP5 EP5] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:04 TP4 EP4] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:04 TP4 EP4] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:04 TP0 EP0] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:05 TP0 EP0] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:05 TP3 EP3] [MoE DRAM Offload] After layer 74: host MemAvailable=187.6 GB, MemFree=38.4 GB, Cached=155.3 GB
+[2026-07-26 12:17:06 TP4 EP4] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:06 TP5 EP5] [MoE DRAM Offload] After layer 70: host MemAvailable=188.0 GB, MemFree=38.6 GB, Cached=155.5 GB
+[2026-07-26 12:17:06 TP0 EP0] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:07 TP6 EP6] [ExpertWeightStore] D2H layer_id=70 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:07 TP6 EP6] [ExpertWeightStore] D2H layer_id=70 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:09 TP6 EP6] [FusedMoE] Layer 70: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:10 TP2 EP2] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:10 TP2 EP2] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:11 TP2 EP2] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:11 TP6 EP6] [MoE DRAM Offload] After layer 70: host MemAvailable=187.8 GB, MemFree=38.3 GB, Cached=155.6 GB
+[2026-07-26 12:17:11 TP7 EP7] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:12 TP7 EP7] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:12 TP1 EP1] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:12 TP3 EP3] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:12 TP1 EP1] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:12 TP3 EP3] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:13 TP5 EP5] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:13 TP2 EP2] [MoE DRAM Offload] After layer 74: host MemAvailable=187.5 GB, MemFree=38.2 GB, Cached=155.3 GB
+[2026-07-26 12:17:13 TP5 EP5] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:13 TP7 EP7] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:14 TP1 EP1] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:14 TP3 EP3] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:15 TP5 EP5] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:15 TP7 EP7] [MoE DRAM Offload] After layer 74: host MemAvailable=188.3 GB, MemFree=39.3 GB, Cached=155.1 GB
+[2026-07-26 12:17:16 TP4 EP4] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:16 TP0 EP0] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:16 TP1 EP1] [MoE DRAM Offload] After layer 76: host MemAvailable=188.2 GB, MemFree=39.2 GB, Cached=155.1 GB
+[2026-07-26 12:17:16 TP4 EP4] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:16 TP0 EP0] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:18 TP4 EP4] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:18 TP0 EP0] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:19 TP6 EP6] [ExpertWeightStore] D2H layer_id=71 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:19 TP6 EP6] [ExpertWeightStore] D2H layer_id=71 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:20 TP4 EP4] [MoE DRAM Offload] After layer 74: host MemAvailable=188.1 GB, MemFree=38.6 GB, Cached=155.6 GB
+[2026-07-26 12:17:20 TP0 EP0] [MoE DRAM Offload] After layer 72: host MemAvailable=188.1 GB, MemFree=38.6 GB, Cached=155.6 GB
+[2026-07-26 12:17:20 TP2 EP2] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:21 TP6 EP6] [FusedMoE] Layer 71: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:21 TP2 EP2] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:22 TP7 EP7] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:22 TP2 EP2] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:22 TP7 EP7] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:23 TP3 EP3] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:23 TP1 EP1] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:23 TP3 EP3] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:23 TP1 EP1] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:24 TP7 EP7] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:24 TP1 EP1] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:24 TP3 EP3] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:25 TP5 EP5] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:25 TP5 EP5] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:26 TP3 EP3] [MoE DRAM Offload] After layer 76: host MemAvailable=188.2 GB, MemFree=37.8 GB, Cached=156.5 GB
+[2026-07-26 12:17:27 TP5 EP5] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:27 TP0 EP0] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:27 TP4 EP4] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:27 TP0 EP0] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:27 TP4 EP4] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:29 TP0 EP0] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:29 TP4 EP4] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:30 TP5 EP5] [MoE DRAM Offload] After layer 72: host MemAvailable=187.9 GB, MemFree=38.0 GB, Cached=156.0 GB
+[2026-07-26 12:17:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=72 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=72 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:31 TP2 EP2] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:32 TP2 EP2] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:32 TP7 EP7] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:33 TP6 EP6] [FusedMoE] Layer 72: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:33 TP7 EP7] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:33 TP2 EP2] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:33 TP3 EP3] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:33 TP3 EP3] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:33 TP1 EP1] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:33 TP1 EP1] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:34 TP7 EP7] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:35 TP3 EP3] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:35 TP2 EP2] [MoE DRAM Offload] After layer 76: host MemAvailable=188.4 GB, MemFree=37.8 GB, Cached=156.7 GB
+[2026-07-26 12:17:35 TP1 EP1] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:35 TP6 EP6] [MoE DRAM Offload] After layer 72: host MemAvailable=188.3 GB, MemFree=37.8 GB, Cached=156.8 GB
+[2026-07-26 12:17:36 TP5 EP5] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:36 TP7 EP7] [MoE DRAM Offload] After layer 76: host MemAvailable=188.7 GB, MemFree=38.4 GB, Cached=156.3 GB
+[2026-07-26 12:17:37 TP1 EP1] [MoE DRAM Offload] After layer 78: host MemAvailable=188.6 GB, MemFree=38.6 GB, Cached=156.2 GB
+[2026-07-26 12:17:37 TP5 EP5] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:38 TP0 EP0] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:38 TP4 EP4] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:39 TP0 EP0] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:39 TP5 EP5] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:39 TP4 EP4] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:40 TP0 EP0] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:41 TP4 EP4] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:42 TP2 EP2] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:42 TP2 EP2] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:43 TP6 EP6] [ExpertWeightStore] D2H layer_id=73 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:43 TP0 EP0] [MoE DRAM Offload] After layer 74: host MemAvailable=187.6 GB, MemFree=38.4 GB, Cached=155.3 GB
+[2026-07-26 12:17:43 TP7 EP7] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:43 TP6 EP6] [ExpertWeightStore] D2H layer_id=73 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:43 TP4 EP4] [MoE DRAM Offload] After layer 76: host MemAvailable=187.7 GB, MemFree=38.2 GB, Cached=155.6 GB
+[2026-07-26 12:17:43 TP3 EP3] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:43 TP7 EP7] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:43 TP3 EP3] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:44 TP2 EP2] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:44 TP1 EP1] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:44 TP1 EP1] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:45 TP6 EP6] [FusedMoE] Layer 73: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:45 TP7 EP7] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:45 TP3 EP3] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:45 TP1 EP1] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:47 TP3 EP3] [MoE DRAM Offload] After layer 78: host MemAvailable=188.6 GB, MemFree=37.8 GB, Cached=157.0 GB
+[2026-07-26 12:17:48 TP1 EP1] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:17:48 TP5 EP5] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:48 TP5 EP5] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:50 TP0 EP0] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:50 TP0 EP0] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:50 TP4 EP4] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:50 TP5 EP5] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:50 TP4 EP4] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:51 TP1 EP1] Load weight end. elapsed=932.91 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.67 GB, mem usage=76.79 GB.
+[2026-07-26 12:17:52 TP0 EP0] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:52 TP4 EP4] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:53 TP2 EP2] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:53 TP5 EP5] [MoE DRAM Offload] After layer 74: host MemAvailable=245.1 GB, MemFree=93.8 GB, Cached=157.4 GB
+[2026-07-26 12:17:53 TP2 EP2] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:53 TP7 EP7] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:53 TP3 EP3] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:54 TP7 EP7] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:54 TP3 EP3] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:54 TP2 EP2] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:55 TP6 EP6] [ExpertWeightStore] D2H layer_id=74 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:55 TP6 EP6] [ExpertWeightStore] D2H layer_id=74 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:17:55 TP3 EP3] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:55 TP7 EP7] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:56 TP2 EP2] [MoE DRAM Offload] After layer 78: host MemAvailable=245.5 GB, MemFree=92.3 GB, Cached=159.3 GB
+[2026-07-26 12:17:57 TP6 EP6] [FusedMoE] Layer 74: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:17:57 TP7 EP7] [MoE DRAM Offload] After layer 78: host MemAvailable=245.4 GB, MemFree=90.2 GB, Cached=161.3 GB
+[2026-07-26 12:17:58 TP3 EP3] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:17:59 TP6 EP6] [MoE DRAM Offload] After layer 74: host MemAvailable=266.6 GB, MemFree=111.5 GB, Cached=161.2 GB
+[2026-07-26 12:18:00 TP5 EP5] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:00 TP5 EP5] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:01 TP0 EP0] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:01 TP0 EP0] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:01 TP4 EP4] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:01 TP3 EP3] Load weight end. elapsed=942.91 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.67 GB, mem usage=76.79 GB.
+[2026-07-26 12:18:02 TP4 EP4] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:02 TP5 EP5] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:03 TP0 EP0] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:03 TP4 EP4] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:03 TP2 EP2] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:04 TP2 EP2] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:04 TP7 EP7] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:04 TP7 EP7] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:05 TP2 EP2] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:06 TP0 EP0] [MoE DRAM Offload] After layer 76: host MemAvailable=302.8 GB, MemFree=147.4 GB, Cached=161.5 GB
+[2026-07-26 12:18:06 TP4 EP4] [MoE DRAM Offload] After layer 78: host MemAvailable=302.8 GB, MemFree=147.4 GB, Cached=161.6 GB
+[2026-07-26 12:18:06 TP7 EP7] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:07 TP6 EP6] [ExpertWeightStore] D2H layer_id=75 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:07 TP6 EP6] [ExpertWeightStore] D2H layer_id=75 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:07 TP2 EP2] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:18:08 TP7 EP7] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:18:09 TP6 EP6] [FusedMoE] Layer 75: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:11 TP5 EP5] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:11 TP5 EP5] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:12 TP2 EP2] Load weight end. elapsed=953.19 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.67 GB, mem usage=76.79 GB.
+[2026-07-26 12:18:12 TP0 EP0] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:12 TP0 EP0] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:13 TP7 EP7] Load weight end. elapsed=953.95 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.67 GB, mem usage=76.79 GB.
+[2026-07-26 12:18:13 TP4 EP4] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:13 TP4 EP4] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:13 TP5 EP5] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:14 TP0 EP0] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:15 TP4 EP4] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:16 TP5 EP5] [MoE DRAM Offload] After layer 76: host MemAvailable=417.0 GB, MemFree=258.3 GB, Cached=164.8 GB
+[2026-07-26 12:18:18 TP4 EP4] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:18:19 TP6 EP6] [ExpertWeightStore] D2H layer_id=76 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:19 TP6 EP6] [ExpertWeightStore] D2H layer_id=76 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:21 TP6 EP6] [FusedMoE] Layer 76: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:22 TP4 EP4] Load weight end. elapsed=963.15 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.67 GB, mem usage=76.79 GB.
+[2026-07-26 12:18:23 TP5 EP5] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:23 TP5 EP5] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:23 TP6 EP6] [MoE DRAM Offload] After layer 76: host MemAvailable=474.3 GB, MemFree=313.6 GB, Cached=166.9 GB
+[2026-07-26 12:18:23 TP0 EP0] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:24 TP0 EP0] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:25 TP5 EP5] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:25 TP0 EP0] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:28 TP0 EP0] [MoE DRAM Offload] After layer 78: host MemAvailable=474.1 GB, MemFree=311.8 GB, Cached=168.4 GB
+[2026-07-26 12:18:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=77 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:31 TP6 EP6] [ExpertWeightStore] D2H layer_id=77 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:33 TP6 EP6] [FusedMoE] Layer 77: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:34 TP5 EP5] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:35 TP5 EP5] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:35 TP0 EP0] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:35 TP0 EP0] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:36 TP5 EP5] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:37 TP0 EP0] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:39 TP5 EP5] [MoE DRAM Offload] After layer 78: host MemAvailable=474.0 GB, MemFree=308.4 GB, Cached=171.7 GB
+[2026-07-26 12:18:40 TP0 EP0] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:18:43 TP6 EP6] [ExpertWeightStore] D2H layer_id=78 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:43 TP6 EP6] [ExpertWeightStore] D2H layer_id=78 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:44 TP0 EP0] Load weight end. elapsed=985.20 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.59 GB, mem usage=76.61 GB.
+[2026-07-26 12:18:45 TP6 EP6] [FusedMoE] Layer 78: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:46 TP5 EP5] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:46 TP5 EP5] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:47 TP6 EP6] [MoE DRAM Offload] After layer 78: host MemAvailable=531.6 GB, MemFree=364.3 GB, Cached=173.4 GB
+[2026-07-26 12:18:48 TP5 EP5] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:18:51 TP5 EP5] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:18:55 TP6 EP6] [ExpertWeightStore] D2H layer_id=79 expert_id=0: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:55 TP6 EP6] [ExpertWeightStore] D2H layer_id=79 expert_id=64: 4 tensors, 16.7 MB copied to DRAM
+[2026-07-26 12:18:55 TP5 EP5] Load weight end. elapsed=996.51 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.67 GB, mem usage=76.79 GB.
+[2026-07-26 12:18:57 TP6 EP6] [FusedMoE] Layer 79: Offloaded 112 experts (1.83 GB) to DRAM. HBM 72.66→72.66 GB (freed 0.00 GB)
+[2026-07-26 12:19:00 TP6 EP6] [MoE DRAM Offload] Enabled for 79 MoE layers. Total DRAM usage: 91.5 GB (acc_offload pool + 0 H2D tail layers)
+[2026-07-26 12:19:04 TP6 EP6] Load weight end. elapsed=1005.16 s, type=KimiK3ForConditionalGeneration, quant=compressed-tensors, avail mem=45.67 GB, mem usage=76.79 GB.
+[2026-07-26 12:19:04 TP0 EP0] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP0 EP0] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+[2026-07-26 12:19:04 TP7 EP7] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP7 EP7] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+[2026-07-26 12:19:04 TP5 EP5] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP5 EP5] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+[2026-07-26 12:19:04 TP2 EP2] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP2 EP2] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+[2026-07-26 12:19:04 TP6 EP6] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP6 EP6] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+[2026-07-26 12:19:04 TP4 EP4] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP4 EP4] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+[2026-07-26 12:19:04 TP3 EP3] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP3 EP3] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+[2026-07-26 12:19:04 TP1 EP1] Reloaded tiktoken model from /home/l00519189/kk/tiktoken.model
+[2026-07-26 12:19:04 TP1 EP1] #words: 163840 - BOS ID: 163584 - EOS ID: 163585
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP0 EP0] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+/home/l00519189/sglang-offload/python/sglang/srt/utils/common.py:1491: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:213.)
+  tensor_data = torch.ByteTensor(
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP2 EP2] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP7 EP7] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP4 EP4] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP6 EP6] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP5 EP5] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP1 EP1] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+/home/l00519189/sglang-offload/python/sglang/srt/utils/hf_transformers/tokenizer.py:422: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-26 12:19:04 TP3 EP3] Applying special tokens cache patch for Kimi tokenizer: <class 'transformers_modules.kk.72c1c1b333f74f51.tokenization_kimi.TikTokenTokenizer'>
+[2026-07-26 12:19:04 TP0 EP0] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:04 TP7 EP7] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:04 TP6 EP6] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:04 TP5 EP5] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:04 TP4 EP4] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:04 TP3 EP3] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:04 TP2 EP2] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:04 TP1 EP1] get env SGLANG_MAMBA_CONV_DTYPE = bfloat16
+[2026-07-26 12:19:05 TP4 EP4] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP4 EP4] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP2 EP2] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP4 EP4] Memory pool end. avail mem=28.17 GB
+[2026-07-26 12:19:06 TP4 EP4] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP1 EP1] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP2 EP2] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP2 EP2] Memory pool end. avail mem=28.17 GB
+[2026-07-26 12:19:06 TP2 EP2] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP1 EP1] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP5 EP5] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP1 EP1] Memory pool end. avail mem=28.17 GB
+[2026-07-26 12:19:06 TP1 EP1] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP4 EP4] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP4 EP4] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP5 EP5] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP5 EP5] Memory pool end. avail mem=28.17 GB
+[2026-07-26 12:19:06 TP5 EP5] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP2 EP2] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP2 EP2] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP6 EP6] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP0 EP0] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP3 EP3] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP1 EP1] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP1 EP1] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP4 EP4] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06 TP0 EP0] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP6 EP6] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP0 EP0] Memory pool end. avail mem=28.09 GB
+[2026-07-26 12:19:06 TP7 EP7] Mamba Cache is allocated. max_mamba_cache_size: 347, conv_state size: 0.54GB, ssm_state size: 15.29GB 
+[2026-07-26 12:19:06 TP6 EP6] Memory pool end. avail mem=28.17 GB
+[2026-07-26 12:19:06 TP0 EP0] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP6 EP6] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP2 EP2] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06 TP3 EP3] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP5 EP5] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP5 EP5] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP3 EP3] Memory pool end. avail mem=28.17 GB
+[2026-07-26 12:19:06 TP3 EP3] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP7 EP7] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 65536, KV size: 1.41 GB
+[2026-07-26 12:19:06 TP7 EP7] Memory pool end. avail mem=28.17 GB
+[2026-07-26 12:19:06 TP1 EP1] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06 TP7 EP7] get env ASCEND_USE_FIA = 1
+[2026-07-26 12:19:06 TP0 EP0] Linear attention kernel backend: decode=triton, prefill=triton
+[2026-07-26 12:19:06 TP0 EP0] KDA kernel dispatcher: decode=TritonKDAKernel, extend=TritonKDAKernel packed_decode=False
+[2026-07-26 12:19:06 TP0 EP0] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP0 EP0] max_total_num_tokens=65536, chunked_prefill_size=-1, max_prefill_tokens=16384, max_running_requests=347, context_len=1048576, available_gpu_mem=28.09 GB
+[2026-07-26 12:19:06 TP0 EP0] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP6 EP6] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP6 EP6] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP5 EP5] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06 TP3 EP3] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP3 EP3] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP7 EP7] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[2026-07-26 12:19:06 TP7 EP7] Tree cache initialized: source=default impl=ChunkCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[2026-07-26 12:19:06 TP0 EP0] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06 TP6 EP6] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06 TP3 EP3] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06 TP7 EP7] get env SGLANG_NPU_PROFILING = 1
+[2026-07-26 12:19:06] INFO:     Started server process [63775]
+[2026-07-26 12:19:06] INFO:     Waiting for application startup.
+[2026-07-26 12:19:07] The server is fired up and ready to roll!
+[2026-07-26 12:19:07] INFO:     Application startup complete.
+[2026-07-26 12:19:07] INFO:     Uvicorn running on http://0.0.0.0:8880 (Press CTRL+C to quit)
+[2026-07-26 12:49:39 TP3 EP3] get env HOSTNAME = localhost.localdomain
+[2026-07-26 12:49:39 TP1 EP1] get env HOSTNAME = localhost.localdomain
+[2026-07-26 12:49:39 TP5 EP5] get env HOSTNAME = localhost.localdomain
+[2026-07-26 12:49:39 TP2 EP2] get env HOSTNAME = localhost.localdomain
+[2026-07-26 12:49:39 TP6 EP6] get env HOSTNAME = localhost.localdomain
+[2026-07-26 12:49:39 TP7 EP7] get env HOSTNAME = localhost.localdomain

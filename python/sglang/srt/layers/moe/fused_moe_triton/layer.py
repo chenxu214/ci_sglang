@@ -1443,6 +1443,15 @@ class FusedMoE(torch.nn.Module):
         if torch.npu.is_available():
             torch.npu.empty_cache()
 
+        # Release PyTorch CPU caching allocator memory back to the OS.
+        # register_expert() creates temporary CPU tensors via .cpu() for
+        # NZ->ND format conversion before copying to the acc_offload pool.
+        # PyTorch CPU allocator caches these (~5GB per expert) and does NOT
+        # return them to the OS automatically, causing host DRAM to appear
+        # "still in use" even after Python references are released.
+        # Calling once per layer (not per expert) avoids 896x overhead.
+        self._expert_weight_store._release_cpu_cache()
+
         if torch.npu.is_available():
             alloc_after = torch.npu.memory_allocated() / 1024**3
         else:
@@ -1484,24 +1493,19 @@ class FusedMoE(torch.nn.Module):
             self._expert_weight_store.dram_store[sample_key].keys()
         )
 
-        # Always allocate [num_local_experts, ...] shared buffers and set
+        # Always allocate [num_local_experts, ...] HBM buffers and set
         # them as layer weights — even when no local experts are selected.
         # This ensures the weight shape is correct for the CANN kernel
         # (group_list size == weight dim 0). Without this, stale weights
         # from a previous decode (e.g., [num_active, ...]) would persist
         # and cause a shape mismatch error.
+        target_device = "npu" if torch.npu.is_available() else "cpu"
         shared_buffers = {}
         for name in weight_names:
             sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
             full_shape = (self.num_local_experts,) + sample_tensor.shape
             dtype = sample_tensor.dtype
-            buf = self._expert_weight_store.get_shared_hbm_buffer(
-                name, full_shape, dtype
-            )
-            if buf is None:
-                # Budget exceeded: allocate temporary (non-cached) buffer.
-                target_device = "npu" if torch.npu.is_available() else "cpu"
-                buf = torch.empty(full_shape, dtype=dtype, device=target_device)
+            buf = torch.empty(full_shape, dtype=dtype, device=target_device)
             shared_buffers[name] = buf
             setattr(self, name, buf)
 
@@ -1521,8 +1525,8 @@ class FusedMoE(torch.nn.Module):
         if not load_expert_ids:
             return
 
-        # Batch H2D directly into shared buffers (avoids extra HBM→HBM copy)
-        self._expert_weight_store.batch_load_to_shared_buffer(
+        # Batch H2D directly into the allocated buffers.
+        self._expert_weight_store.batch_load_to_hbm(
             layer_id=self.layer_id,
             expert_ids=load_expert_ids,
             shared_buffers=shared_buffers,
