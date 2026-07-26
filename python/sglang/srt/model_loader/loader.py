@@ -1060,6 +1060,12 @@ class DefaultModelLoader(BaseModelLoader):
                     setattr(parent, parts[-1], new_param)
                 else:
                     setattr(moe_mod, full_name, new_param)
+            # Release meta_params + param references so the meta device
+            # Parameters can be GC'd. Without this, meta_params holds
+            # references until next loop iteration, preventing GC of
+            # the underlying storage (even though meta uses no DRAM,
+            # the Python Parameter objects themselves accumulate).
+            del meta_params, full_name, param, new_data, new_param
 
             # 4b. Load this layer's weights into the materialized params.
             model.load_weights(iter(layer_ws))
@@ -1078,12 +1084,28 @@ class DefaultModelLoader(BaseModelLoader):
             # loaded in Phase 3b. Must be released BEFORE malloc_trim(0),
             # otherwise glibc malloc holds the freed memory in its arena.
             del deferred_layer_weights[layer_id]
+            del layer_ws
             gc.collect()
             # Now that all CPU tensor references (Parameter + layer_ws)
             # are gone, hint glibc to release freed arenas to the OS.
             # Without this, host DRAM grows ~3.75 GB per layer (63 layers
             # → ~236 GB) because glibc malloc holds freed memory.
             _expert_store._release_cpu_cache()
+
+            # Log host DRAM usage every 10 layers to track leaks.
+            if layer_id % 10 == 0:
+                try:
+                    with open("/proc/meminfo", "r") as f:
+                        for line in f:
+                            if line.startswith("MemAvailable:"):
+                                avail_gb = int(line.split()[1]) / 1024 / 1024
+                                logger.info(
+                                    f"[MoE DRAM Offload] After layer {layer_id}: "
+                                    f"host MemAvailable={avail_gb:.1f} GB"
+                                )
+                                break
+                except Exception:
+                    pass
 
         _expert_store.release_hbm_weights()
         dram_gb = _expert_store.get_dram_usage_gb()
