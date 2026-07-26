@@ -1561,7 +1561,7 @@ class Scheduler(
         profiling_stage: str = os.getenv("SGLANG_NPU_PROFILING_STAGE",
                                          "decode")  # envs.SGLANG_NPU_PROFILING_STAGE.get()
         if enable_profiling:
-            prof_cnt = 0       # Steps in current round (0 = not started)
+            prof_cnt = 0       # Steps in current round (0 = not started, -1 = all done)
             prof_round = 0     # Current round index (0-based)
 
             import torch_npu
@@ -1569,22 +1569,25 @@ class Scheduler(
             def _create_profiler(round_idx: int):
                 """Create a fresh profiler instance for one profiling round.
 
-                Each round is an independent start/stop session that writes
-                to its own subdirectory. A new instance is needed because
-                torch_npu profiler cannot be restarted after stop().
+                Follows the same configuration as SchedulerProfilerManager
+                (profiler_manager.py): no schedule, export_type=Text for
+                Device-side data, Level1 for CANN AscendCL + AI Core metrics.
                 """
                 experimental_config = torch_npu.profiler._ExperimentalConfig(
+                    export_type=torch_npu.profiler.ExportType.Text,
+                    profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+                    msprof_tx=False,
                     aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
-                    profiler_level=torch_npu.profiler.ProfilerLevel.Level2,
                     l2_cache=False,
+                    op_attr=False,
                     data_simplification=False,
+                    record_op_args=False,
+                    gc_detect_threshold=None,
                 )
                 round_path = f"profiling/round_{round_idx}"
-                # active=prof_step: every prof.step() is a data-collecting
-                # step. No skip_first/wait/warmup — we control timing via
-                # prof_cnt. The active phase completes exactly after
-                # prof_step step() calls, which is required for Device-side
-                # (NPU) data to be flushed.
+                # No schedule — simple start()/stop() like the existing
+                # SGLang profiler. The schedule mechanism requires exact
+                # prof.step() counts and interferes with multi-round restart.
                 return torch_npu.profiler.profile(
                     activities=[
                         torch_npu.profiler.ProfilerActivity.CPU,
@@ -1592,9 +1595,6 @@ class Scheduler(
                     ],
                     on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
                         round_path
-                    ),
-                    schedule=torch_npu.profiler.schedule(
-                        wait=0, warmup=0, active=prof_step, repeat=1, skip_first=0
                     ),
                     record_shapes=True,
                     profile_memory=True,
@@ -1604,7 +1604,7 @@ class Scheduler(
                     experimental_config=experimental_config,
                 )
 
-            prof = _create_profiler(prof_round)
+            prof = None  # Created lazily on first matching batch
             logger.info(
                 f"[Profiler] Enabled: repeat={prof_repeat}, step={prof_step}, "
                 f"stage={profiling_stage}, bs={prof_bs}"
@@ -1660,6 +1660,7 @@ class Scheduler(
                     # prof_cnt == 0  → round not yet started
                     # prof_cnt == -1 → all rounds finished, profiling disabled
                     if prof_cnt == 0 and is_prof_stage and len(batch.reqs) >= prof_bs:
+                        prof = _create_profiler(prof_round)
                         prof.start()
                         prof_cnt = 1
                         logger.info(
@@ -1669,9 +1670,9 @@ class Scheduler(
                 batch_result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), batch_result))
 
-                # Advance profiler schedule AFTER run_batch so that NPU
-                # operations launched during run_batch are captured in
-                # the current active step.
+                # No schedule — just count batches and stop after prof_step.
+                # prof.step() is called for step markers in the trace (works
+                # even without a schedule).
                 if enable_profiling and prof_cnt > 0 and is_prof_stage:
                     prof.step()
                     prof_cnt += 1
@@ -1682,16 +1683,14 @@ class Scheduler(
                             f"[Profiler] Round {prof_round}/{prof_repeat - 1} finished "
                             f"({prof_step} steps → profiling/round_{prof_round}/)"
                         )
+                        # Discard profiler instance; will create fresh one
+                        # for the next round.
+                        prof = None
                         if prof_round < prof_repeat - 1:
-                            # Prepare next round: new profiler instance,
-                            # reset counter. The next matching batch will
-                            # trigger prof.start().
                             prof_round += 1
-                            prof = _create_profiler(prof_round)
-                            prof_cnt = 0
+                            prof_cnt = 0  # Next matching batch starts new round
                         else:
-                            # All rounds complete
-                            prof_cnt = -1
+                            prof_cnt = -1  # All rounds complete
             else:
                 batch_result = None
 
