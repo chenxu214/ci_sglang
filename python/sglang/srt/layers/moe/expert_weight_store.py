@@ -289,42 +289,64 @@ class ExpertWeightStore:
 
         cpu_weights = {}
         total_bytes = 0
-        for name, tensor in weights.items():
-            # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
-            # copy_() or .cpu() -- NPU raises "do not support internal format".
-            # npu_format_cast to ND may only change metadata without
-            # reformatting storage, so .contiguous() forces a real ND copy.
-            if tensor.device.type != "cpu":
-                # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
-                # Cast to ND first, then .contiguous() forces a real format
-                # conversion (not just metadata change). If this fails, raise
-                # immediately -- a silent fallback to .contiguous() alone does
-                # NOT guarantee NZ->ND and would cause "do not support internal
-                # format" errors later in copy_().
-                tensor = torch_npu.npu_format_cast(
-                    tensor, NPUACLFormat.ACL_FORMAT_ND
-                ).contiguous()
-                tensor = tensor.cpu()
+        # Track temporary CPU tensors (created by .cpu()) so we can release
+        # them explicitly after copying to the DRAM pool. Without this,
+        # PyTorch CPU caching allocator holds the memory and does not return
+        # it to the OS, causing host DRAM usage to grow unbounded.
+        #
+        # Note: We do NOT call torch.cpu.empty_cache() here because it would
+        # be invoked 896 times per layer (once per expert), causing significant
+        # overhead. The caller (offload_expert_weights_to_dram) is responsible
+        # for calling _release_cpu_cache() once after all experts are registered.
+        temp_cpu_tensors = []
+        try:
+            for name, tensor in weights.items():
+                # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
+                # copy_() or .cpu() -- NPU raises "do not support internal
+                # format". npu_format_cast to ND may only change metadata
+                # without reformatting storage, so .contiguous() forces a real
+                # ND copy.
+                if tensor.device.type != "cpu":
+                    # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
+                    # Cast to ND first, then .contiguous() forces a real format
+                    # conversion (not just metadata change). If this fails,
+                    # raise immediately -- a silent fallback to .contiguous()
+                    # alone does NOT guarantee NZ->ND and would cause "do not
+                    # support internal format" errors later in copy_().
+                    nd_tensor = torch_npu.npu_format_cast(
+                        tensor, NPUACLFormat.ACL_FORMAT_ND
+                    ).contiguous()
+                    cpu_tensor = nd_tensor.cpu()
+                    del nd_tensor
+                    temp_cpu_tensors.append(cpu_tensor)
+                else:
+                    cpu_tensor = tensor
 
-            use_pool = (
-                self._use_pool_for_storage
-                and self.use_acc_offload
-                and self._offload_initialized
-                and layer_id not in self._h2d_layer_ids
-            )
-            if use_pool:
-                # Allocate from acc_offload DRAM pool.
-                dram_tensor = self._offload.empty(
-                    tensor.shape, dtype=tensor.dtype
+                use_pool = (
+                    self._use_pool_for_storage
+                    and self.use_acc_offload
+                    and self._offload_initialized
+                    and layer_id not in self._h2d_layer_ids
                 )
-            else:
-                # H2D tail layer or pool unavailable: PyTorch torch.empty.
-                dram_tensor = torch.empty(
-                    tensor.shape, dtype=tensor.dtype, pin_memory=False
-                )
-            dram_tensor.copy_(tensor)
-            cpu_weights[name] = dram_tensor
-            total_bytes += dram_tensor.nbytes
+                if use_pool:
+                    # Allocate from acc_offload DRAM pool.
+                    dram_tensor = self._offload.empty(
+                        cpu_tensor.shape, dtype=cpu_tensor.dtype
+                    )
+                else:
+                    # H2D tail layer or pool unavailable: PyTorch torch.empty.
+                    dram_tensor = torch.empty(
+                        cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                    )
+                dram_tensor.copy_(cpu_tensor)
+                cpu_weights[name] = dram_tensor
+                total_bytes += dram_tensor.nbytes
+        finally:
+            # Release temporary CPU tensor Python references immediately.
+            # PyTorch CPU caching allocator may still hold the underlying
+            # memory; caller must invoke _release_cpu_cache() after the full
+            # layer registration loop to return it to the OS.
+            del temp_cpu_tensors
 
         self.dram_store[key] = cpu_weights
         self._registered_layers.add(layer_id)
@@ -334,6 +356,31 @@ class ExpertWeightStore:
                 f"[ExpertWeightStore] D2H layer_id={layer_id} expert_id={expert_id}: "
                 f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
             )
+
+    def _release_cpu_cache(self):
+        """Release PyTorch CPU caching allocator memory back to the OS.
+
+        Call this after a batch of register_expert() calls (typically after
+        all experts of a layer are registered) to free the temporary CPU
+        tensors created by .cpu() inside register_expert.
+
+        Without this, PyTorch CPU caching allocator holds ~5GB per expert
+        of host DRAM, causing apparent memory growth even after Python
+        references are released.
+        """
+        import gc
+        gc.collect()
+        # torch.cpu.empty_cache() releases PyTorch CPU allocator cache
+        # back to the OS. Available in PyTorch >= 1.13.
+        try:
+            torch.cpu.empty_cache()
+        except (AttributeError, RuntimeError):
+            # Fallback for older PyTorch: hint glibc to release memory
+            try:
+                import ctypes
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
 
     def _batch_h2d_copy(
         self,
