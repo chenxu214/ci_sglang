@@ -478,11 +478,11 @@ class KDAAttnBackend(MambaAttnBackendBase):
         if is_npu():
             if _USE_ASCENDC_CONV1D:
                 w = self._get_conv_weights_for_op(layer)
-                cs = conv_states.transpose(-1, -2).contiguous()
+                # cs = conv_states.transpose(-1, -2).contiguous()
                 qkv = torch.ops.npu.causal_conv1d(
                     mixed_qkv.contiguous(),
                     w,
-                    conv_states=cs,
+                    conv_states=conv_states,
                     bias=layer.bias,
                     query_start_loc=query_start_loc,
                     cache_indices=cache_indices,
@@ -490,7 +490,7 @@ class KDAAttnBackend(MambaAttnBackendBase):
                     pad_slot_id=-1,
                     run_mode=1,
                 )
-                conv_states.copy_(cs.transpose(-1, -2))
+                # conv_states.copy_(cs.transpose(-1, -2))
             else:
                 qkv, updated_conv_states = torch_causal_conv1d_update_npu(
                     mixed_qkv.unsqueeze(-1),
@@ -598,7 +598,7 @@ class KDAAttnBackend(MambaAttnBackendBase):
         if self.forward_metadata.has_mamba_track_mask:
             mixed_qkv_to_track = mixed_qkv[
                 self.forward_metadata.track_conv_indices
-            ].transpose(-1, -2)
+            ]  # .transpose(-1, -2)
             conv_states[self.forward_metadata.conv_states_mask_indices] = (
                 mixed_qkv_to_track.to(conv_states.dtype, copy=False)
             )
@@ -625,11 +625,11 @@ class KDAAttnBackend(MambaAttnBackendBase):
                     # Ascend-C op (3-call: q/k/v each, structure unchanged)
                     w = weight.transpose(0, 1).contiguous().to(torch.bfloat16)
                     x_cl = x.transpose(0, 1).contiguous()
-                    cs = state.transpose(-1, -2).contiguous()
+                    # cs = state.transpose(-1, -2).contiguous()
                     out = torch.ops.npu.causal_conv1d(
                         x_cl,
                         w,
-                        conv_states=cs,
+                        conv_states=state,
                         bias=bias,
                         query_start_loc=query_start_loc,
                         cache_indices=cache_indices,
@@ -638,7 +638,7 @@ class KDAAttnBackend(MambaAttnBackendBase):
                         pad_slot_id=-1,
                         run_mode=0,
                     )
-                    state.copy_(cs.transpose(-1, -2))
+                    # state.copy_(cs.transpose(-1, -2))
                     return out
                 # Legacy FP32 bridge + causal_conv1d_fn (unchanged)
                 # The Ascend varlen wrapper creates its padding buffer in the
