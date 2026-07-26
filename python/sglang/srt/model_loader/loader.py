@@ -1036,6 +1036,19 @@ class DefaultModelLoader(BaseModelLoader):
             model.load_weights(iter(phase1_weights))
         _log_host_dram("Phase-1-end")
 
+        # Release Phase 1's combined weight list + skip/non-layer weights.
+        # Critical: phase1_weights holds references to safetensors-loaded
+        # CPU tensors (~685 GB for 48 skip layers + non-layer weights!).
+        # Even after model.load_weights() copies data to HBM, the Python
+        # list keeps CPU tensors alive, blocking ~685 GB of host DRAM.
+        # Must release BEFORE Phase 2 to allow process_weights_after_loading
+        # to allocate HBM without competing for host DRAM.
+        del phase1_weights
+        del non_layer_weights
+        del skip_layer_weights
+        gc.collect()
+        _log_host_dram("Phase-1-cleanup-end")
+
         # ---- Phase 2: process skip-layer + non-MoE modules ----
         _log_host_dram("Phase-2-start")
         for _, module in model.named_modules():
@@ -1055,12 +1068,7 @@ class DefaultModelLoader(BaseModelLoader):
         # and skip_layer_weights; keeping it alive prevents GC from freeing
         # the safetensors-loaded CPU tensors (~3.75 GB per MoE layer),
         # causing host DRAM to grow unbounded during Phase 3.
-        del skip_layer_weights
         del layer_weight_buckets
-        # Also release Phase 1's combined weight list + non-layer weights
-        # so safetensors mmap'd CPU tensors can be GC'd.
-        del phase1_weights
-        del non_layer_weights
         del skip_layers
         gc.collect()
         _log_host_dram("Phase-2-cleanup-end")
