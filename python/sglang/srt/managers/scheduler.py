@@ -1570,6 +1570,14 @@ class Scheduler(
                 data_simplification=False,
             )
             profiling_path = "profiling/"
+            # Schedule: active=prof_step means every prof.step() call is an
+            # active (data-collecting) step. No skip_first/wait/warmup —
+            # we control timing manually via prof_cnt. This ensures the
+            # active phase completes exactly after prof_step step() calls,
+            # which is required for Device-side (NPU) data to be flushed.
+            # With the old schedule (skip_first=1,wait=1,warmup=1,active=10),
+            # 13 step() calls were needed but only ~8 were made, so the
+            # active phase never completed and NPU operator data was lost.
             prof = torch_npu.profiler.profile(
                 activities=[
                     torch_npu.profiler.ProfilerActivity.CPU,
@@ -1579,7 +1587,7 @@ class Scheduler(
                     profiling_path
                 ),
                 schedule=torch_npu.profiler.schedule(
-                    wait=1, warmup=1, active=10, repeat=1, skip_first=1
+                    wait=0, warmup=0, active=prof_step, repeat=1, skip_first=0
                 ),
                 record_shapes=True,
                 profile_memory=True,
@@ -1626,8 +1634,8 @@ class Scheduler(
 
             # Launch the current batch
             if batch:
+                is_prof_stage = False
                 if enable_profiling:
-                    is_prof_stage = False
                     if (
                             profiling_stage == "decode" and batch.forward_mode.is_decode()
                     ) or (
@@ -1635,23 +1643,24 @@ class Scheduler(
                     ):
                         is_prof_stage = True
 
-                    if len(batch.reqs) >= prof_bs and prof_cnt == 0 and is_prof_stage:
+                    # Start profiler on the first matching batch.
+                    # prof_cnt tracks how many step() calls have been made.
+                    if prof_cnt == 0 and is_prof_stage and len(batch.reqs) >= prof_bs:
                         prof.start()
-                        prof_cnt += 1
-                    if prof_cnt > 0 and is_prof_stage:
-                        prof_cnt += 1
-                    if prof_cnt == prof_step and is_prof_stage:
-                        torch.npu.synchronize()
-                        prof.stop()
+                        prof_cnt = 1
+
                 batch_result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), batch_result))
-                if (
-                        enable_profiling
-                        and prof_cnt > 0
-                        and prof_cnt < prof_step
-                        and is_prof_stage
-                ):
+
+                # Advance profiler schedule AFTER run_batch so that NPU
+                # operations launched during run_batch are captured in
+                # the current active step. Then stop after the final step.
+                if enable_profiling and prof_cnt > 0 and is_prof_stage:
                     prof.step()
+                    if prof_cnt >= prof_step:
+                        torch.npu.synchronize()
+                        prof.stop()
+                    prof_cnt += 1
             else:
                 batch_result = None
 
