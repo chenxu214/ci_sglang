@@ -898,6 +898,39 @@ class DefaultModelLoader(BaseModelLoader):
             else:
                 non_layer_weights.append(args)
 
+        # Memory diagnostic: log host DRAM at key phases.
+        def _log_host_dram(tag: str):
+            try:
+                with open("/proc/meminfo", "r") as f:
+                    mem_lines = f.readlines()
+                avail_kb = free_kb = cached_kb = buff_kb = 0
+                for line in mem_lines:
+                    if line.startswith("MemAvailable:"):
+                        avail_kb = int(line.split()[1])
+                    elif line.startswith("MemFree:"):
+                        free_kb = int(line.split()[1])
+                    elif line.startswith("Cached:"):
+                        cached_kb = int(line.split()[1])
+                    elif line.startswith("Buffers:"):
+                        buff_kb = int(line.split()[1])
+                avail_gb = avail_kb / 1024 / 1024
+                free_gb = free_kb / 1024 / 1024
+                cached_gb = cached_kb / 1024 / 1024
+                buff_gb = buff_kb / 1024 / 1024
+                used_gb = 1505.0 - avail_gb  # approx
+                logger.info(
+                    f"[MoE DRAM Offload][{tag}] "
+                    f"host MemAvailable={avail_gb:.1f} GB, "
+                    f"MemFree={free_gb:.1f} GB, "
+                    f"Cached={cached_gb:.1f} GB, "
+                    f"Buffers={buff_gb:.1f} GB, "
+                    f"approxUsed={used_gb:.1f} GB"
+                )
+            except Exception:
+                pass
+
+        _log_host_dram("Phase-0-start")
+
         # Build layer_id → FusedMoE module map for non-skip layers.
         non_skip_moe_modules = {}  # {layer_id: FusedMoE}
         for _, mod in model.named_modules():
@@ -920,6 +953,7 @@ class DefaultModelLoader(BaseModelLoader):
         # best contiguous huge pages. After mmap, page cache fragmentation
         # causes HalMemCreate failures even when free DRAM is sufficient.
         # Non-skip weights are still on meta device (zero DRAM usage).
+        _log_host_dram("Phase-0-pool-init-start")
         from sglang.srt.layers.moe.expert_weight_store import ExpertWeightStore
         use_acc_offload = getattr(server_args, "moe_use_acc_offload", True)
         use_pool_for_storage = True  # always pool mode for layered load
@@ -981,6 +1015,7 @@ class DefaultModelLoader(BaseModelLoader):
                 sorted(non_skip_moe_modules.keys()),
             )
         _expert_store._ensure_initialize()
+        _log_host_dram("Phase-0-pool-init-end")
         logger.info(
             f"[MoE DRAM Offload] Pool initialized ({dram_pool_gb:.1f} GB). "
             f"Starting layer-by-layer offload for "
@@ -989,6 +1024,7 @@ class DefaultModelLoader(BaseModelLoader):
 
         # ---- Phase 1: load non-layer + skip-layer weights ----
         # Non-skip MoE params are on meta device, so load_weights skips them.
+        _log_host_dram("Phase-1-start")
         phase1_weights = non_layer_weights + skip_layer_weights
         if is_nvfp4_online:
             with temp_set_env(
@@ -998,8 +1034,10 @@ class DefaultModelLoader(BaseModelLoader):
                 model.load_weights(iter(phase1_weights))
         else:
             model.load_weights(iter(phase1_weights))
+        _log_host_dram("Phase-1-end")
 
         # ---- Phase 2: process skip-layer + non-MoE modules ----
+        _log_host_dram("Phase-2-start")
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
             if quant_method is None:
@@ -1009,6 +1047,7 @@ class DefaultModelLoader(BaseModelLoader):
                 continue  # deferred to phase 3
             with device_loading_context(module, target_device):
                 quant_method.process_weights_after_loading(module)
+        _log_host_dram("Phase-2-end")
 
         # Release references to original weight file data that was already
         # loaded (skip-layer) or is now tracked by deferred_layer_weights.
@@ -1018,7 +1057,13 @@ class DefaultModelLoader(BaseModelLoader):
         # causing host DRAM to grow unbounded during Phase 3.
         del skip_layer_weights
         del layer_weight_buckets
+        # Also release Phase 1's combined weight list + non-layer weights
+        # so safetensors mmap'd CPU tensors can be GC'd.
+        del phase1_weights
+        del non_layer_weights
+        del skip_layers
         gc.collect()
+        _log_host_dram("Phase-2-cleanup-end")
 
         # ---- Phase 3: layer-by-layer load + process + offload ----
         import torch.distributed as dist
