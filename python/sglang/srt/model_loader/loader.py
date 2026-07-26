@@ -1099,19 +1099,32 @@ class DefaultModelLoader(BaseModelLoader):
             # → ~236 GB) because glibc malloc holds freed memory.
             _expert_store._release_cpu_cache()
 
-            # Log host DRAM usage every layer to track leaks.
-            try:
-                with open("/proc/meminfo", "r") as f:
-                    for line in f:
+            # Log host DRAM usage every 2 layers to track leaks.
+            if layer_id % 2 == 0:
+                try:
+                    with open("/proc/meminfo", "r") as f:
+                        mem_lines = f.readlines()
+                    avail_kb = 0
+                    free_kb = 0
+                    cached_kb = 0
+                    for line in mem_lines:
                         if line.startswith("MemAvailable:"):
-                            avail_gb = int(line.split()[1]) / 1024 / 1024
-                            logger.info(
-                                f"[MoE DRAM Offload] After layer {layer_id}: "
-                                f"host MemAvailable={avail_gb:.1f} GB"
-                            )
-                            break
-            except Exception:
-                pass
+                            avail_kb = int(line.split()[1])
+                        elif line.startswith("MemFree:"):
+                            free_kb = int(line.split()[1])
+                        elif line.startswith("Cached:"):
+                            cached_kb = int(line.split()[1])
+                    avail_gb = avail_kb / 1024 / 1024
+                    free_gb = free_kb / 1024 / 1024
+                    cached_gb = cached_kb / 1024 / 1024
+                    logger.info(
+                        f"[MoE DRAM Offload] After layer {layer_id}: "
+                        f"host MemAvailable={avail_gb:.1f} GB, "
+                        f"MemFree={free_gb:.1f} GB, "
+                        f"Cached={cached_gb:.1f} GB"
+                    )
+                except Exception:
+                    pass
 
         _expert_store.release_hbm_weights()
         dram_gb = _expert_store.get_dram_usage_gb()

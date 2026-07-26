@@ -386,26 +386,18 @@ class ExpertWeightStore:
         except (AttributeError, RuntimeError):
             pass
         # Release glibc malloc arenas back to the OS.
-        # Use mallctl to iterate arenas if available, otherwise fallback
-        # to malloc_trim(0) which trims the main arena.
         # Critical: without this, host DRAM grows unbounded because glibc
         # holds freed memory in its arena (especially with multi-threaded
         # PyTorch which creates per-thread arenas).
         try:
             import ctypes
             libc = ctypes.CDLL("libc.so.6")
-            # malloc_trim(0) releases free regions from all arenas
-            # (not just main arena) in glibc >= 2.12.
+            # malloc_trim(0) releases free regions from all arenas.
             libc.malloc_trim(0)
         except Exception:
             pass
-        # Also try posix_fadvise(DONTNEED) on large allocations.
-        # This helps release page cache for mmap'd regions.
+        # Debug: print arena stats (set SGLANG_DEBUG_MALLOC=1 to enable).
         try:
-            import ctypes
-            libc = ctypes.CDLL("libc.so.6")
-            # malloc_stats prints arena stats to stderr — useful for
-            # debugging but noisy. Only enable with env var.
             if __import__("os").environ.get("SGLANG_DEBUG_MALLOC"):
                 libc.malloc_stats()
         except Exception:
