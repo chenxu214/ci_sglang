@@ -73,7 +73,7 @@ def _situ_and_mul_quant_kernel(
     # total_rows: from group_list (routed MoE) or N_ROWS (dense / shared).
     if HAS_GROUP_LIST:
         if GROUP_LIST_TYPE == 0:  # cusum
-            total_rows = tl.load(group_list_ptr + NUM_EXPERTS).to(tl.int32)
+            total_rows = tl.load(group_list_ptr + NUM_EXPERTS - 1).to(tl.int32)
         else:  # count
             gl_offsets = tl.arange(0, NUM_EXPERTS_ALGIN)
             gl_mask = gl_offsets < NUM_EXPERTS
