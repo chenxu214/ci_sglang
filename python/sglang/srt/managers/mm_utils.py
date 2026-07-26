@@ -1133,6 +1133,7 @@ def general_mm_embed_routine(
             forward_batch.mm_inputs = None
             forward_batch.mm_input_embeds = input_embeds
         else:
+            # print(f'======{input_ids=}')
             input_embeds = embed_tokens(input_ids)
         # Copy to pre-allocated buffer if available (for CUDA graph address stability)
         if forward_batch.input_embeds is not None:

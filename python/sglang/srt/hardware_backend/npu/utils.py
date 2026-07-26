@@ -27,6 +27,26 @@ import triton.language.extra.cann.libdevice as libdevice
 from sgl_kernel_npu.utils.triton_utils import get_device_properties
 
 
+count = 1
+layer_id = 0
+
+def set_count():
+    global count
+    count += 1
+
+def get_count():
+    global count
+    return count
+
+def set_layer(id):
+    global layer_id
+    layer_id = id
+
+def get_layer():
+    global layer_id
+    return layer_id
+
+
 @triton.jit
 def _situ_and_mul_quant_kernel(
     x_ptr,

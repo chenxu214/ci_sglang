@@ -22,7 +22,7 @@ from sglang.srt.distributed import (
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.layers.attention.fla.fused_norm_gate import FusedRMSNormGated
-from sglang.srt.layers.attention.fla.kda import fused_kda_gate
+# from sglang.srt.layers.attention.fla.kda import fused_kda_gate
 from sglang.srt.layers.attention.vision import VisionAttention
 from sglang.srt.layers.communicator import AttentionInputs, get_attn_tp_context
 from sglang.srt.layers.conv import Conv2dLayer
@@ -85,7 +85,7 @@ from sglang.srt.utils.common import (
     log_debug_on_rank0,
     set_weight_attrs,
 )
-from sglang.srt.hardware_backend.npu.utils import situ_and_mul, apply_attn_res
+from sglang.srt.hardware_backend.npu.utils import situ_and_mul, apply_attn_res, set_count, get_count, set_layer
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +106,8 @@ class KimiMLAAttention(DeepseekV2AttentionMLA):
         # the reduce at the correct point for either the attn_residual path
         # (manual attention_tensor_model_parallel_all_reduce) or the standard
         # LayerCommunicator path.
-        self.o_proj.reduce_results = False
-        self.o_proj.use_dp_attention_reduce = False
+        # self.o_proj.reduce_results = False
+        # self.o_proj.use_dp_attention_reduce = False
         if is_npu() and self.rotary_emb is None:
             self.rotary_emb = _NoopRotaryEmbedding()
         self.use_output_gate = getattr(config, "mla_use_output_gate", False)
@@ -202,7 +202,7 @@ class KimiMLP(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=add_prefix("down_proj", prefix),
-            reduce_results=False,
+            reduce_results=reduce_results,
             tp_rank=tp_rank,
             tp_size=tp_size,
         )
@@ -221,11 +221,17 @@ class KimiMLP(nn.Module):
         else:
             raise ValueError(f"Unsupported activation: {hidden_act}")
 
+        self.prefix = prefix
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[0] == 0:
             return x
         gate_up, _ = self.gate_up_proj(x)
-        return self.down_proj(self.act_fn(gate_up))[0]
+        # torch.save(gate_up, f"/home/chenxu/plog/after_gate_up_proj_{self.prefix}_{torch.distributed.get_rank()}.pt")
+        a = self.act_fn(gate_up)
+        # torch.save(a, f"/home/chenxu/plog/after_act_fn_{self.prefix}_{torch.distributed.get_rank()}.pt")
+        b = self.down_proj(a)
+        return b[0]
 
 
 class KimiMoE(nn.Module):
@@ -434,6 +440,9 @@ class KimiDeltaAttention(nn.Module):
         self.use_full_rank_gate = config.linear_attn_config.get(
             "use_full_rank_gate", False
         )
+        self.gate_lower_bound = config.linear_attn_config.get(
+            "gate_lower_bound", None
+        )
 
         # TODO: support fusion with quant
         self.do_fuse_qkvbfg = quant_config is None and not self.use_full_rank_gate
@@ -588,7 +597,7 @@ class KimiDeltaAttention(nn.Module):
             prefix=f"{prefix}.o_proj",
             tp_rank=self.attn_tp_rank,
             tp_size=self.attn_tp_size,
-            reduce_results=False,
+            # reduce_results=False,
         )
 
         conv_weights = self.qkv_conv1d.weight.squeeze(1)
@@ -606,6 +615,7 @@ class KimiDeltaAttention(nn.Module):
             bias=bias,
             A_log=self.A_log,
             dt_bias=self.dt_bias,
+            lower_bound=self.gate_lower_bound,
         )
 
     def forward_qkvbfg(self, hidden_states: torch.Tensor):
@@ -681,10 +691,17 @@ class KimiDeltaAttention(nn.Module):
         # For decode: gate activation is handled inside fused_recurrent kernel.
         beta = beta.float()
         if not forward_batch.forward_mode.is_decode():
-            forget_gate = fused_kda_gate(
-                forget_gate, self.A_log, self.head_dim, g_bias=self.dt_bias
-            )
-            beta = beta.sigmoid()
+            # from sglang.srt.layers.attention.fla.kda import fused_kda_gate
+            # forget_gate = fused_kda_gate(
+            #     forget_gate, self.A_log, self.head_dim, g_bias=self.dt_bias
+            # )
+            # beta = beta.sigmoid()
+
+            forget_gate = forget_gate.unflatten(
+                -1, (-1, self.head_dim)
+            )  # [T, H*K] -> [T, H, K]
+            beta = beta.float().sigmoid()
+
             forget_gate = forget_gate.unsqueeze(0)
         beta = beta.unsqueeze(0)
 

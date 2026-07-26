@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Callable
 
 import torch
 from torch.nn.parameter import Parameter
@@ -9,6 +9,8 @@ from sglang.srt.layers.quantization.base_config import LinearMethodBase
 
 if TYPE_CHECKING:
     from sglang.srt.layers.quantization.base_config import QuantizationConfig
+
+import torch_npu
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,52 @@ class _NPULinearMethodBase(LinearMethodBase):
         quant_config: Optional["QuantizationConfig"] = None,
     ):
         self.quant_config = quant_config
+
+
+class NPUW4A8MxFpLinearMethod(_NPULinearMethodBase):
+
+    def process_weights_after_loading(self, layer: torch.nn.Module):
+        layer.weight.data = torch_npu.npu_format_cast(
+            layer.weight.data,
+            29,
+            customize_dtype=torch.float8_e4m3fn,
+            input_dtype=torch_npu.float4_e2m1fn_x2,
+        ).transpose(0, 1)
+        weight_scale = layer.weight_scale.data
+        weight_scale = weight_scale.reshape(
+            weight_scale.shape[0], weight_scale.shape[1] // 2, 2
+        ).transpose(0, 1)
+        layer.weight_scale.data = weight_scale
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        group_sizes = (1, 1, 32)
+        orig_shape = x.shape
+        k = orig_shape[-1]
+        x = x.reshape(-1, k).contiguous()
+
+        x_fp8, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
+            x,
+            dst_type=torch.float8_e4m3fn,
+        )
+
+        out = torch.ops.npu.npu_quant_matmul(
+            x_fp8,
+            layer.weight,
+            scale=layer.weight_scale,
+            scale_dtype=torch_npu.float8_e8m0fnu,
+            pertoken_scale=x_scale,
+            pertoken_scale_dtype=torch_npu.float8_e8m0fnu,
+            bias=bias,
+            output_dtype=torch.bfloat16,
+            group_sizes=group_sizes,
+            x2_dtype=torch_npu.float4_e2m1fn_x2,
+        )
+        return out.reshape(*orig_shape[:-1], out.shape[-1])
 
 
 class NPUW8A8Int8LinearMethod(_NPULinearMethodBase):

@@ -23,6 +23,12 @@ if is_tf32_supported:
 else:
     SOLVE_TRIL_DOT_PRECISION = tl.constexpr("ieee")
 
+from sglang.srt.utils import is_npu
+
+
+_is_npu = is_npu()
+if _is_npu:
+    import triton.language.extra.cann.extension as al
 
 ################################################################################
 # Fused inter + solve_tril kernel: compute off-diagonal Akk and solve in one pass
@@ -158,6 +164,7 @@ def chunk_kda_fwd_kernel_inter_solve_fused(
             g, (T, K), (H * K, 1), (i_tc0, i_k * BK), (BC, BK), (1, 0)
         )
         b_k0 = tl.load(p_k0, boundary_check=(0, 1)).to(tl.float32)
+        al.compile_hint(b_k0, "enable_flag_id_overflow_workaround", True)
         b_g0 = tl.load(p_g0, boundary_check=(0, 1)).to(tl.float32)
 
         if FUSE_DIAGONAL:

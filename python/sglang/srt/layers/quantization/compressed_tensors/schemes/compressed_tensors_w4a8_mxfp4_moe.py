@@ -40,6 +40,16 @@ if TYPE_CHECKING:
     )
 
 
+count = 1
+
+def set_count():
+    global count
+    count += 1
+
+def get_count():
+    global count
+    return count
+
 def _npu_swiglu(x: torch.Tensor) -> torch.Tensor:
     return torch.ops.npu.npu_swiglu(x)
 
@@ -545,10 +555,25 @@ def w4a8_mxfp4_gmm_npu(
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
 
+    # return torch.ops.npu.npu_grouped_matmul(
+    #     [input],
+    #     [weight],
+    #     antiquant_scale=[weight_scale],
+    #     split_item=2,
+    #     group_type=0,
+    #     group_list=group_list,
+    #     group_list_type=group_list_type,
+    #     output_dtype=output_dtype,
+    # )[0]
+
     if input_scale is None:
         x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
             input,
-            dst_type=torch_npu.float8_e4m3fn
+            axis=1,
+            round_mode="rint",
+            dst_type=torch.float8_e4m3fn,
+            block_size=32,
+            scale_alg=None,
         )
     else:
         x, x_scale = input, input_scale
@@ -588,7 +613,8 @@ def w4a8_mxfp4_gmm_npu(
         [x],
         [weight],
         antiquant_scale=[weight_scale],
-        scale_dtype=torch_npu.float8_e8m0fnu,
+        scale_dtype=None,
+        scale=None,
         per_token_scale=[x_scale],
         split_item=2,
         group_type=0,

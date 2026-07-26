@@ -19,6 +19,7 @@ from sglang.srt.layers.attention.mamba.causal_conv1d_triton import (
 from sglang.srt.layers.radix_linear_attention import RadixLinearAttention
 from sglang.srt.utils import is_cpu, is_cuda, is_npu
 from sglang.srt.utils.common import rank0_log
+from sglang.srt.hardware_backend.npu.utils import get_count, get_layer
 
 # Ascend's public decode wrapper assigns an FP32 updated state into the BF16
 # cache without casting. Use its functional implementation and write back with
@@ -158,6 +159,7 @@ class KDAKernelDispatcher:
         query_start_loc: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
+        # print(f'==decode===layer_id:{get_layer()}=====')
         return self.decode_kernel.decode(
             q,
             k,
@@ -185,6 +187,7 @@ class KDAKernelDispatcher:
         query_start_loc: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
+        # print(f'==prefill===layer_id:{get_layer()}=====')
         return self.extend_kernel.extend(
             q,
             k,
@@ -648,6 +651,7 @@ class KDAAttnBackend(MambaAttnBackendBase):
                 or forward_batch.forward_mode.is_draft_extend_v2()
             ),
         )
+        # print(f"============{core_attn_out.to(torch.float32).sum()=}======={torch.distributed.get_rank()}====")
         if h is not None:
             # This branch's KDA kernels and recurrent-state pool both use the
             # [K, V] matrix layout.
