@@ -358,29 +358,40 @@ class ExpertWeightStore:
             )
 
     def _release_cpu_cache(self):
-        """Release PyTorch CPU caching allocator memory back to the OS.
+        """Release CPU memory back to the OS after register_expert() calls.
 
-        Call this after a batch of register_expert() calls (typically after
-        all experts of a layer are registered) to free the temporary CPU
-        tensors created by .cpu() inside register_expert.
+        PyTorch CPU tensors are allocated via glibc malloc (not PyTorch's
+        CPU caching allocator unless PYTORCH_CPU_ALLOC_CONF is set).
+        torch.cpu.empty_cache() only releases PyTorch's own caching
+        allocator cache — it does NOT touch glibc malloc's arena.
 
-        Without this, PyTorch CPU caching allocator holds ~5GB per expert
-        of host DRAM, causing apparent memory growth even after Python
-        references are released.
+        When a layer's CPU tensors (created by torch.empty(device="cpu")
+        in loader.py Phase 3a, and by .transpose().contiguous() in
+        process_weights_after_loading) are released via delattr +
+        gc.collect(), glibc malloc holds the freed memory in its arena
+        instead of returning it to the OS. This causes host DRAM usage
+        to grow ~3.75 GB per layer (63 layers → ~236 GB) even after
+        Python references are gone.
+
+        Fix: always call malloc_trim(0) to hint glibc to release freed
+        arenas back to the OS. Also call torch.cpu.empty_cache() for
+        the (rare) case where PyTorch CPU caching allocator is enabled.
         """
         import gc
         gc.collect()
-        # torch.cpu.empty_cache() releases PyTorch CPU allocator cache
-        # back to the OS. Available in PyTorch >= 1.13.
+        # Release PyTorch CPU caching allocator cache (no-op if disabled).
         try:
             torch.cpu.empty_cache()
         except (AttributeError, RuntimeError):
-            # Fallback for older PyTorch: hint glibc to release memory
-            try:
-                import ctypes
-                ctypes.CDLL("libc.so.6").malloc_trim(0)
-            except Exception:
-                pass
+            pass
+        # Release glibc malloc arenas back to the OS.
+        # This is the critical step — without it, host DRAM grows
+        # unbounded because glibc holds freed memory in its arena.
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
     def _batch_h2d_copy(
         self,

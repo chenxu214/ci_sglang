@@ -1010,6 +1010,16 @@ class DefaultModelLoader(BaseModelLoader):
             with device_loading_context(module, target_device):
                 quant_method.process_weights_after_loading(module)
 
+        # Release references to original weight file data that was already
+        # loaded (skip-layer) or is now tracked by deferred_layer_weights.
+        # layer_weight_buckets shares list objects with deferred_layer_weights
+        # and skip_layer_weights; keeping it alive prevents GC from freeing
+        # the safetensors-loaded CPU tensors (~3.75 GB per MoE layer),
+        # causing host DRAM to grow unbounded during Phase 3.
+        del skip_layer_weights
+        del layer_weight_buckets
+        gc.collect()
+
         # ---- Phase 3: layer-by-layer load + process + offload ----
         for layer_id in sorted(deferred_layer_weights.keys()):
             moe_mod = non_skip_moe_modules.get(layer_id)
@@ -1064,8 +1074,16 @@ class DefaultModelLoader(BaseModelLoader):
                 torch.npu.empty_cache()
 
             # Release the layer's weight tensors to free CPU DRAM.
+            # layer_ws holds the original safetensors data (~3.75 GB/layer)
+            # loaded in Phase 3b. Must be released BEFORE malloc_trim(0),
+            # otherwise glibc malloc holds the freed memory in its arena.
             del deferred_layer_weights[layer_id]
             gc.collect()
+            # Now that all CPU tensor references (Parameter + layer_ws)
+            # are gone, hint glibc to release freed arenas to the OS.
+            # Without this, host DRAM grows ~3.75 GB per layer (63 layers
+            # → ~236 GB) because glibc malloc holds freed memory.
+            _expert_store._release_cpu_cache()
 
         _expert_store.release_hbm_weights()
         dram_gb = _expert_store.get_dram_usage_gb()
