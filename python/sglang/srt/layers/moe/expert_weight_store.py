@@ -62,9 +62,11 @@ def _drop_kernel_page_cache() -> None:
       2. Writes "3" to /proc/sys/vm/drop_caches to free pagecache + slabs.
          (requires root; silently skips if no permission)
       3. Calls malloc_trim(0) to release glibc arenas back to OS.
-      4. Logs before/after MemAvailable for observability.
+      4. Sleeps briefly to allow kernel reclaim to settle.
+      5. Logs before/after MemAvailable for observability.
     """
     import os
+    import time
     import ctypes
 
     def _read_mem_available_kb() -> int:
@@ -77,7 +79,7 @@ def _drop_kernel_page_cache() -> None:
             pass
         return 0
 
-    before_kb = _read_memavailable_kb()
+    before_kb = _read_mem_available_kb()
 
     # 1. sync() — flush dirty pages to disk before dropping cache.
     try:
@@ -104,7 +106,10 @@ def _drop_kernel_page_cache() -> None:
     except Exception:
         pass
 
-    after_kb = _read_memavailable_kb()
+    # 4. Brief sleep to allow kernel reclaim to settle before huge page alloc.
+    time.sleep(5)
+
+    after_kb = _read_mem_available_kb()
     delta_gb = (after_kb - before_kb) / 1024 / 1024
     logger.info(
         f"[ExpertWeightStore] Dropped kernel page cache: "
@@ -254,25 +259,29 @@ class ExpertWeightStore:
             self.use_acc_offload = False
 
     def _do_acc_offload_init(self, offload):
-        """Actual acc_offload initialization (called by _init_acc_offload)."""
+        """Actual acc_offload initialization (called by _init_acc_offload).
+
+        Before each HalMemCreate attempt, we drop kernel page cache to free
+        up contiguous physical memory. Huge pages require physically
+        contiguous 2MB regions, and excessive file cache (from safetensors
+        mmap during weight loading) can cause allocation failure even when
+        MemAvailable looks sufficient.
+
+        We try up to 2 times, dropping cache before each attempt.
+        """
         config = offload.OffloadConfig()
         config.device_id = torch.npu.current_device()
         config.size = self._dram_pool_size_bytes
 
-        # Before requesting huge pages from kernel, drop page cache to free
-        # up contiguous physical memory. Huge pages require physically
-        # contiguous 2MB regions, and excessive file cache (from safetensors
-        # mmap, weight loading, etc.) can cause allocation failure even
-        # when MemAvailable looks sufficient.
-        # We retry up to 2 times: first attempt, then after cache drop.
         for attempt in range(2):
-            if attempt == 1:
-                # First attempt failed; aggressively drop cache before retry.
-                logger.info(
-                    "[ExpertWeightStore] acc_offload init attempt 1 failed, "
-                    "dropping page cache before retry..."
-                )
-                _drop_kernel_page_cache()
+            # Drop page cache before each attempt to maximize contiguous
+            # physical memory available for huge page allocation.
+            logger.info(
+                f"[ExpertWeightStore] acc_offload init attempt {attempt + 1}/2, "
+                f"dropping page cache before HalMemCreate..."
+            )
+            _drop_kernel_page_cache()
+
             ret = offload.initialize(config)
             if ret == 0:
                 self._offload = offload
@@ -289,7 +298,7 @@ class ExpertWeightStore:
                 f"failed (ret={ret})"
             )
 
-        # Both attempts failed — fall back to PyTorch H2D.
+        # All attempts failed — fall back to PyTorch H2D.
         logger.warning(
             "[ExpertWeightStore] acc_offload init failed after retries, "
             "falling back to PyTorch H2D"
