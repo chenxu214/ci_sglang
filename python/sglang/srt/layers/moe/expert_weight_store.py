@@ -49,6 +49,70 @@ def _get_hbm_usage_gb() -> Tuple[float, float]:
     return allocated, reserved
 
 
+def _drop_kernel_page_cache() -> None:
+    """Drop kernel page cache to free contiguous physical memory.
+
+    Huge page allocation (HalMemCreate) requires physically contiguous 2MB
+    regions. When the kernel page cache is large (e.g. from safetensors
+    mmap during weight loading), fragmentation can cause allocation failures
+    even when MemAvailable looks sufficient.
+
+    This function:
+      1. Calls sync() to flush dirty pages to disk.
+      2. Writes "3" to /proc/sys/vm/drop_caches to free pagecache + slabs.
+         (requires root; silently skips if no permission)
+      3. Calls malloc_trim(0) to release glibc arenas back to OS.
+      4. Logs before/after MemAvailable for observability.
+    """
+    import os
+    import ctypes
+
+    def _read_mem_available_kb() -> int:
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1])
+        except Exception:
+            pass
+        return 0
+
+    before_kb = _read_memavailable_kb()
+
+    # 1. sync() — flush dirty pages to disk before dropping cache.
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        libc.sync()
+    except Exception:
+        pass
+
+    # 2. drop_caches — write 3 to free pagecache + dentries + inodes.
+    #    Requires root (CAP_SYS_ADMIN). Silently skip if not permitted.
+    try:
+        with open("/proc/sys/vm/drop_caches", "w") as f:
+            f.write("3")
+    except (PermissionError, OSError):
+        # Non-root user — cannot drop kernel cache. Best effort only.
+        pass
+    except Exception:
+        pass
+
+    # 3. malloc_trim(0) — release glibc malloc arenas back to OS.
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+    except Exception:
+        pass
+
+    after_kb = _read_memavailable_kb()
+    delta_gb = (after_kb - before_kb) / 1024 / 1024
+    logger.info(
+        f"[ExpertWeightStore] Dropped kernel page cache: "
+        f"MemAvailable {before_kb / 1024 / 1024:.1f} GB -> "
+        f"{after_kb / 1024 / 1024:.1f} GB (delta={delta_gb:+.1f} GB)"
+    )
+
+
 class ExpertWeightStore:
     """Manages MoE expert weights across Host DRAM and HBM.
 
@@ -194,21 +258,43 @@ class ExpertWeightStore:
         config = offload.OffloadConfig()
         config.device_id = torch.npu.current_device()
         config.size = self._dram_pool_size_bytes
-        ret = offload.initialize(config)
-        if ret == 0:
-            self._offload = offload
-            self._offload_initialized = True
-            logger.info(
-                f"[ExpertWeightStore] acc_offload initialized: "
-                f"device={config.device_id}, "
-                f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB"
-            )
-        else:
+
+        # Before requesting huge pages from kernel, drop page cache to free
+        # up contiguous physical memory. Huge pages require physically
+        # contiguous 2MB regions, and excessive file cache (from safetensors
+        # mmap, weight loading, etc.) can cause allocation failure even
+        # when MemAvailable looks sufficient.
+        # We retry up to 2 times: first attempt, then after cache drop.
+        for attempt in range(2):
+            if attempt == 1:
+                # First attempt failed; aggressively drop cache before retry.
+                logger.info(
+                    "[ExpertWeightStore] acc_offload init attempt 1 failed, "
+                    "dropping page cache before retry..."
+                )
+                _drop_kernel_page_cache()
+            ret = offload.initialize(config)
+            if ret == 0:
+                self._offload = offload
+                self._offload_initialized = True
+                logger.info(
+                    f"[ExpertWeightStore] acc_offload initialized: "
+                    f"device={config.device_id}, "
+                    f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB "
+                    f"(attempt={attempt + 1})"
+                )
+                return
             logger.warning(
-                f"[ExpertWeightStore] acc_offload init failed (ret={ret}), "
-                f"falling back to PyTorch H2D"
+                f"[ExpertWeightStore] acc_offload init attempt {attempt + 1} "
+                f"failed (ret={ret})"
             )
-            self.use_acc_offload = False
+
+        # Both attempts failed — fall back to PyTorch H2D.
+        logger.warning(
+            "[ExpertWeightStore] acc_offload init failed after retries, "
+            "falling back to PyTorch H2D"
+        )
+        self.use_acc_offload = False
 
     def _check_shared_buffer_budget(self, name: str, nbytes: int) -> bool:
         """Check if allocating a shared buffer of nbytes would fit the budget.
