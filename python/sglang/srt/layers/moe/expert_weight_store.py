@@ -135,7 +135,6 @@ class ExpertWeightStore:
         dram_pool_size_gb: float = 1300.0,
         use_acc_offload: bool = True,
         use_pool_for_storage: bool = True,
-        shared_buffer_max_gb: float = 0,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
 
@@ -165,16 +164,6 @@ class ExpertWeightStore:
 
         # Track registered layers for warmup
         self._registered_layers: set = set()
-
-        # Shared HBM weight buffer: all MoE layers reuse the same buffer.
-        # Before each layer's forward, Top-K experts are loaded into it.
-        # This avoids allocating separate HBM tensors for all 80 layers.
-        # Key: weight_name, Value: HBM tensor of shape [num_experts, ...]
-        self._shared_hbm_buffers: Dict[str, torch.Tensor] = {}
-        self._shared_buffer_shapes: Dict[str, tuple] = {}
-        # Budget (in bytes) for shared HBM buffers. 0 disables shared buffers
-        # entirely -- all layers use per-forward allocation.
-        self._shared_buffer_max_bytes = int(shared_buffer_max_gb * 1024**3)
 
         # Statistics
         self._stats = {"dram_load": 0, "total_requests": 0}
@@ -304,62 +293,6 @@ class ExpertWeightStore:
             "falling back to PyTorch H2D"
         )
         self.use_acc_offload = False
-
-    def _check_shared_buffer_budget(self, name: str, nbytes: int) -> bool:
-        """Check if allocating a shared buffer of nbytes would fit the budget.
-
-        0 = shared buffer disabled; all layers use per-forward allocation
-        (lowest HBM footprint, higher allocation overhead per forward).
-        """
-        if self._shared_buffer_max_bytes <= 0:
-            return False
-        current = sum(t.nbytes for t in self._shared_hbm_buffers.values())
-        if current + nbytes > self._shared_buffer_max_bytes:
-            logger.warning(
-                f"[ExpertWeightStore] Shared buffer '{name}' "
-                f"({nbytes / 1024**2:.1f} MB) would exceed budget "
-                f"({self._shared_buffer_max_bytes / 1024**3:.1f} GB, "
-                f"current={current / 1024**2:.1f} MB). "
-                f"Skipping shared buffer; will use per-forward allocation."
-            )
-            return False
-        return True
-
-    def get_shared_hbm_buffer(
-        self, name: str, shape: tuple, dtype: torch.dtype
-    ) -> Optional[torch.Tensor]:
-        """Get or create a shared HBM buffer for a weight name.
-
-        All MoE layers share the same buffer (same shape/dtype).
-        Before each layer's forward, Top-K experts are loaded into it.
-        This avoids allocating 80 separate HBM tensors (~160G total).
-        Instead, only one buffer (~2G) is allocated and reused.
-
-        Returns None if the buffer would exceed the HBM budget.
-        """
-        if name in self._shared_hbm_buffers:
-            return self._shared_hbm_buffers[name]
-
-        estimated_nbytes = (
-            int(torch.tensor(list(shape)).prod().item()) * dtype.itemsize
-            if shape else 0
-        )
-        if not self._check_shared_buffer_budget(name, estimated_nbytes):
-            return None
-
-        target_device = "npu" if torch.npu.is_available() else "cpu"
-        self._shared_hbm_buffers[name] = torch.empty(
-            shape, dtype=dtype, device=target_device
-        )
-        self._shared_buffer_shapes[name] = shape
-        alloc_now, reserved_now = _get_hbm_usage_gb()
-        logger.info(
-            f"[ExpertWeightStore] Allocated shared HBM buffer '{name}': "
-            f"shape={shape}, dtype={dtype}, "
-            f"size={self._shared_hbm_buffers[name].nbytes / 1024**2:.1f} MB. "
-            f"HBM now: alloc={alloc_now:.2f} GB, reserved={reserved_now:.2f} GB"
-        )
-        return self._shared_hbm_buffers[name]
 
     def register_expert(
         self,
@@ -607,17 +540,16 @@ class ExpertWeightStore:
         if sync:
             self._h2d_stream.synchronize()
 
-    def batch_load_to_shared_buffer(
+    def batch_load_to_hbm(
         self,
         layer_id: int,
         expert_ids: List[int],
         shared_buffers: Dict[str, torch.Tensor],
     ) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Batch load expert weights directly into shared HBM buffers.
+        """Batch load expert weights from DRAM to HBM buffers.
 
-        This avoids the extra HBM->HBM copy that a separate per-expert
-        allocation would do. Weights are written directly into
-        shared_buffers[expert_id].
+        Writes weights directly into the provided HBM buffers indexed by
+        expert_id, avoiding an extra HBM→HBM copy.
 
         Args:
             layer_id: Layer index
@@ -830,25 +762,11 @@ class ExpertWeightStore:
         return total / 1024**3
 
     def release_hbm_weights(self):
-        """Release all HBM shared buffers.
+        """Release HBM used during the registration process.
 
-        Called after offload registration to free HBM used during the
-        registration process. Shared buffers should be empty at this point
-        (not yet used), so this is mostly gc + empty_cache.
+        Called after offload registration. Shared buffers are not used
+        (per-forward allocation), so this is mostly gc + empty_cache.
         """
-        shared_buffer_count = len(self._shared_hbm_buffers)
-        shared_buffer_bytes = sum(
-            t.nbytes for t in self._shared_hbm_buffers.values()
-        )
-
-        self._shared_hbm_buffers.clear()
-
-        logger.debug(
-            f"[ExpertWeightStore] release_hbm_weights: "
-            f"cleared {shared_buffer_count} shared buffers "
-            f"({shared_buffer_bytes / 1024**2:.1f} MB)"
-        )
-
         import gc
         gc.collect()
         if torch.npu.is_available():

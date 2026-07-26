@@ -991,14 +991,10 @@ class DefaultModelLoader(BaseModelLoader):
             f"H2D layers={h2d_count}, "
             f"skip_layers={skip_layers}, margin={margin}x)"
         )
-        shared_buffer_max_gb = getattr(
-            server_args, "moe_shared_buffer_max_gb", 0
-        )
         _expert_store = ExpertWeightStore(
             dram_pool_size_gb=dram_pool_gb,
             use_acc_offload=use_acc_offload,
             use_pool_for_storage=use_pool_for_storage,
-            shared_buffer_max_gb=shared_buffer_max_gb,
         )
         # Enable DRAM offload on non-skip modules + force pool init.
         for _, mod in model.named_modules():
@@ -1050,6 +1046,10 @@ class DefaultModelLoader(BaseModelLoader):
         _log_host_dram("Phase-1-cleanup-end")
 
         # ---- Phase 2: process skip-layer + non-MoE modules ----
+        # layer_weight_buckets is no longer needed (Phase 1 already loaded
+        # skip+non-layer weights; deferred_layer_weights holds Phase 3 data).
+        # Release it now to free the dict + list references before process.
+        del layer_weight_buckets
         _log_host_dram("Phase-2-start")
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
@@ -1060,24 +1060,10 @@ class DefaultModelLoader(BaseModelLoader):
                 continue  # deferred to phase 3
             with device_loading_context(module, target_device):
                 quant_method.process_weights_after_loading(module)
+        gc.collect()
         _log_host_dram("Phase-2-end")
 
-        # Release references to original weight file data that was already
-        # loaded (skip-layer) or is now tracked by deferred_layer_weights.
-        # layer_weight_buckets shares list objects with deferred_layer_weights
-        # and skip_layer_weights; keeping it alive prevents GC from freeing
-        # the safetensors-loaded CPU tensors (~3.75 GB per MoE layer),
-        # causing host DRAM to grow unbounded during Phase 3.
-        del layer_weight_buckets
-        del skip_layers
-        gc.collect()
-        _log_host_dram("Phase-2-cleanup-end")
-
         # ---- Phase 3: layer-by-layer load + process + offload ----
-        import torch.distributed as dist
-        rank = dist.get_rank() if dist.is_initialized() else 0
-        world_size = dist.get_world_size() if dist.is_initialized() else 1
-
         for layer_id in sorted(deferred_layer_weights.keys()):
             moe_mod = non_skip_moe_modules.get(layer_id)
             layer_ws = deferred_layer_weights[layer_id]
@@ -1090,7 +1076,7 @@ class DefaultModelLoader(BaseModelLoader):
                 gc.collect()
                 continue
 
-            # 4a. Materialize meta params → CPU (single layer only).
+            # 3a. Materialize meta params → CPU (single layer only).
             # Replace meta Parameter with a new CPU Parameter directly,
             # bypassing Parameter.set_data() which rejects meta→CPU
             # assignment with "incompatible tensor type". The .cpu()
@@ -1120,20 +1106,17 @@ class DefaultModelLoader(BaseModelLoader):
                     setattr(parent, parts[-1], new_param)
                 else:
                     setattr(moe_mod, full_name, new_param)
-            # Release meta_params + param references so the meta device
-            # Parameters can be GC'd. Without this, meta_params holds
-            # references until next loop iteration, preventing GC of
-            # the underlying storage (even though meta uses no DRAM,
-            # the Python Parameter objects themselves accumulate).
+            # Release meta_params references so the meta device Parameters
+            # can be GC'd before weight loading.
             del meta_params, full_name, param, new_data, new_param
 
-            # 4b. Load this layer's weights into the materialized params.
+            # 3b. Load this layer's weights into the materialized params.
             model.load_weights(iter(layer_ws))
 
-            # 4c. Process (ND transpose etc., runs on CPU).
+            # 3c. Process (ND transpose etc., runs on CPU).
             moe_mod.quant_method.process_weights_after_loading(moe_mod)
 
-            # 4d. Offload to DRAM pool + free CPU params.
+            # 3d. Offload to DRAM pool + free CPU params.
             moe_mod.offload_expert_weights_to_dram()
             gc.collect()
             if torch.npu.is_available():
@@ -1141,43 +1124,18 @@ class DefaultModelLoader(BaseModelLoader):
 
             # Release the layer's weight tensors to free CPU DRAM.
             # layer_ws holds the original safetensors data (~3.75 GB/layer)
-            # loaded in Phase 3b. Must be released BEFORE malloc_trim(0),
+            # loaded in step 3b. Must be released BEFORE malloc_trim(0),
             # otherwise glibc malloc holds the freed memory in its arena.
             del deferred_layer_weights[layer_id]
             del layer_ws
             gc.collect()
             # Now that all CPU tensor references (Parameter + layer_ws)
             # are gone, hint glibc to release freed arenas to the OS.
-            # Without this, host DRAM grows ~3.75 GB per layer (63 layers
-            # → ~236 GB) because glibc malloc holds freed memory.
             _expert_store._release_cpu_cache()
 
             # Log host DRAM usage every 2 layers to track leaks.
             if layer_id % 2 == 0:
-                try:
-                    with open("/proc/meminfo", "r") as f:
-                        mem_lines = f.readlines()
-                    avail_kb = 0
-                    free_kb = 0
-                    cached_kb = 0
-                    for line in mem_lines:
-                        if line.startswith("MemAvailable:"):
-                            avail_kb = int(line.split()[1])
-                        elif line.startswith("MemFree:"):
-                            free_kb = int(line.split()[1])
-                        elif line.startswith("Cached:"):
-                            cached_kb = int(line.split()[1])
-                    avail_gb = avail_kb / 1024 / 1024
-                    free_gb = free_kb / 1024 / 1024
-                    cached_gb = cached_kb / 1024 / 1024
-                    logger.info(
-                        f"[MoE DRAM Offload] After layer {layer_id}: "
-                        f"host MemAvailable={avail_gb:.1f} GB, "
-                        f"MemFree={free_gb:.1f} GB, "
-                        f"Cached={cached_gb:.1f} GB"
-                    )
-                except Exception:
-                    pass
+                _log_host_dram(f"After-layer-{layer_id}")
 
         _expert_store.release_hbm_weights()
         dram_gb = _expert_store.get_dram_usage_gb()
