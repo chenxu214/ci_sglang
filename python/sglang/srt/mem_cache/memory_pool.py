@@ -25,6 +25,7 @@ from __future__ import annotations
 import abc
 import dataclasses
 import logging
+import os
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
@@ -430,16 +431,35 @@ class MambaPool:
                     )
                     for conv_shape in conv_state_shape
                 ]
-                # TODO: 1. add routing logics for Kimi-K3 and Other Models on NPU; 2. consider MTP scenario for NPU;
                 if _is_npu:
-                    pass
-                    # from sglang.srt.hardware_backend.npu.memory_pool_npu import (
-                    #     _init_npu_conv_state,
-                    # )
+                    use_kda_ascendc_layout = (
+                        cache_params.is_kda
+                        and os.environ.get("SGLANG_KDA_ASCENDC_CONV1D", "0") == "1"
+                    )
+                    if use_kda_ascendc_layout:
+                        # Kimi defines conv shape as [window, channels], exactly
+                        # the contiguous layout required by the Ascend-C op.
+                        # Keep it physical instead of converting to the legacy
+                        # [channels, window] layout.
+                        if speculative_num_draft_tokens is not None:
+                            raise NotImplementedError(
+                                "SGLANG_KDA_ASCENDC_CONV1D=1 does not yet "
+                                "support speculative decoding. The extended "
+                                "conv-state window requires num_accepted_tokens "
+                                "and rollback integration."
+                            )
+                    else:
+                        # Preserve the existing NPU layout for Mamba/GDN and
+                        # for KDA's default legacy causal-conv path.
+                        from sglang.srt.hardware_backend.npu.memory_pool_npu import (
+                            _init_npu_conv_state,
+                        )
 
-                    # conv_state = _init_npu_conv_state(
-                    #     conv_state[0], conv_state_shape, speculative_num_draft_tokens
-                    # )
+                        conv_state = _init_npu_conv_state(
+                            conv_state[0],
+                            conv_state_shape,
+                            speculative_num_draft_tokens,
+                        )
 
                 if _is_cpu and _cpu_has_amx_support:
                     from sglang.srt.layers.amx_utils import _init_amx_conv_state

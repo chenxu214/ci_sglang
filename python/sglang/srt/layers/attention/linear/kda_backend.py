@@ -338,21 +338,31 @@ class KDAAttnBackend(MambaAttnBackendBase):
     def __init__(self, model_runner: ModelRunner):
         super().__init__(model_runner)
         conv_states = model_runner.req_to_token_pool.mamba_pool.mamba_cache.conv[0]
-        # The shared prefix-cache tracker expects the convolution window to be
-        # the last dimension. NPU already stores KDA conv state as
-        # [layer, pool, channels, window]; other devices use
-        # [layer, pool, window, channels].
-        self.conv_states_shape = (
-            conv_states.shape
-            if is_npu()
-            else torch.Size(
-                (
-                    *conv_states.shape[:-2],
-                    conv_states.shape[-1],
-                    conv_states.shape[-2],
-                )
-            )
+        cache_params = model_runner.mambaish_config.mamba2_cache_params
+        self.conv_state_len, self.conv_state_dim = cache_params.shape.conv[0]
+        self._use_channel_last_conv_states = is_npu() and _USE_ASCENDC_CONV1D
+
+        # ``conv_states_shape`` is a logical channel-first shape consumed by
+        # the shared prefix-cache metadata. Keep its last dimension equal to
+        # the convolution window even when the Ascend-C physical pool is
+        # channel-last [layer, pool, window, channels].
+        self.conv_states_shape = torch.Size(
+            (*conv_states.shape[:-2], self.conv_state_dim, self.conv_state_len)
         )
+
+        physical_shape = tuple(conv_states.shape[-2:])
+        if self._use_channel_last_conv_states:
+            expected_shape = (self.conv_state_len, self.conv_state_dim)
+            assert physical_shape == expected_shape, (
+                "Ascend-C KDA conv state must be [window, channels], "
+                f"got {physical_shape=} for "
+                f"window={self.conv_state_len}, channels={self.conv_state_dim}"
+            )
+        elif is_npu():
+            assert physical_shape[-1] == self.conv_state_len, (
+                "Legacy NPU KDA conv state must be [channels, window], "
+                f"got {physical_shape=} for window={self.conv_state_len}"
+            )
         decode_backend = get_linear_attn_decode_backend()
         prefill_backend = get_linear_attn_prefill_backend()
         self.kernel_dispatcher = KDAKernelDispatcher(decode_backend, prefill_backend)
@@ -412,15 +422,16 @@ class KDAAttnBackend(MambaAttnBackendBase):
             final_dst.to(self.device, non_blocking=True),
         )
 
-    @staticmethod
-    def _channel_first_conv_states(conv_states: torch.Tensor) -> torch.Tensor:
+    def _channel_first_conv_states(self, conv_states: torch.Tensor) -> torch.Tensor:
         """Return convolution state in [pool, channels, window] layout.
 
-        The NPU memory pool already reverses the generic Kimi state shape to
-        this layout for the Ascend causal-conv kernels. Other platforms keep
-        the generic [pool, window, channels] layout and need a transpose.
+        The legacy NPU pool is already channel-first. CUDA/CPU and the
+        Ascend-C-optimized KDA pool are channel-last and need a view transpose
+        only when entering a legacy channel-first kernel.
         """
-        return conv_states if is_npu() else conv_states.transpose(-1, -2)
+        if is_npu() and not self._use_channel_last_conv_states:
+            return conv_states
+        return conv_states.transpose(-1, -2)
 
     @staticmethod
     def _get_conv_weights_for_op(layer: RadixLinearAttention) -> torch.Tensor:
@@ -474,24 +485,21 @@ class KDAAttnBackend(MambaAttnBackendBase):
         replayssm_k = layer_cache.replayssm_k
         replayssm_g = layer_cache.replayssm_g
 
-        conv_states = self._channel_first_conv_states(conv_states)
-        if is_npu():
-            if _USE_ASCENDC_CONV1D:
-                w = self._get_conv_weights_for_op(layer)
-                # cs = conv_states.transpose(-1, -2).contiguous()
-                qkv = torch.ops.npu.causal_conv1d(
-                    mixed_qkv.contiguous(),
-                    w,
-                    conv_states=conv_states,
-                    bias=layer.bias,
-                    query_start_loc=query_start_loc,
-                    cache_indices=cache_indices,
-                    activation_mode=1,
-                    pad_slot_id=-1,
-                    run_mode=1,
-                )
-                # conv_states.copy_(cs.transpose(-1, -2))
-            else:
+        if is_npu() and _USE_ASCENDC_CONV1D:
+            qkv = torch.ops.npu.causal_conv1d(
+                mixed_qkv.contiguous(),
+                self._get_conv_weights_for_op(layer),
+                conv_states=conv_states,
+                bias=layer.bias,
+                query_start_loc=query_start_loc,
+                cache_indices=cache_indices,
+                activation_mode=1,
+                pad_slot_id=-1,
+                run_mode=1,
+            )
+        else:
+            conv_states = self._channel_first_conv_states(conv_states)
+            if is_npu():
                 qkv, updated_conv_states = torch_causal_conv1d_update_npu(
                     mixed_qkv.unsqueeze(-1),
                     conv_states[cache_indices],
@@ -503,15 +511,15 @@ class KDAAttnBackend(MambaAttnBackendBase):
                     0, cache_indices, updated_conv_states.to(conv_states.dtype)
                 )
                 qkv = qkv.squeeze(-1)
-        else:
-            qkv = causal_conv1d_update(
-                mixed_qkv,
-                conv_states,
-                layer.conv_weights,
-                layer.bias,
-                activation="silu",
-                conv_state_indices=cache_indices,
-            )
+            else:
+                qkv = causal_conv1d_update(
+                    mixed_qkv,
+                    conv_states,
+                    layer.conv_weights,
+                    layer.bias,
+                    activation="silu",
+                    conv_state_indices=cache_indices,
+                )
 
         # Skip split + reshape by consuming the packed mixed_qkv directly in a
         # single fused Triton kernel (KDA per-K gate variant of GDN PR #20627).
@@ -586,7 +594,10 @@ class KDAAttnBackend(MambaAttnBackendBase):
         cache_indices = self.forward_metadata.mamba_cache_indices
 
         mamba_cache_params = self.req_to_token_pool.mamba2_layer_cache(layer.layer_id)
-        conv_states = self._channel_first_conv_states(mamba_cache_params.conv[0])
+        conv_states = mamba_cache_params.conv[0]
+        use_ascendc_conv1d = is_npu() and _USE_ASCENDC_CONV1D
+        if not use_ascendc_conv1d:
+            conv_states = self._channel_first_conv_states(conv_states)
 
         ssm_states = mamba_cache_params.temporal
 
@@ -596,90 +607,87 @@ class KDAAttnBackend(MambaAttnBackendBase):
         # boundary. The shared metadata indexes flattened input tokens and the
         # destination ping-pong slots selected by MambaRadixCache.
         if self.forward_metadata.has_mamba_track_mask:
-            mixed_qkv_to_track = mixed_qkv[
-                self.forward_metadata.track_conv_indices
-            ]  # .transpose(-1, -2)
-            conv_states[self.forward_metadata.conv_states_mask_indices] = (
-                mixed_qkv_to_track.to(conv_states.dtype, copy=False)
-            )
+            mixed_qkv_to_track = mixed_qkv[self.forward_metadata.track_conv_indices]
+            if use_ascendc_conv1d:
+                conv_states[self.forward_metadata.conv_states_mask_indices] = (
+                    mixed_qkv_to_track.to(conv_states.dtype, copy=False)
+                )
+            else:
+                conv_states[self.forward_metadata.conv_states_mask_indices] = (
+                    mixed_qkv_to_track.transpose(-1, -2).to(
+                        conv_states.dtype, copy=False
+                    )
+                )
 
         splits = [layer.q_dim, layer.k_dim, layer.v_dim]
-        q, k, v = mixed_qkv.transpose(0, 1).split(splits, dim=0)
-        q_conv_weight, k_conv_weight, v_conv_weight = layer.conv_weights.split(
-            splits, dim=0
-        )
-        q_conv_state, k_conv_state, v_conv_state = conv_states.split(splits, dim=-2)
-        if layer.bias is not None:
-            q_bias, k_bias, v_bias = layer.bias.split(splits, dim=0)
+        if use_ascendc_conv1d:
+            # Depthwise convolution is channel-independent, so packed Q/K/V is
+            # exactly equivalent to the previous three calls. Keeping the full
+            # channel-last state contiguous avoids both state transpose/copies
+            # and non-contiguous q/k/v state slices.
+            qkv = torch.ops.npu.causal_conv1d(
+                mixed_qkv.contiguous(),
+                self._get_conv_weights_for_op(layer),
+                conv_states=conv_states,
+                bias=layer.bias,
+                query_start_loc=query_start_loc,
+                cache_indices=cache_indices,
+                has_initial_state=has_initial_state.to(torch.int64),
+                activation_mode=1,
+                pad_slot_id=-1,
+                run_mode=0,
+            )
+            q, k, v = qkv.split(splits, dim=-1)
         else:
-            q_bias, k_bias, v_bias = None, None, None
+            q, k, v = mixed_qkv.transpose(0, 1).split(splits, dim=0)
+            q_conv_weight, k_conv_weight, v_conv_weight = layer.conv_weights.split(
+                splits, dim=0
+            )
+            q_conv_state, k_conv_state, v_conv_state = conv_states.split(splits, dim=-2)
+            if layer.bias is not None:
+                q_bias, k_bias, v_bias = layer.bias.split(splits, dim=0)
+            else:
+                q_bias, k_bias, v_bias = None, None, None
 
-        def run_conv(x, weight, bias, state):
-            # Note: at this point x is [C, T] (channel-first from
-            # mixed_qkv.transpose(0,1).split).  causal_conv1d_fn expects
-            # [C, T] channel-first input.  The output is transposed back to
-            # [T, C] for downstream consumers.
-
-            if is_npu():
-                if _USE_ASCENDC_CONV1D:
-                    # Ascend-C op (3-call: q/k/v each, structure unchanged)
-                    w = weight.transpose(0, 1).contiguous().to(torch.bfloat16)
-                    x_cl = x.transpose(0, 1).contiguous()
-                    # cs = state.transpose(-1, -2).contiguous()
-                    out = torch.ops.npu.causal_conv1d(
-                        x_cl,
-                        w,
-                        conv_states=state,
-                        bias=bias,
-                        query_start_loc=query_start_loc,
-                        cache_indices=cache_indices,
-                        has_initial_state=has_initial_state.to(torch.int64),
-                        activation_mode=1,
-                        pad_slot_id=-1,
-                        run_mode=0,
+            def run_conv(x, weight, bias, state):
+                if is_npu():
+                    # The legacy wrapper works in FP32 and expects channel-first
+                    # state. Cast only the active rows and write them back.
+                    local_indices = torch.arange(
+                        cache_indices.shape[0],
+                        device=cache_indices.device,
+                        dtype=cache_indices.dtype,
                     )
-                    # state.copy_(cs.transpose(-1, -2))
-                    return out
-                # Legacy FP32 bridge + causal_conv1d_fn (unchanged)
-                # The Ascend varlen wrapper creates its padding buffer in the
-                # weight dtype.  K3 stores conv weights in FP32 and activations /
-                # cache in BF16, so adapt both inputs through a small active-row
-                # FP32 state and explicitly cast the results back.
-                local_indices = torch.arange(
-                    cache_indices.shape[0],
-                    device=cache_indices.device,
-                    dtype=cache_indices.dtype,
-                )
-                state_work = state[cache_indices].to(weight.dtype).contiguous()
-                out = causal_conv1d_fn(
-                    x.to(weight.dtype),
+                    state_work = state[cache_indices].to(weight.dtype).contiguous()
+                    out = causal_conv1d_fn(
+                        x.to(weight.dtype),
+                        weight,
+                        bias,
+                        activation="silu",
+                        conv_states=state_work,
+                        has_initial_state=has_initial_state,
+                        cache_indices=local_indices,
+                        query_start_loc=query_start_loc,
+                        seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
+                    )
+                    state.index_copy_(0, cache_indices, state_work.to(state.dtype))
+                    return out.to(x.dtype).transpose(0, 1)
+
+                return causal_conv1d_fn(
+                    x,
                     weight,
                     bias,
                     activation="silu",
-                    conv_states=state_work,
+                    conv_states=state,
                     has_initial_state=has_initial_state,
-                    cache_indices=local_indices,
+                    cache_indices=cache_indices,
                     query_start_loc=query_start_loc,
                     seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
-                )
-                state.index_copy_(0, cache_indices, state_work.to(state.dtype))
-                return out.to(x.dtype).transpose(0, 1)
+                ).transpose(0, 1)
 
-            return causal_conv1d_fn(
-                x,
-                weight,
-                bias,
-                activation="silu",
-                conv_states=state,
-                has_initial_state=has_initial_state,
-                cache_indices=cache_indices,
-                query_start_loc=query_start_loc,
-                seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
-            ).transpose(0, 1)
-
-        q = run_conv(q, q_conv_weight, q_bias, q_conv_state)
-        k = run_conv(k, k_conv_weight, k_bias, k_conv_state)
-        v = run_conv(v, v_conv_weight, v_bias, v_conv_state)
+            q = run_conv(q, q_conv_weight, q_bias, q_conv_state)
+            k = run_conv(k, k_conv_weight, k_bias, k_conv_state)
+            v = run_conv(v, v_conv_weight, v_bias, v_conv_state)
 
         q = q.unflatten(-1, (-1, layer.head_q_dim)).unsqueeze(0)  # n (h d) -> 1 n h d
         k = k.unflatten(-1, (-1, layer.head_k_dim)).unsqueeze(0)  # n (h d) -> 1 n h d
