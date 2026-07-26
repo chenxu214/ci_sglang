@@ -222,28 +222,40 @@ class ExpertWeightStore:
         HalMemCreate completes before the next rank starts, avoiding
         concurrent huge page allocation failures.
         """
+        import torch.distributed as dist
+        init_failed = False
+        init_error: Optional[Exception] = None
+
         try:
             from memfabric_hybrid import offload
-            import torch.distributed as dist
-
-            # Serialize acc_offload initialization across ranks to avoid
-            # concurrent huge pages allocation failures. Each rank waits
-            # for the previous rank to finish before starting its own
-            # HalMemCreate call.
             if dist.is_initialized():
                 rank = dist.get_rank()
                 world_size = dist.get_world_size()
                 for i in range(world_size):
                     if i == rank:
-                        self._do_acc_offload_init(offload)
+                        try:
+                            self._do_acc_offload_init(offload)
+                        except Exception as e:
+                            # Record failure but continue to participate
+                            # in barriers so other ranks don't deadlock.
+                            init_failed = True
+                            init_error = e
                     dist.barrier()
             else:
                 self._do_acc_offload_init(offload)
 
-        except ImportError:
+        except ImportError as e:
+            init_failed = True
+            init_error = e
+        except Exception as e:
+            init_failed = True
+            init_error = e
+
+        if init_failed:
             logger.warning(
-                "[ExpertWeightStore] memfabric_hybrid not available, "
-                "falling back to PyTorch H2D"
+                f"[ExpertWeightStore] acc_offload init failed "
+                f"({type(init_error).__name__}: {init_error}). "
+                f"Falling back to PyTorch H2D."
             )
             self.use_acc_offload = False
 
