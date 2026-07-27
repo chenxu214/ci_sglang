@@ -910,15 +910,23 @@ class CommunicateSimpleFn:
                 gathered_hidden_states.append(output)
             return tuple(gathered_hidden_states)
 
-        hidden_states, local_hidden_states = (
-            get_local_dp_buffer(get_attention_tp_group()),
-            hidden_states,
-        )
+        with use_symmetric_memory(
+            get_attention_tp_group(),
+            disabled=not is_allocation_symmetric(),
+        ):
+            buffer = torch.empty(
+                (
+                    hidden_states.shape[0] * context.attn_tp_size,
+                    *hidden_states.shape[1:],
+                ),
+                dtype=hidden_states.dtype,
+                device=hidden_states.device,
+            )
         attn_tp_all_gather_into_tensor(
+            buffer,
             hidden_states,
-            local_hidden_states,
         )
-        return hidden_states
+        return buffer
 
 
 class CommunicateWithAllReduceAndLayerNormFn:
@@ -1058,12 +1066,21 @@ class CommunicateWithAllReduceAndLayerNormFn:
                 context,
             )
 
-        if residual_input_mode == ScatterMode.SCATTERED and context.attn_tp_size > 1:
-            residual, local_residual = (
-                get_local_dp_buffer(get_attention_tp_group()),
-                residual,
-            )
-            attn_tp_all_gather_into_tensor(residual, local_residual)
+        if residual_input_mode == ScatterMode.SCATTERED and context.attn_tp_size > 1 and residual is not None:
+            with use_symmetric_memory(
+                get_attention_tp_group(),
+                disabled=not is_allocation_symmetric(),
+            ):
+                residual_buffer = torch.empty(
+                    (
+                        residual.shape[0] * context.attn_tp_size,
+                        *residual.shape[1:],
+                    ),
+                    dtype=residual.dtype,
+                    device=residual.device,
+                )
+            attn_tp_all_gather_into_tensor(residual_buffer, residual)
+            residual = residual_buffer
         if context.attn_dp_size != 1:
             use_layer_norm_before_gather = (
                 context.force_layernorm_before_dp_gather or context.attn_tp_size == 1
