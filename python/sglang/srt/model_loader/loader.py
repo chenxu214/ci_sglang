@@ -1011,6 +1011,12 @@ class DefaultModelLoader(BaseModelLoader):
                 sorted(non_skip_moe_modules.keys()),
             )
         _expert_store._ensure_initialize()
+        # Enable group_pack_copy for graph-capturable decode H2D when the
+        # API is available. Uses [num_local_experts, ...] HBM buffers
+        # (more HBM than compact path, but eliminates group_list.cpu()
+        # sync and enables NPU graph capture). Set env var to 0 to disable.
+        if get_bool_env_var("SGLANG_MOE_DRAM_GROUP_PACK_COPY", True):
+            _expert_store.enable_group_pack_copy()
         _log_host_dram("Phase-0-pool-init-end")
         logger.info(
             f"[MoE DRAM Offload] Pool initialized ({dram_pool_gb:.1f} GB). "

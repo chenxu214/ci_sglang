@@ -187,6 +187,17 @@ class ExpertWeightStore:
         # since the DRAM buffer for NZ weights is a flat byte buffer).
         self._nz_weight_shapes: Dict[Tuple[int, str], torch.Size] = {}
 
+        # group_pack_copy buffers: pre-allocated fixed-size HBM buffers and
+        # pointer arrays for graph-capturable decode H2D. Keyed by layer_id.
+        # None = not prepared; dict = prepared and ready for use.
+        self._group_pack_buffers: Dict[int, Optional[Dict]] = {}
+
+        # group_pack_copy enable flag: when True, decode path uses
+        # build_active_weights_group_pack (graph-capturable) instead of
+        # build_active_weight_tensors (requires group_list.cpu() sync).
+        # Enable via enable_group_pack_copy() after acc_offload init.
+        self._use_group_pack_copy = False
+
     def set_acc_offload_layers(
         self, acc_offload_layers: int, all_offloaded_layer_ids: list
     ):
@@ -889,6 +900,225 @@ class ExpertWeightStore:
         self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id)
 
         return result
+
+    # ------------------------------------------------------------------ #
+    # group_pack_copy path (graph-capturable decode H2D)
+    # ------------------------------------------------------------------ #
+
+    def enable_group_pack_copy(self):
+        """Enable group_pack_copy for graph-capturable decode H2D.
+
+        After calling this, the decode path uses build_active_weights_group_pack
+        instead of build_active_weight_tensors, eliminating group_list.cpu()
+        sync and enabling NPU graph capture.
+
+        Requires acc_offload with group_pack_copy API (check is performed
+        at call time; falls back gracefully if unavailable).
+        """
+        if not self.use_acc_offload or not self._offload_initialized:
+            logger.warning(
+                "[ExpertWeightStore] Cannot enable group_pack_copy: "
+                "acc_offload not initialized"
+            )
+            return
+        if not hasattr(self._offload, "group_pack_copy"):
+            logger.warning(
+                "[ExpertWeightStore] Cannot enable group_pack_copy: "
+                "API not available in acc_offload module"
+            )
+            return
+        self._use_group_pack_copy = True
+        logger.info("[ExpertWeightStore] group_pack_copy enabled")
+
+    def prepare_group_pack_buffers(
+        self,
+        layer_id: int,
+        num_local_experts: int,
+        weight_names: List[str],
+    ) -> Dict:
+        """Pre-allocate fixed-size HBM buffers and pointer arrays for
+        group_pack_copy.
+
+        Called once per layer (lazily by build_active_weights_group_pack
+        on first decode forward). All buffers are fixed-shape GPU tensors,
+        enabling NPU graph capture.
+
+        For each weight name, allocates:
+          - hbm_buffer[name]: [num_local_experts, ...] HBM tensor
+            (NZ format for NZ-stored weights, ND for scales)
+          - srcPtrs[name]: [num_local_experts] int64 GPU tensor
+            (DRAM addresses, fixed after register_expert)
+          - dstPtrs[name]: [num_local_experts] int64 GPU tensor
+            (HBM slot addresses, fixed after allocation)
+          - lenPtrs[name]: [num_local_experts] int32 GPU tensor
+            (byte sizes, fixed after register_expert)
+
+        Shared per-layer:
+          - numLePtr: int32 scalar (num_local_experts)
+          - packedGroupList: [num_local_experts] int64 GPU tensor
+            (output, zeroed before each group_pack_copy call)
+
+        Args:
+            layer_id: Layer index
+            num_local_experts: Number of local experts on this rank
+            weight_names: Weight parameter names (e.g. w13_weight, ...)
+
+        Returns:
+            Dict of buffers and pointer arrays (also stored in
+            self._group_pack_buffers[layer_id] for reuse).
+        """
+        sample_key = (layer_id, 0)
+        device = "npu"
+
+        # 1. Allocate HBM buffers [num_local_experts, ...] per weight.
+        hbm_buffers: Dict[str, torch.Tensor] = {}
+        for name in weight_names:
+            sample_tensor = self.dram_store[sample_key][name]
+            if self.is_nz_weight(layer_id, name):
+                hbm_buffers[name] = self._allocate_nz_hbm_buffer(
+                    num_experts=num_local_experts,
+                    layer_id=layer_id,
+                    weight_name=name,
+                    dtype=sample_tensor.dtype,
+                    device=device,
+                )
+            else:
+                full_shape = (num_local_experts,) + tuple(sample_tensor.shape)
+                hbm_buffers[name] = torch.empty(
+                    full_shape, dtype=sample_tensor.dtype, device=device
+                )
+
+        # 2. Pre-fill pointer arrays (fixed across forwards).
+        # srcPtrs = DRAM addresses (host pointers stored as int64 GPU tensor)
+        # dstPtrs = HBM slot addresses (device pointers)
+        # lenPtrs = byte sizes per expert
+        src_ptrs: Dict[str, torch.Tensor] = {}
+        dst_ptrs: Dict[str, torch.Tensor] = {}
+        len_ptrs: Dict[str, torch.Tensor] = {}
+        for name in weight_names:
+            src_list: List[int] = []
+            dst_list: List[int] = []
+            len_list: List[int] = []
+            for i in range(num_local_experts):
+                dram_tensor = self.dram_store[(layer_id, i)][name]
+                src_list.append(dram_tensor.data_ptr())
+                dst_list.append(hbm_buffers[name][i].data_ptr())
+                len_list.append(dram_tensor.nbytes)
+            src_ptrs[name] = torch.tensor(
+                src_list, dtype=torch.int64, device=device
+            )
+            dst_ptrs[name] = torch.tensor(
+                dst_list, dtype=torch.int64, device=device
+            )
+            len_ptrs[name] = torch.tensor(
+                len_list, dtype=torch.int32, device=device
+            )
+
+        # 3. Shared per-layer buffers.
+        num_le_ptr = torch.tensor(
+            num_local_experts, dtype=torch.int32, device=device
+        )
+        packed_group_list = torch.zeros(
+            num_local_experts, dtype=torch.int64, device=device
+        )
+
+        buffers = {
+            "hbm_buffers": hbm_buffers,
+            "src_ptrs": src_ptrs,
+            "dst_ptrs": dst_ptrs,
+            "len_ptrs": len_ptrs,
+            "num_le_ptr": num_le_ptr,
+            "packed_group_list": packed_group_list,
+            "weight_names": list(weight_names),
+            "num_local_experts": num_local_experts,
+        }
+        self._group_pack_buffers[layer_id] = buffers
+        logger.info(
+            f"[ExpertWeightStore] group_pack_copy buffers prepared: "
+            f"layer_id={layer_id}, num_experts={num_local_experts}, "
+            f"weights={weight_names}"
+        )
+        return buffers
+
+    def build_active_weights_group_pack(
+        self,
+        layer_id: int,
+        group_list: torch.Tensor,
+        num_local_experts: int,
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        """Graph-capturable H2D copy via group_pack_copy.
+
+        Replaces build_active_weight_tensors for the decode path when graph
+        capture is needed. The group_pack_copy AIV kernel internally:
+          1. Scans groupList[0..N) for non-zero entries
+          2. Copies only non-zero experts' weights from DRAM to HBM
+             (compacted to front: slots [0..M))
+          3. Outputs packedGroupList[0..M) with compacted token counts
+
+        This eliminates:
+          - group_list.cpu() sync (Python→GPU round-trip)
+          - active_mask.nonzero().squeeze(-1).tolist() sync
+          - Dynamic [num_active, ...] tensor allocation
+
+        All parameters are fixed-shape GPU tensors → graph-capturable.
+
+        The returned hbm_buffers are [num_local_experts, ...] (full size).
+        Slots [M..N) contain stale data, but packedGroupList[M..N) is 0
+        (zeroed before the call), so the GMM skips those experts.
+
+        Args:
+            layer_id: Layer index
+            group_list: [num_local_experts] int64 GPU tensor (token counts
+                        per expert, from DeepEP dispatcher)
+            num_local_experts: Number of local experts
+
+        Returns:
+            (hbm_buffers, packed_group_list):
+              hbm_buffers: {weight_name: [num_local_experts, ...] HBM tensor}
+              packed_group_list: [num_local_experts] int64 GPU tensor
+                (compacted token counts; [0..M) = active, [M..N) = 0)
+        """
+        self._ensure_initialize()
+
+        # Lazy preparation on first call.
+        if (
+            layer_id not in self._group_pack_buffers
+            or self._group_pack_buffers[layer_id] is None
+        ):
+            weight_names = list(self.dram_store[(layer_id, 0)].keys())
+            self.prepare_group_pack_buffers(
+                layer_id, num_local_experts, weight_names
+            )
+
+        bufs = self._group_pack_buffers[layer_id]
+
+        # Zero packedGroupList — the kernel only writes [0..M), so the
+        # tail [M..N) must be 0 for the GMM to skip inactive experts.
+        # This is a fixed-size memset: graph-capturable.
+        bufs["packed_group_list"].zero_()
+
+        # Call group_pack_copy once per weight type. The kernel copies
+        # non-zero experts' data from DRAM (srcPtrs[i]) to HBM slot j
+        # (dstPtrs[j], compacted). packedGroupList is shared across all
+        # weight types (same expert filtering for all).
+        device = torch.device(f"npu:{torch.npu.current_device()}")
+        for name in bufs["weight_names"]:
+            ret = self._offload.group_pack_copy(
+                bufs["src_ptrs"][name],
+                bufs["dst_ptrs"][name],
+                bufs["len_ptrs"][name],
+                bufs["num_le_ptr"],
+                group_list,
+                bufs["packed_group_list"],
+                device,
+            )
+            if ret != 0:
+                raise RuntimeError(
+                    f"group_pack_copy failed: ret={ret}, "
+                    f"layer_id={layer_id}, name={name}"
+                )
+
+        return bufs["hbm_buffers"], bufs["packed_group_list"]
 
     # ------------------------------------------------------------------
     # Prefill full-layer prefetch + cache mode management

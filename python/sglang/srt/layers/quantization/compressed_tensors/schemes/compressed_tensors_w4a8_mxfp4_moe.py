@@ -503,45 +503,62 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         and layer._expert_weight_store is not None
         and layer._expert_weight_store._is_decode_mode
     ):
-        group_list_cpu = group_list.cpu()
-        active_mask = group_list_cpu > 0
-        active_expert_ids = active_mask.nonzero().squeeze(-1).tolist()
-        if not isinstance(active_expert_ids, list):
-            active_expert_ids = [active_expert_ids]
-        num_active = len(active_expert_ids)
+        _store = layer._expert_weight_store
 
-        if num_active > 16:
-            logger.debug(
-                f"Decode active experts ({num_active}) exceeds 16, "
-                f"using compact path. active_expert_ids={active_expert_ids}"
+        if _store._use_group_pack_copy:
+            # group_pack_copy path: graph-capturable, no group_list.cpu()
+            # sync. The AIV kernel filters non-zero experts and copies
+            # their weights from DRAM to HBM (compacted to slots [0..M)).
+            # packed_group_list[0..M) has active token counts; [M..N) is 0
+            # (zeroed before the call), so GMM skips inactive experts.
+            # Weights are [num_local_experts, ...] (full size, not compact)
+            # — trade-off: more HBM but enables graph capture.
+            hbm_buffers, packed_group_list = (
+                _store.build_active_weights_group_pack(
+                    layer.layer_id, group_list, layer.num_local_experts
+                )
             )
+            for name, tensor in hbm_buffers.items():
+                setattr(layer, name, tensor)
+            group_list = packed_group_list
+        else:
+            # Fallback: build_active_weight_tensors with group_list.cpu()
+            # sync. Produces compact [num_active, ...] tensors (less HBM
+            # but not graph-capturable due to CPU sync).
+            group_list_cpu = group_list.cpu()
+            active_mask = group_list_cpu > 0
+            active_expert_ids = active_mask.nonzero().squeeze(-1).tolist()
+            if not isinstance(active_expert_ids, list):
+                active_expert_ids = [active_expert_ids]
+            num_active = len(active_expert_ids)
 
-        if num_active == 0:
-            return combine_cls(
-                hidden_states=hidden_states,
-                topk_ids=dispatch_output.topk_ids,
-                topk_weights=dispatch_output.topk_weights,
+            if num_active > 16:
+                logger.debug(
+                    f"Decode active experts ({num_active}) exceeds 16, "
+                    f"using compact path. active_expert_ids={active_expert_ids}"
+                )
+
+            if num_active == 0:
+                return combine_cls(
+                    hidden_states=hidden_states,
+                    topk_ids=dispatch_output.topk_ids,
+                    topk_weights=dispatch_output.topk_weights,
+                )
+
+            sample_key = (layer.layer_id, active_expert_ids[0])
+            weight_names = list(
+                _store.dram_store[sample_key].keys()
             )
+            compact_weights = _store.build_active_weight_tensors(
+                layer.layer_id, active_expert_ids, weight_names
+            )
+            # Set compact weights as layer attributes. NO transpose here
+            # for NZ-storage weights — w4a8_mxfp4_gmm_npu's is_nz_stored
+            # branch handles the [E, N, K]→[E, K, N] transpose.
+            for name, tensor in compact_weights.items():
+                setattr(layer, name, tensor)
 
-        sample_key = (layer.layer_id, active_expert_ids[0])
-        weight_names = list(
-            layer._expert_weight_store.dram_store[sample_key].keys()
-        )
-        compact_weights = layer._expert_weight_store.build_active_weight_tensors(
-            layer.layer_id, active_expert_ids, weight_names
-        )
-        # Set compact weights as layer attributes. NO transpose here for
-        # NZ-storage weights — w4a8_mxfp4_gmm_npu's is_nz_stored branch
-        # handles the [E, N, K]→[E, K, N] transpose (metadata-only).
-        # This is consistent with:
-        #   - Non-DeepEP path: _load_experts_on_demand sets [E, N, K] NZ
-        #     without transpose; w4a8_mxfp4_gmm_npu does the transpose.
-        #   - ND storage path: build_active_weight_tensors returns [E, K, N]
-        #     ND; w4a8_mxfp4_gmm_npu does ND→NZ + transpose.
-        for name, tensor in compact_weights.items():
-            setattr(layer, name, tensor)
-
-        group_list = group_list_cpu[active_mask].to(hidden_states.device)
+            group_list = group_list_cpu[active_mask].to(hidden_states.device)
 
     # Determine NZ storage: when True, weights loaded from DRAM are already
     # in NZ format (stored via sparse_copy), so no ND→NZ conversion is needed
