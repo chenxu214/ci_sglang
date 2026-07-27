@@ -544,6 +544,15 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         output_dtype=output_dtype,
         is_nd_format=is_nd_format,
     )
+    # Release w13 compact weights after GMM to reduce HBM peak.
+    # In DRAM offload path, build_active_weight_tensors allocates compact
+    # [num_active, ...] ND tensors. The NZ conversion inside
+    # w4a8_mxfp4_gmm_npu creates additional tensors. Without releasing
+    # the compact weights here, w13 compact + w13 NZ + w2 compact + w2 NZ
+    # all coexist in HBM, causing OOM during prefill (num_active ≈ 112).
+    if is_nd_format:
+        layer.w13_weight = None
+        layer.w13_weight_scale = None
     hidden_states = act_fn(hidden_states, group_list, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
@@ -555,6 +564,10 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         output_dtype=output_dtype,
         is_nd_format=is_nd_format,
     )
+    # Release w2 compact weights after GMM to reduce HBM peak.
+    if is_nd_format:
+        layer.w2_weight = None
+        layer.w2_weight_scale = None
     return hidden_states
 
 
@@ -601,12 +614,18 @@ def w4a8_mxfp4_gmm_npu(
     if is_nd_format:
         # DRAM offload path: weight is ND from DRAM.
         # Convert to NZ format: undo transpose → cast to NZ → re-apply transpose.
+        # Split into steps and explicitly del intermediates to reduce HBM
+        # peak: without this, compact ND weight + contiguous copy + NZ
+        # tensor coexist simultaneously, causing OOM when num_active is
+        # large (e.g., ~112 during prefill).
+        weight_nd = weight.transpose(1, 2).contiguous().view(torch.uint8)
         weight = torch_npu.npu_format_cast(
-            weight.transpose(1, 2).contiguous().view(torch.uint8),
+            weight_nd,
             29,
             customize_dtype=torch.float8_e4m3fn,
             input_dtype=torch_npu.float4_e2m1fn_x2,
         ).transpose(1, 2)
+        del weight_nd
 
     # Scale: is_contiguous() is reliable here because scales are never
     # cast to NZ format. After process_weights_after_loading, scales are
