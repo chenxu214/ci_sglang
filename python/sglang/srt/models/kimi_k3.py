@@ -1139,20 +1139,24 @@ class KimiLinearModel(nn.Module):
                 if is_prefill and hasattr(layer, "block_sparse_moe"):
                     experts = layer.block_sparse_moe.experts
                     if getattr(experts, "_dram_offload_enabled", False):
-                        # Sliding window: trigger prefetch for the layer N
-                        # positions ahead. By the time we finish computing
-                        # this layer and reach that layer, its H2D copy will
-                        # be in flight (or done), achieving overlap.
-                        if (
-                            N > 0
-                            and moe_idx + N < len(offloaded_moe_indices)
-                        ):
-                            next_idx = offloaded_moe_indices[moe_idx + N]
-                            self.layers[
-                                next_idx
-                            ].block_sparse_moe.experts.start_prefill_prefetch()
-                        # Wait for THIS layer's prefetch H2D to complete.
-                        experts.wait_prefill_prefetch()
+                        if N > 0:
+                            # Sliding window: trigger prefetch for the layer N
+                            # positions ahead. By the time we finish computing
+                            # this layer and reach that layer, its H2D copy
+                            # will be in flight (or done), achieving overlap.
+                            if (
+                                moe_idx + N < len(offloaded_moe_indices)
+                            ):
+                                next_idx = offloaded_moe_indices[moe_idx + N]
+                                self.layers[
+                                    next_idx
+                                ].block_sparse_moe.experts.start_prefill_prefetch()
+                            # Wait for THIS layer's prefetch H2D to complete.
+                            experts.wait_prefill_prefetch()
+                        # N=0: no prefetch needed — _load_experts_on_demand
+                        # in forward will load synchronously on the default
+                        # stream. free_prefill_cache after compute will
+                        # release _shared_hbm_buffers to avoid accumulation.
                 hidden_states, residual = layer(
                     positions=positions,
                     hidden_states=hidden_states,
