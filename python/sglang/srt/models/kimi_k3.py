@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Adapted from: https://github.com/vllm-project/vllm/blob/0384aa7150c4c9778efca041ffd1beb3ad2bd694/vllm/model_executor/models/kimi_linear.py
 
+import gc
 import logging
 from collections.abc import Iterable
 from copy import deepcopy
@@ -1085,6 +1086,12 @@ class KimiLinearModel(nn.Module):
 
         # Toggle ExpertWeightStore LRU slot limit: unlimited during prefill
         # (loads all 112 experts per layer), 20-slot LRU during decode.
+        # When transitioning prefill->decode (N=0 prefetch), release the
+        # _shared_hbm_buffers allocated during prefill so the HBM is
+        # returned to the caching allocator. Only release on the
+        # transition boundary — subsequent decode forwards reuse the
+        # decode-allocated buffers to avoid repeated alloc/free churn.
+        released_any = False
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
             if hasattr(layer, "block_sparse_moe"):
@@ -1094,6 +1101,17 @@ class KimiLinearModel(nn.Module):
                     and experts._expert_weight_store is not None
                 ):
                     experts._expert_weight_store.set_cache_mode(is_prefill)
+                    # Detect prefill->decode transition: only release on
+                    # the first decode forward after prefill, not every
+                    # decode forward (which would cause alloc/free churn).
+                    if not is_prefill and getattr(experts, "_last_is_prefill", False):
+                        experts._release_shared_hbm_buffers()
+                        released_any = True
+                    experts._last_is_prefill = is_prefill
+        if released_any:
+            gc.collect()
+            if torch.npu.is_available():
+                torch.npu.empty_cache()
 
         # Sliding-window prefetch: pre-trigger async H2D copy for the first
         # N offloaded MoE layers (pipeline fill), then during the compute

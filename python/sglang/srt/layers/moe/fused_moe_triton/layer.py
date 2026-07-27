@@ -1563,11 +1563,7 @@ class FusedMoE(torch.nn.Module):
             return
         # Free _shared_hbm_buffers (from _load_experts_on_demand) to avoid
         # double HBM allocation when switching to prefetch mode.
-        if hasattr(self, "_shared_hbm_buffers") and self._shared_hbm_buffers is not None:
-            for name in self._shared_hbm_buffers:
-                if hasattr(self, name) and getattr(self, name) is self._shared_hbm_buffers[name]:
-                    setattr(self, name, None)
-            self._shared_hbm_buffers = None
+        self._release_shared_hbm_buffers()
         log_info_on_rank0(
             logger,
             f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
@@ -1615,6 +1611,30 @@ class FusedMoE(torch.nn.Module):
             f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id} "
             f"elapsed={elapsed_ms:.2f} ms",
         )
+
+    def _release_shared_hbm_buffers(self):
+        """Release _shared_hbm_buffers to free HBM when switching to decode.
+
+        Clears layer weight references that point into the shared buffers
+        and sets _shared_hbm_buffers to None so the HBM is returned to the
+        caching allocator. Called from kimi_k3.set_cache_mode when
+        transitioning prefill->decode (N=0 prefetch mode) to avoid leaving
+        all offloaded layers' [num_local_experts, ...] HBM buffers
+        resident during decode.
+        """
+        if (
+            not getattr(self, "_dram_offload_enabled", False)
+            or not hasattr(self, "_shared_hbm_buffers")
+            or self._shared_hbm_buffers is None
+        ):
+            return
+        for name in self._shared_hbm_buffers:
+            if (
+                hasattr(self, name)
+                and getattr(self, name) is self._shared_hbm_buffers[name]
+            ):
+                setattr(self, name, None)
+        self._shared_hbm_buffers = None
 
     def free_prefill_cache(self):
         """Release this layer's prefetched HBM buffers after compute.
