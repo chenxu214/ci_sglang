@@ -459,7 +459,8 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
     # Decode DRAM offload: build compact [num_active, ...] weight tensors
     # after dispatch (we know which experts received tokens). Uses
     # pre-allocated fixed [MAX_ACTIVE, ...] HBM buffer + group_pack_copy
-    # kernel (no .cpu()/.tolist() sync, no per-forward allocation).
+    # kernel, then narrows to [num_active] (CANN requires exact shape match,
+    # no trailing zeros in group_list).
     # Prefill uses the shared buffer (pre-loaded by _load_experts_on_demand).
     if (
         getattr(layer, "_dram_offload_enabled", False)
@@ -468,8 +469,9 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
     ):
         num_experts = group_list.shape[0]
 
-        # group_pack_copy path: pre-allocated fixed HBM buffer + kernel
-        # compaction (no sync, no allocation). Raises on ret!=0.
+        # group_pack_copy: kernel compacts active experts into fixed HBM
+        # buffer, then narrows to [num_active]. Single .item() sync for
+        # num_active count — cheaper than sparse_copy's .cpu()+.tolist().
         compact_weights, packed_group_list = (
             layer._expert_weight_store.build_active_weights_group_pack(
                 layer.layer_id, group_list, num_experts

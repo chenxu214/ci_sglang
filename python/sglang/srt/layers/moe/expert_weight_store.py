@@ -306,14 +306,23 @@ class ExpertWeightStore:
         num_experts: int,
     ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
         """Build compact weights via group_pack_copy using pre-allocated
-        fixed HBM buffers (no .cpu()/.tolist() sync, no per-forward alloc).
+        fixed HBM buffers, then truncate to [num_active].
 
         Uses pre-computed srcPtrs/lenPtrs/numLe/dstPtrs (all fixed) and the
         pre-allocated [MAX_ACTIVE, ...] HBM buffer. The kernel compacts
         non-zero group_list entries into the first num_active slots and
         writes packedGroupList.
 
-        No allocation, no H2D sync — safe for cuda_graph capture.
+        After kernel completes, narrows weight + group_list to [num_active]
+        because CANN npu_grouped_matmul with group_list_type=1 requires
+        weight.shape[0] == group_list.shape[0] == actual active expert count
+        (does NOT tolerate trailing zero entries — stale weight slots would
+        be read and corrupt output).
+
+        The narrow introduces ONE .item() sync (counting non-zero entries in
+        packed_gl). This is cheaper than sparse_copy's .cpu() + .tolist() +
+        Python-side filtering + dynamic torch.empty allocation. Trade-off:
+        cuda_graph capture is NOT supported (graph requires fixed shapes).
 
         Args:
             layer_id: Layer index
@@ -322,10 +331,10 @@ class ExpertWeightStore:
 
         Returns:
             (compact_weights, packed_group_list):
-              compact_weights: {name: [MAX_ACTIVE, ...] tensor on NPU}
-                (only first num_active slots are valid; rest are stale/zero)
-              packed_group_list: [MAX_ACTIVE] int64 tensor on NPU
-                (first num_active entries are non-zero; rest are 0)
+              compact_weights: {name: [num_active, ...] tensor (view into
+                fixed HBM buffer; only first num_active slots are valid)}
+              packed_group_list: [num_active] int64 tensor (view into fixed
+                packed_gl; all entries non-zero)
         """
         self._ensure_initialize()
 
@@ -361,15 +370,30 @@ class ExpertWeightStore:
                     f"DRAM pool may be corrupted or src/dst ptrs invalid."
                 )
 
-        # Return references to fixed buffers; caller sets them as layer
-        # weights. Buffer contents change on next forward (in-place overwrite
-        # by kernel). Caller MUST consume before next call.
-        result = {name: fixed_hbm[name] for name in weight_names}
+        # CANN npu_grouped_matmul with group_list_type=1 requires
+        # weight.shape[0] == group_list.shape[0] == num_active (no trailing
+        # zeros). Narrow the fixed buffer views to [num_active].
+        # Single .item() sync — cheaper than sparse_copy's .cpu()+.tolist().
+        num_active = (packed_gl > 0).sum().item()
+        if num_active == 0:
+            raise RuntimeError(
+                f"[ExpertWeightStore] group_pack_copy produced 0 active "
+                f"experts (layer_id={layer_id}). Check group_list input."
+            )
+        if num_active > MAX_ACTIVE:
+            raise RuntimeError(
+                f"[ExpertWeightStore] num_active={num_active} > MAX_ACTIVE="
+                f"{MAX_ACTIVE} (layer_id={layer_id}). Increase MAX_ACTIVE."
+            )
+
+        # Narrow to [num_active] — views into fixed buffer, no copy.
+        result = {name: fixed_hbm[name][:num_active] for name in weight_names}
+        packed_gl_narrowed = packed_gl[:num_active]
 
         self._stats["total_requests"] += 1
         self._stats["dram_load"] += 1
 
-        return result, packed_gl
+        return result, packed_gl_narrowed
 
     def set_acc_offload_layers(
         self, acc_offload_layers: int, all_offloaded_layer_ids: list
