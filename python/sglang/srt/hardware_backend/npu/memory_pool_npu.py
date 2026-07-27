@@ -456,17 +456,28 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                 [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
             )
 
-        torch_npu.npu_scatter_nd_update_(
-            self.k_buffer[layer_id - self.start_layer].view(-1, 1, self.kv_lora_rank),
-            loc.view(-1, 1),
-            cache_k.view(-1, 1, self.kv_lora_rank),
+        # Avoid scatter on empty batch
+        if loc.numel() == 0:
+            return
+
+        loc = loc.reshape(-1, 1)
+
+        # Flatten buffer to 2D then unsqueeze to 3D, ensuring
+        # output and update have consistent rank for scatter_nd_update.
+        k_out = self.k_buffer[layer_id - self.start_layer].reshape(
+            -1, self.kv_lora_rank
         )
+        k_up = cache_k.reshape(-1, self.kv_lora_rank)
         torch_npu.npu_scatter_nd_update_(
-            self.v_buffer[layer_id - self.start_layer].view(
-                -1, 1, self.qk_rope_head_dim
-            ),
-            loc.view(-1, 1),
-            cache_v.view(-1, 1, self.qk_rope_head_dim),
+            k_out.unsqueeze(1), loc, k_up.unsqueeze(1)
+        )
+
+        v_out = self.v_buffer[layer_id - self.start_layer].reshape(
+            -1, self.qk_rope_head_dim
+        )
+        v_up = cache_v.reshape(-1, self.qk_rope_head_dim)
+        torch_npu.npu_scatter_nd_update_(
+            v_out.unsqueeze(1), loc, v_up.unsqueeze(1)
         )
 
     def set_index_k_buffer(
