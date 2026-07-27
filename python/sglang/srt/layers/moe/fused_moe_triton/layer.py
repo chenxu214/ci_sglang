@@ -1503,16 +1503,36 @@ class FusedMoE(torch.nn.Module):
         # Pre-allocate HBM buffers once and reuse across forward passes.
         # Per-forward torch.empty() causes OOM on repeated requests because
         # old buffers aren't freed fast enough by the caching allocator.
+        #
+        # For NZ-storage layers (acc_offload pool), w13_weight and w2_weight
+        # buffers are allocated in NZ format via _allocate_nz_hbm_buffer,
+        # so sparse_copy loads NZ bytes directly (no ND→NZ conversion at
+        # forward time). Scales and H2D-layer weights use ND format.
         if not hasattr(self, "_shared_hbm_buffers") or self._shared_hbm_buffers is None:
             self._shared_hbm_buffers = {}
             for name in weight_names:
                 sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
-                full_shape = (self.num_local_experts,) + sample_tensor.shape
                 dtype = sample_tensor.dtype
-                self._shared_hbm_buffers[name] = torch.empty(
-                    full_shape, dtype=dtype, device=target_device
-                )
-        # Reuse pre-allocated buffers (H2D will overwrite contents)
+                if self._expert_weight_store.is_nz_weight(self.layer_id, name):
+                    self._shared_hbm_buffers[name] = (
+                        self._expert_weight_store._allocate_nz_hbm_buffer(
+                            num_experts=self.num_local_experts,
+                            layer_id=self.layer_id,
+                            weight_name=name,
+                            dtype=dtype,
+                            device=target_device,
+                        )
+                    )
+                else:
+                    full_shape = (self.num_local_experts,) + sample_tensor.shape
+                    self._shared_hbm_buffers[name] = torch.empty(
+                        full_shape, dtype=dtype, device=target_device
+                    )
+        # Reuse pre-allocated buffers (H2D will overwrite contents).
+        # For NZ-storage weights, the shared buffer is [E, N, K] NZ.
+        # The transpose to [E, K, N] NZ is done in w4a8_mxfp4_gmm_npu
+        # (is_nz_stored branch), NOT here — keeping the layer weight as
+        # [E, N, K] NZ avoids creating a new view each forward pass.
         shared_buffers = self._shared_hbm_buffers
         for name in weight_names:
             setattr(self, name, shared_buffers[name])

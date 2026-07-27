@@ -135,6 +135,7 @@ class ExpertWeightStore:
         dram_pool_size_gb: float = 1300.0,
         use_acc_offload: bool = True,
         use_pool_for_storage: bool = True,
+        use_nz_storage: bool = True,
     ):
         self.dram_store: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
 
@@ -174,6 +175,18 @@ class ExpertWeightStore:
         # layers use the pool; the rest use H2D.
         self._h2d_layer_ids: set = set()  # layer_ids that use PyTorch H2D
 
+        # NZ format storage: when True, w13_weight and w2_weight are stored
+        # in NZ (FRACTAL_NZ) format in DRAM via sparse_copy, eliminating the
+        # need for ND→NZ conversion at forward time. Only applies to
+        # acc_offload pool layers (not H2D layers, which lack sparse_copy).
+        # Scales are always stored in ND format (CANN operator expects ND
+        # scales with transposed layout, not NZ).
+        self._use_nz_storage = use_nz_storage
+        self._nz_weight_names = {"w13_weight", "w2_weight"}
+        # Per-layer per-weight original ND shape (needed for HBM allocation
+        # since the DRAM buffer for NZ weights is a flat byte buffer).
+        self._nz_weight_shapes: Dict[Tuple[int, str], torch.Size] = {}
+
     def set_acc_offload_layers(
         self, acc_offload_layers: int, all_offloaded_layer_ids: list
     ):
@@ -197,6 +210,115 @@ class ExpertWeightStore:
                 f"H2D layers: {len(self._h2d_layer_ids)} "
                 f"({sorted(self._h2d_layer_ids)})"
             )
+
+    # ------------------------------------------------------------------ #
+    # NZ format storage helpers
+    # ------------------------------------------------------------------ #
+
+    def use_nz_storage_for_layer(self, layer_id: int) -> bool:
+        """Check if a layer uses NZ format storage for weights in DRAM.
+
+        NZ storage requires:
+          1. _use_nz_storage flag enabled
+          2. acc_offload backend available (sparse_copy is the only API
+             that can transfer NZ-format bytes; torch copy_() fails on
+             internal format tensors)
+          3. Layer is NOT in _h2d_layer_ids (H2D layers use torch.empty
+             + copy_(), which cannot handle NZ format)
+        """
+        return (
+            self._use_nz_storage
+            and self.use_acc_offload
+            and self._offload_initialized
+            and layer_id not in self._h2d_layer_ids
+        )
+
+    def is_nz_weight(self, layer_id: int, weight_name: str) -> bool:
+        """Check if a specific weight is stored in NZ format in DRAM."""
+        if not self.use_nz_storage_for_layer(layer_id):
+            return False
+        return weight_name in self._nz_weight_names
+
+    def _cast_to_nz(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Cast an ND uint8 tensor to NZ format (FRACTAL_NZ, format=29).
+
+        Used for W4A8 MXFP4 weights where 2 fp4 items are packed in a
+        uint8 byte. The customize_dtype/input_dtype parameters tell the
+        NPU runtime how to interpret the packed sub-byte layout during
+        the NZ block reorganization.
+        """
+        return torch_npu.npu_format_cast(
+            tensor, 29,
+            customize_dtype=torch.float8_e4m3fn,
+            input_dtype=torch_npu.float4_e2m1fn_x2,
+        )
+
+    def _sparse_copy_npu_to_dram(
+        self,
+        src_npu_tensor: torch.Tensor,
+        dst_dram_tensor: torch.Tensor,
+    ) -> None:
+        """Copy NZ-format bytes from NPU tensor to DRAM buffer via sparse_copy.
+
+        torch copy_() cannot handle NZ (internal format) tensors — it
+        raises "do not support internal format". sparse_copy operates on
+        raw bytes via an AIV kernel, preserving the NZ block layout
+        exactly (verified by test_offload.py Scenario 1).
+
+        sparse_copy requires even num_pairs. A single pair (1 src, 1 dst)
+        is odd, so we split into 2 halves to satisfy the constraint.
+        """
+        nbytes = src_npu_tensor.element_size() * src_npu_tensor.numel()
+        assert nbytes % 2 == 0, f"NZ storage size must be even, got {nbytes}"
+        half = nbytes // 2
+
+        src_ptrs = [src_npu_tensor.data_ptr(), src_npu_tensor.data_ptr() + half]
+        dst_ptrs = [dst_dram_tensor.data_ptr(), dst_dram_tensor.data_ptr() + half]
+        len_ptrs = [half, half]
+
+        src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
+        dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
+        len_t = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
+        size_t = torch.tensor(2, dtype=torch.int32, device="npu")
+
+        device = torch.device(f"npu:{torch.npu.current_device()}")
+        ret = self._offload.sparse_copy(src_ptr_t, dst_ptr_t, len_t, size_t, device)
+        if ret != 0:
+            raise RuntimeError(
+                f"sparse_copy D2H (NZ→DRAM) failed: ret={ret}, "
+                f"nbytes={nbytes}"
+            )
+        torch.npu.synchronize()
+
+    def _allocate_nz_hbm_buffer(
+        self,
+        num_experts: int,
+        layer_id: int,
+        weight_name: str,
+        dtype: torch.dtype,
+        device: str,
+    ) -> torch.Tensor:
+        """Allocate an HBM buffer in NZ format for NZ-stored weights.
+
+        Creates an ND tensor with the original per-expert shape, then
+        casts to NZ format. The NZ bytes will be overwritten by
+        sparse_copy from DRAM, so the initial content is irrelevant.
+
+        For non-NZ weights, use torch.empty() directly (ND format).
+        """
+        orig_shape = self._nz_weight_shapes.get((layer_id, weight_name))
+        if orig_shape is None:
+            # Fallback: use DRAM buffer's shape (ND weights)
+            sample_key = (layer_id, 0)
+            orig_shape = self.dram_store[sample_key][weight_name].shape
+
+        full_shape = (num_experts,) + tuple(orig_shape)
+        nd_tensor = torch.empty(full_shape, dtype=dtype, device=device)
+        nz_tensor = self._cast_to_nz(nd_tensor)
+        # del nd_tensor is safe: nz_tensor shares or owns the storage.
+        # Keeping a Python reference to nd_tensor is unnecessary.
+        del nd_tensor
+        return nz_tensor
 
     def _ensure_initialize(self):
         if not self._initialized:
@@ -317,6 +439,11 @@ class ExpertWeightStore:
         Called after process_weights_after_loading(). Copies the processed
         (NZ-format, packed) weights from HBM to Host DRAM.
 
+        For NZ-storage layers (acc_offload pool), w13_weight and w2_weight
+        are converted to NZ format on NPU and stored via sparse_copy,
+        eliminating ND→NZ conversion at forward time. Scales and H2D-layer
+        weights use the ND path (torch copy_()).
+
         Args:
             layer_id: Layer index
             expert_id: Expert index within the layer
@@ -327,66 +454,122 @@ class ExpertWeightStore:
         self._ensure_initialize()
         key = (layer_id, expert_id)
 
+        # Determine if this layer uses NZ storage for weights.
+        use_nz = self.use_nz_storage_for_layer(layer_id)
+
         cpu_weights = {}
         total_bytes = 0
-        # Track temporary CPU tensors (created by .cpu()) so we can release
-        # them explicitly after copying to the DRAM pool. Without this,
-        # PyTorch CPU caching allocator holds the memory and does not return
-        # it to the OS, causing host DRAM usage to grow unbounded.
+        # Track temporary CPU/NPU tensors so we can release them explicitly
+        # after copying to the DRAM pool. Without this, PyTorch caching
+        # allocators hold the memory and do not return it to the OS, causing
+        # host DRAM / HBM usage to grow unbounded.
         #
         # Note: We do NOT call torch.cpu.empty_cache() here because it would
         # be invoked 896 times per layer (once per expert), causing significant
         # overhead. The caller (offload_expert_weights_to_dram) is responsible
         # for calling _release_cpu_cache() once after all experts are registered.
         temp_cpu_tensors = []
+        temp_npu_tensors = []
         try:
             for name, tensor in weights.items():
-                # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
-                # copy_() or .cpu() -- NPU raises "do not support internal
-                # format". npu_format_cast to ND may only change metadata
-                # without reformatting storage, so .contiguous() forces a real
-                # ND copy.
-                if tensor.device.type != "cpu":
-                    # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
-                    # Cast to ND first, then .contiguous() forces a real format
-                    # conversion (not just metadata change). If this fails,
-                    # raise immediately -- a silent fallback to .contiguous()
-                    # alone does NOT guarantee NZ->ND and would cause "do not
-                    # support internal format" errors later in copy_().
-                    nd_tensor = torch_npu.npu_format_cast(
-                        tensor, NPUACLFormat.ACL_FORMAT_ND
-                    ).contiguous()
-                    cpu_tensor = nd_tensor.cpu()
-                    del nd_tensor
-                    temp_cpu_tensors.append(cpu_tensor)
-                else:
-                    cpu_tensor = tensor
+                is_nz_weight = use_nz and name in self._nz_weight_names
 
-                use_pool = (
-                    self._use_pool_for_storage
-                    and self.use_acc_offload
-                    and self._offload_initialized
-                    and layer_id not in self._h2d_layer_ids
-                )
-                if use_pool:
-                    # Allocate from acc_offload DRAM pool.
+                if is_nz_weight:
+                    # NZ storage path: convert ND→NZ on NPU, sparse_copy to DRAM.
+                    #
+                    # tensor is [K_packed, N] (from process_weights_after_loading
+                    # which does .transpose(1, 2).contiguous()). We need to:
+                    #   1. Move to NPU
+                    #   2. Transpose to [N, K_packed] (the layout NZ conversion
+                    #      expects, matching the non-offload path in
+                    #      process_weights_after_loading)
+                    #   3. Cast to NZ format
+                    #   4. sparse_copy NZ bytes to DRAM buffer
+                    #
+                    # At forward time, the NZ bytes are loaded into [E, N, K] NZ
+                    # HBM tensor, then .transpose(1,2) gives [E, K, N] NZ for GMM.
+                    if tensor.device.type != "cpu":
+                        # Already on NPU (e.g., non-offload path) — shouldn't
+                        # happen for DRAM offload, but handle gracefully.
+                        npu_nd = tensor
+                    else:
+                        npu_nd = tensor.npu()
+                        temp_npu_tensors.append(npu_nd)
+
+                    # Transpose [K, N] → [N, K] and make contiguous
+                    npu_nd_t = npu_nd.transpose(0, 1).contiguous()
+                    temp_npu_tensors.append(npu_nd_t)
+
+                    # Store original shape for HBM allocation at forward time
+                    self._nz_weight_shapes[(layer_id, name)] = npu_nd_t.shape
+
+                    # Cast to NZ format
+                    nz_tensor = self._cast_to_nz(npu_nd_t)
+                    temp_npu_tensors.append(nz_tensor)
+
+                    storage_size = (
+                        nz_tensor.element_size() * nz_tensor.numel()
+                    )
+
+                    # Allocate DRAM buffer (flat byte buffer)
                     dram_tensor = self._offload.empty(
-                        cpu_tensor.shape, dtype=cpu_tensor.dtype
+                        [storage_size], dtype=torch.uint8
                     )
+
+                    # sparse_copy NZ bytes from NPU to DRAM
+                    self._sparse_copy_npu_to_dram(nz_tensor, dram_tensor)
+
+                    cpu_weights[name] = dram_tensor
+                    total_bytes += storage_size
+
+                    # Free NPU tensors to release HBM
+                    del nz_tensor, npu_nd_t, npu_nd
+                    temp_npu_tensors.clear()
                 else:
-                    # H2D tail layer or pool unavailable: PyTorch torch.empty.
-                    dram_tensor = torch.empty(
-                        cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                    # ND storage path (scales, H2D layers, or NZ disabled):
+                    # use torch copy_() to copy ND tensor to DRAM.
+                    #
+                    # NPU internal format (e.g., FRACTAL_NZ) cannot be copied
+                    # via copy_() or .cpu() -- NPU raises "do not support
+                    # internal format". npu_format_cast to ND may only change
+                    # metadata without reformatting storage, so .contiguous()
+                    # forces a real ND copy.
+                    if tensor.device.type != "cpu":
+                        nd_tensor = torch_npu.npu_format_cast(
+                            tensor, NPUACLFormat.ACL_FORMAT_ND
+                        ).contiguous()
+                        cpu_tensor = nd_tensor.cpu()
+                        del nd_tensor
+                        temp_cpu_tensors.append(cpu_tensor)
+                    else:
+                        cpu_tensor = tensor
+
+                    use_pool = (
+                        self._use_pool_for_storage
+                        and self.use_acc_offload
+                        and self._offload_initialized
+                        and layer_id not in self._h2d_layer_ids
                     )
-                dram_tensor.copy_(cpu_tensor)
-                cpu_weights[name] = dram_tensor
-                total_bytes += dram_tensor.nbytes
+                    if use_pool:
+                        # Allocate from acc_offload DRAM pool.
+                        dram_tensor = self._offload.empty(
+                            cpu_tensor.shape, dtype=cpu_tensor.dtype
+                        )
+                    else:
+                        # H2D tail layer or pool unavailable: PyTorch torch.empty.
+                        dram_tensor = torch.empty(
+                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                        )
+                    dram_tensor.copy_(cpu_tensor)
+                    cpu_weights[name] = dram_tensor
+                    total_bytes += dram_tensor.nbytes
         finally:
-            # Release temporary CPU tensor Python references immediately.
-            # PyTorch CPU caching allocator may still hold the underlying
+            # Release temporary tensor Python references immediately.
+            # PyTorch caching allocators may still hold the underlying
             # memory; caller must invoke _release_cpu_cache() after the full
             # layer registration loop to return it to the OS.
             del temp_cpu_tensors
+            del temp_npu_tensors
 
         self.dram_store[key] = cpu_weights
         self._registered_layers.add(layer_id)
@@ -649,6 +832,11 @@ class ExpertWeightStore:
         Loads only the active (token-bearing) experts from Host DRAM to HBM
         in real time. No HBM caching -- every decode step reads from DRAM.
 
+        For NZ-storage layers, w13_weight and w2_weight HBM buffers are
+        allocated in NZ format and filled via sparse_copy from DRAM. This
+        eliminates the ND→NZ conversion at forward time (in
+        w4a8_mxfp4_gmm_npu), reducing HBM peak and compute latency.
+
         Args:
             layer_id: Layer index
             active_expert_ids: Sorted list of expert IDs with tokens
@@ -662,16 +850,34 @@ class ExpertWeightStore:
         num_active = len(active_expert_ids)
         sample_key = (layer_id, active_expert_ids[0])
 
-        # Allocate compact [num_active, ...] HBM buffers
+        # Allocate compact [num_active, ...] HBM buffers.
+        # For NZ weights: allocate ND tensor, cast to NZ format.
+        # For ND weights (scales): allocate ND tensor directly.
         result = {}
         for name in weight_names:
             sample_tensor = self.dram_store[sample_key][name]
-            full_shape = (num_active,) + sample_tensor.shape
-            result[name] = torch.empty(
-                full_shape, dtype=sample_tensor.dtype, device="npu"
-            )
+            if self.is_nz_weight(layer_id, name):
+                # NZ weight: use _allocate_nz_hbm_buffer which reads
+                # the original shape from _nz_weight_shapes (since the
+                # DRAM buffer is a flat [storage_size] byte buffer).
+                result[name] = self._allocate_nz_hbm_buffer(
+                    num_experts=num_active,
+                    layer_id=layer_id,
+                    weight_name=name,
+                    dtype=sample_tensor.dtype,
+                    device="npu",
+                )
+            else:
+                # ND weight (scale): use DRAM buffer's shape directly.
+                full_shape = (num_active,) + sample_tensor.shape
+                result[name] = torch.empty(
+                    full_shape, dtype=sample_tensor.dtype, device="npu"
+                )
 
-        # Build (src_cpu, dst_hbm) pairs for batch sparse_copy.
+        # Build (src_dram, dst_hbm) pairs for batch sparse_copy.
+        # For NZ weights, dst is a view into the NZ tensor (result[name][i]).
+        # sparse_copy operates on raw bytes, so it correctly copies NZ bytes
+        # from the flat DRAM buffer to the NZ-format HBM tensor view.
         pairs = []
         for i, eid in enumerate(active_expert_ids):
             self._stats["total_requests"] += 1
@@ -729,13 +935,25 @@ class ExpertWeightStore:
         sample_key = (layer_id, 0)
         weight_names = list(self.dram_store[sample_key].keys())
 
+        # Allocate [num_experts, ...] HBM buffers.
+        # For NZ weights: allocate ND tensor, cast to NZ format.
+        # For ND weights (scales): allocate ND tensor directly.
         buffers = {}
         for name in weight_names:
             sample_tensor = self.dram_store[sample_key][name]
-            full_shape = (num_experts,) + sample_tensor.shape
-            buffers[name] = torch.empty(
-                full_shape, dtype=sample_tensor.dtype, device="npu"
-            )
+            if self.is_nz_weight(layer_id, name):
+                buffers[name] = self._allocate_nz_hbm_buffer(
+                    num_experts=num_experts,
+                    layer_id=layer_id,
+                    weight_name=name,
+                    dtype=sample_tensor.dtype,
+                    device="npu",
+                )
+            else:
+                full_shape = (num_experts,) + sample_tensor.shape
+                buffers[name] = torch.empty(
+                    full_shape, dtype=sample_tensor.dtype, device="npu"
+                )
 
         expert_ids = list(range(num_experts))
 

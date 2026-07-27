@@ -148,8 +148,12 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         # Skip NZ format cast when MoE DRAM offload is enabled.
         # NZ format is incompatible with CPU round-trip (clone/copy_/
         # npu_format_cast(→0) all fail on internal format). For offload,
-        # weights are stored in ND format and converted to NZ at forward
-        # time in w4a8_mxfp4_gmm_npu (is_nd_format flag).
+        # weights are stored in ND format here:
+        #   - ND storage (H2D layers): stored as ND in DRAM, forward
+        #     converts to NZ via is_nd_format flag in w4a8_mxfp4_gmm_npu.
+        #   - NZ storage (acc_offload pool layers): register_expert
+        #     converts ND→NZ on NPU and stores NZ bytes via sparse_copy.
+        #     Forward uses NZ directly (is_nz_stored flag), no conversion.
         _skip_nz_cast = getattr(layer, "moe_dram_offload", False)
 
         # If weights are on CPU (DRAM offload with _force_cpu_allocation),
@@ -172,7 +176,10 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
         else:
             # ND format: just transpose for offload storage.
-            # Forward will convert to NZ via is_nd_format flag.
+            # For NZ storage layers, register_expert will transpose back
+            # to [N, K] and convert to NZ format on NPU before storing.
+            # For ND storage layers, forward will convert to NZ via
+            # is_nd_format flag in w4a8_mxfp4_gmm_npu.
             layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2).contiguous()
             layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2).contiguous()
 
@@ -223,7 +230,20 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         # entire [num_experts, ...] tensor (which doubles HBM and causes
         # OOM). Use the offload flag instead of is_contiguous() because
         # NZ-format weights may also report contiguous=True on NPU.
-        is_nd_format = getattr(layer, "_dram_offload_enabled", False)
+        #
+        # NZ storage path: weights are already in NZ format (stored in DRAM
+        # as NZ bytes via sparse_copy). No expert extraction or NZ conversion
+        # needed — the non-DeepEP path is rarely used with NZ storage (DeepEP
+        # handles expert extraction via build_active_weight_tensors).
+        _store = getattr(layer, "_expert_weight_store", None)
+        is_nz_stored = (
+            _store is not None
+            and _store.use_nz_storage_for_layer(layer.layer_id)
+        )
+        is_nd_format = (
+            getattr(layer, "_dram_offload_enabled", False)
+            and not is_nz_stored
+        )
         if is_nd_format:
             unique_ids, inverse_indices = torch.unique(
                 topk_ids, return_inverse=True
@@ -245,6 +265,7 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             top_k,
             act_fn=self.act_fn,
             is_nd_format=is_nd_format,
+            is_nz_stored=is_nz_stored,
         )
         return StandardCombineInput(hidden_states=output)
 
@@ -272,6 +293,7 @@ def npu_fused_experts_w4a8_mxfp4(
     top_k: int,
     act_fn: Callable = _npu_swiglu,
     is_nd_format: bool = False,
+    is_nz_stored: bool = False,
 ):
     if torch.npu.is_current_stream_capturing():
         return npu_fused_experts_w4a8_mxfp4_decode(
@@ -285,6 +307,7 @@ def npu_fused_experts_w4a8_mxfp4(
             top_k=top_k,
             act_fn=act_fn,
             is_nd_format=is_nd_format,
+            is_nz_stored=is_nz_stored,
         )
 
     original_shape = hidden_states.shape
@@ -327,6 +350,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
     hidden_states = act_fn(hidden_states, expert_tokens, 0)
     hidden_states = w4a8_mxfp4_gmm_npu(
@@ -338,6 +362,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
 
     hidden_states = hidden_states * valid_mask_2d.to(hidden_states.dtype)
@@ -368,6 +393,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
     top_k: int,
     act_fn: Callable = _npu_swiglu,
     is_nd_format: bool = False,
+    is_nz_stored: bool = False,
 ):
     num_tokens = hidden_states.shape[:-1].numel()
     global_num_experts = w13.shape[0]
@@ -398,6 +424,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
     hidden_states = act_fn(hidden_states, expert_tokens, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
@@ -409,6 +436,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
 
     final_hidden_states = torch.ops.npu.npu_moe_token_unpermute(
@@ -502,11 +530,31 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         compact_weights = layer._expert_weight_store.build_active_weight_tensors(
             layer.layer_id, active_expert_ids, weight_names
         )
+        # Set compact weights as layer attributes. NO transpose here for
+        # NZ-storage weights — w4a8_mxfp4_gmm_npu's is_nz_stored branch
+        # handles the [E, N, K]→[E, K, N] transpose (metadata-only).
+        # This is consistent with:
+        #   - Non-DeepEP path: _load_experts_on_demand sets [E, N, K] NZ
+        #     without transpose; w4a8_mxfp4_gmm_npu does the transpose.
+        #   - ND storage path: build_active_weight_tensors returns [E, K, N]
+        #     ND; w4a8_mxfp4_gmm_npu does ND→NZ + transpose.
         for name, tensor in compact_weights.items():
             setattr(layer, name, tensor)
 
         group_list = group_list_cpu[active_mask].to(hidden_states.device)
 
+    # Determine NZ storage: when True, weights loaded from DRAM are already
+    # in NZ format (stored via sparse_copy), so no ND→NZ conversion is needed
+    # at forward time. is_nd_format is only True for H2D layers (ND storage).
+    _store = layer._expert_weight_store
+    is_nz_stored = (
+        _store is not None
+        and _store.use_nz_storage_for_layer(layer.layer_id)
+    )
+    is_nd_format = (
+        getattr(layer, "_dram_offload_enabled", False)
+        and not is_nz_stored
+    )
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
         hidden_states,
@@ -515,7 +563,8 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         group_list,
         output_dtype,
         act_fn=act_fn,
-        is_nd_format=getattr(layer, "_dram_offload_enabled", False),
+        is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
     return combine_cls(
         hidden_states=hidden_states,
@@ -533,6 +582,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
     output_dtype,
     act_fn: Callable = _npu_swiglu,
     is_nd_format: bool = False,
+    is_nz_stored: bool = False,
 ):
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
@@ -543,14 +593,16 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         group_list=group_list,
         output_dtype=output_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
     # Release w13 compact weights after GMM to reduce HBM peak.
-    # In DRAM offload path, build_active_weight_tensors allocates compact
-    # [num_active, ...] ND tensors. The NZ conversion inside
-    # w4a8_mxfp4_gmm_npu creates additional tensors. Without releasing
-    # the compact weights here, w13 compact + w13 NZ + w2 compact + w2 NZ
-    # all coexist in HBM, causing OOM during prefill (num_active ≈ 112).
-    if is_nd_format:
+    # Both ND and NZ storage paths allocate compact [num_active, ...]
+    # tensors via build_active_weight_tensors (decode path). Without
+    # releasing, w13 compact + w2 compact coexist in HBM, causing OOM
+    # during prefill (num_active ≈ 112).
+    # For NZ storage, no NZ conversion tensor is created (weights are
+    # already NZ), but the compact NZ tensor still occupies HBM.
+    if is_nd_format or is_nz_stored:
         layer.w13_weight = None
         layer.w13_weight_scale = None
     hidden_states = act_fn(hidden_states, group_list, group_list_type)
@@ -563,9 +615,10 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         group_list=group_list,
         output_dtype=output_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
     # Release w2 compact weights after GMM to reduce HBM peak.
-    if is_nd_format:
+    if is_nd_format or is_nz_stored:
         layer.w2_weight = None
         layer.w2_weight_scale = None
     return hidden_states
@@ -580,19 +633,9 @@ def w4a8_mxfp4_gmm_npu(
     group_list: torch.Tensor,
     output_dtype=torch.bfloat16,
     is_nd_format: bool = False,
+    is_nz_stored: bool = False,
 ) -> torch.Tensor:
     group_list = group_list.to(torch.int64)
-
-    # return torch.ops.npu.npu_grouped_matmul(
-    #     [input],
-    #     [weight],
-    #     antiquant_scale=[weight_scale],
-    #     split_item=2,
-    #     group_type=0,
-    #     group_list=group_list,
-    #     group_list_type=group_list_type,
-    #     output_dtype=output_dtype,
-    # )[0]
 
     if input_scale is None:
         x, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
@@ -606,13 +649,21 @@ def w4a8_mxfp4_gmm_npu(
     else:
         x, x_scale = input, input_scale
 
-    # Weight format conversion: only for DRAM offload path where weights
-    # are stored in ND format. Use the explicit is_nd_format flag instead
-    # of is_contiguous() because NZ-format weights may also report
-    # contiguous=True on NPU, which would cause double NZ conversion and
-    # corrupt the weight data.
+    # Weight format handling:
+    #   is_nd_format=True:  ND storage (H2D layers). Weight is [E, K, N] ND.
+    #                      Convert to NZ: transpose→[E,N,K] ND→NZ→[E,N,K] NZ
+    #                      →transpose→[E,K,N] NZ. This is the only path that
+    #                      allocates extra HBM for the NZ conversion.
+    #
+    #   is_nz_stored=True: NZ storage (acc_offload pool layers). Weight is
+    #                      [E, N, K] NZ (loaded from DRAM via sparse_copy).
+    #                      Just transpose (metadata-only) → [E, K, N] NZ.
+    #                      No NZ conversion needed, saving HBM and compute.
+    #
+    #   Both False:         Non-offload path. Weight is already [E, K, N] NZ
+    #                      (from process_weights_after_loading). No action.
     if is_nd_format:
-        # DRAM offload path: weight is ND from DRAM.
+        # DRAM offload ND path: weight is ND from DRAM.
         # Convert to NZ format: undo transpose → cast to NZ → re-apply transpose.
         # Split into steps and explicitly del intermediates to reduce HBM
         # peak: without this, compact ND weight + contiguous copy + NZ
@@ -626,6 +677,12 @@ def w4a8_mxfp4_gmm_npu(
             input_dtype=torch_npu.float4_e2m1fn_x2,
         ).transpose(1, 2)
         del weight_nd
+    elif is_nz_stored:
+        # NZ storage path: weight is [E, N, K] NZ from DRAM.
+        # Transpose to [E, K, N] NZ (metadata-only, no data copy).
+        # This matches the non-offload path's final format after
+        # process_weights_after_loading (NZ cast + transpose).
+        weight = weight.transpose(1, 2)
 
     # Scale: is_contiguous() is reliable here because scales are never
     # cast to NZ format. After process_weights_after_loading, scales are
