@@ -193,8 +193,8 @@ class NPUMHATokenToKVPool(MHATokenToKVPool):
             cache_v = cache_v.to(self.dtype)
 
         if self.store_dtype != self.dtype:
-            cache_k = cache_k.view(self.store_dtype)
-            cache_v = cache_v.view(self.store_dtype)
+            cache_k = cache_k.to(self.store_dtype)
+            cache_v = cache_v.to(self.store_dtype)
 
         if self.use_fia:
             k_buffer_layer = self.k_buffer[layer_id - self.start_layer]
@@ -448,8 +448,8 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
             cache_v = cache_v.to(self.dtype)
 
         if self.store_dtype != self.dtype:
-            cache_k = cache_k.view(self.store_dtype)
-            cache_v = cache_v.view(self.store_dtype)
+            cache_k = cache_k.to(self.store_dtype)
+            cache_v = cache_v.to(self.store_dtype)
 
         if cache_v is None:
             cache_k, cache_v = cache_k.split(
@@ -479,7 +479,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
             index_k = index_k.to(self.dtype)
 
         if self.store_dtype != self.dtype:
-            index_k = index_k.view(self.store_dtype)
+            index_k = index_k.to(self.store_dtype)
 
         torch_npu.npu_scatter_nd_update_(
             self.index_k_buffer[layer_id - self.start_layer].view(
