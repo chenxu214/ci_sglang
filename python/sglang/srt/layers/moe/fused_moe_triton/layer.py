@@ -1409,10 +1409,6 @@ class FusedMoE(torch.nn.Module):
 
         num_experts = self.num_local_experts
 
-        # Build full [num_experts, ...] weight dict for batch registration.
-        # This replaces the per-expert loop (112 iterations × 4 weights =
-        # 448 offload.empty + copy_ calls) with a single pass per weight
-        # name (4 offload.empty + copy_ calls), reducing overhead ~100x.
         weights_dict = {}
         total_hbm_bytes = 0
         for name in weight_names:
@@ -1458,7 +1454,7 @@ class FusedMoE(torch.nn.Module):
         logger.info(
             f"[FusedMoE] Layer {self.layer_id}: Offloaded {num_experts} experts "
             f"({total_hbm_bytes / 1024**3:.2f} GB) to DRAM. "
-            f"HBM {alloc_before:.2f}→{alloc_after:.2f} GB "
+            f"HBM {alloc_before:.2f}->{alloc_after:.2f} GB "
             f"(freed {alloc_before - alloc_after:.2f} GB)"
         )
 

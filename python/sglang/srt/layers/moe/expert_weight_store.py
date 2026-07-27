@@ -262,26 +262,36 @@ class ExpertWeightStore:
     def _do_acc_offload_init(self, offload):
         """Actual acc_offload initialization (called by _init_acc_offload).
 
-        Before each HalMemCreate attempt, we drop kernel page cache to free
-        up contiguous physical memory. Huge pages require physically
-        contiguous 2MB regions, and excessive file cache (from safetensors
-        mmap during weight loading) can cause allocation failure even when
-        MemAvailable looks sufficient.
+        Strategy: try direct init first (fast path). If it fails, drop
+        kernel page cache to free contiguous physical memory for huge
+        page allocation, then retry. Up to 3 attempts total.
 
-        We try up to 2 times, dropping cache before each attempt.
+        Page cache from safetensors mmap can fragment physical memory,
+        causing HalMemCreate to fail even when MemAvailable looks
+        sufficient. Dropping cache is slow (~5s), so we only do it on
+        retry, not the first attempt.
         """
+        import time
+
         config = offload.OffloadConfig()
         config.device_id = torch.npu.current_device()
         config.size = self._dram_pool_size_bytes
 
-        for attempt in range(2):
-            # Drop page cache before each attempt to maximize contiguous
-            # physical memory available for huge page allocation.
-            logger.info(
-                f"[ExpertWeightStore] acc_offload init attempt {attempt + 1}/2, "
-                f"dropping page cache before HalMemCreate..."
-            )
-            _drop_kernel_page_cache()
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                # Only drop cache on retry — first attempt tries direct init.
+                logger.info(
+                    f"[ExpertWeightStore] acc_offload init attempt {attempt + 1}/{max_attempts}, "
+                    f"dropping page cache before retry..."
+                )
+                _drop_kernel_page_cache()
+                time.sleep(2)
+            else:
+                logger.info(
+                    f"[ExpertWeightStore] acc_offload init attempt {attempt + 1}/{max_attempts} "
+                    f"(direct, no cache drop)"
+                )
 
             ret = offload.initialize(config)
             if ret == 0:
