@@ -1409,28 +1409,26 @@ class FusedMoE(torch.nn.Module):
 
         num_experts = self.num_local_experts
 
+        # Build full [num_experts, ...] weight dict for batch registration.
+        # This replaces the per-expert loop (112 iterations × 4 weights =
+        # 448 offload.empty + copy_ calls) with a single pass per weight
+        # name (4 offload.empty + copy_ calls), reducing overhead ~100x.
+        weights_dict = {}
         total_hbm_bytes = 0
-        for expert_id in range(num_experts):
-            for name in weight_names:
-                param = getattr(self, name)
-                total_hbm_bytes += param.data[expert_id].nbytes
+        for name in weight_names:
+            param = getattr(self, name)
+            weights_dict[name] = param.data
+            total_hbm_bytes += param.data.nbytes
 
         if torch.npu.is_available():
             alloc_before = torch.npu.memory_allocated() / 1024**3
         else:
             alloc_before = 0.0
 
-        for expert_id in range(num_experts):
-            expert_weights = {}
-            for name in weight_names:
-                param = getattr(self, name)
-                expert_weights[name] = param.data[expert_id]
-
-            self._expert_weight_store.register_expert(
-                layer_id=self.layer_id,
-                expert_id=expert_id,
-                weights=expert_weights,
-            )
+        self._expert_weight_store.register_layer_batch(
+            layer_id=self.layer_id,
+            weights_dict=weights_dict,
+        )
 
         # Free the original weight tensors; shared HBM buffers will be
         # used instead during forward.

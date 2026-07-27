@@ -397,6 +397,80 @@ class ExpertWeightStore:
                 f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
             )
 
+    def register_layer_batch(
+        self,
+        layer_id: int,
+        weights_dict: Dict[str, torch.Tensor],
+    ):
+        """Batch-register all experts of a layer to DRAM in one pass.
+
+        Instead of calling register_expert() per expert (112 iterations
+        with 4 offload.empty + 4 copy_ each = 448 calls), this method
+        processes each weight name once with a single large allocation
+        and copy, then slices per-expert views into dram_store.
+
+        Args:
+            layer_id: Layer index
+            weights_dict: Dict of {weight_name: full_tensor[num_experts, ...]}
+        """
+        self._ensure_initialize()
+        num_experts = None
+        total_bytes = 0
+        temp_cpu_tensors = []
+
+        use_pool = (
+            self._use_pool_for_storage
+            and self.use_acc_offload
+            and self._offload_initialized
+            and layer_id not in self._h2d_layer_ids
+        )
+
+        try:
+            for name, full_tensor in weights_dict.items():
+                if num_experts is None:
+                    num_experts = full_tensor.shape[0]
+
+                # Handle NPU→CPU conversion (NZ→ND + .cpu()) in one shot
+                # for the entire [num_experts, ...] tensor.
+                if full_tensor.device.type != "cpu":
+                    nd_tensor = torch_npu.npu_format_cast(
+                        full_tensor, NPUACLFormat.ACL_FORMAT_ND
+                    ).contiguous()
+                    cpu_tensor = nd_tensor.cpu()
+                    del nd_tensor
+                    temp_cpu_tensors.append(cpu_tensor)
+                else:
+                    cpu_tensor = full_tensor
+
+                # Single large allocation + single copy for all experts
+                if use_pool:
+                    dram_tensor = self._offload.empty(
+                        cpu_tensor.shape, dtype=cpu_tensor.dtype
+                    )
+                else:
+                    dram_tensor = torch.empty(
+                        cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                    )
+                dram_tensor.copy_(cpu_tensor)
+                total_bytes += dram_tensor.nbytes
+
+                # Slice per-expert views into dram_store
+                for expert_id in range(num_experts):
+                    key = (layer_id, expert_id)
+                    if key not in self.dram_store:
+                        self.dram_store[key] = {}
+                    self.dram_store[key][name] = dram_tensor[expert_id]
+        finally:
+            del temp_cpu_tensors
+
+        self._registered_layers.add(layer_id)
+
+        logger.info(
+            f"[ExpertWeightStore] D2H batch layer_id={layer_id}: "
+            f"{num_experts} experts, {len(weights_dict)} weights, "
+            f"{total_bytes / 1024**2:.1f} MB copied to DRAM"
+        )
+
     def _release_cpu_cache(self):
         """Release CPU memory back to the OS after register_expert() calls.
 
