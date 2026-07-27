@@ -462,6 +462,7 @@ class ExpertWeightStore:
         pairs: List[Tuple[torch.Tensor, torch.Tensor]],
         sync: bool = True,
         layer_id: Optional[int] = None,
+        wait_for_compute: bool = False,
     ) -> None:
         """Batch H2D copy via acc_offload sparse_copy with PyTorch fallback.
 
@@ -480,6 +481,12 @@ class ExpertWeightStore:
             layer_id: If in _h2d_layer_ids, skip sparse_copy and use
                       copy_() directly (H2D tail layers stored via
                       torch.empty, not in acc_offload pool).
+            wait_for_compute: If True, make _h2d_stream wait for the
+                  current (compute) stream before starting H2D copy.
+                  Required when writing to _shared_hbm_buffers, which
+                  the previous forward's compute may still be reading.
+                  Set True for batch_load_to_hbm (shared buffer reuse),
+                  False for prefetch_layer_to_buffer (separate buffers).
         """
         num_pairs = len(pairs)
         if num_pairs == 0:
@@ -546,9 +553,30 @@ class ExpertWeightStore:
             )
 
         # Fallback: PyTorch H2D copy_ (runs on h2d_stream).
-        with torch.npu.stream(self._h2d_stream):
-            for src, dst in pairs:
-                dst.copy_(src, non_blocking=True)
+        #
+        # Race condition fix: when writing to _shared_hbm_buffers (reused
+        # across forwards), the previous forward's compute on the default
+        # stream may still be reading from the buffer. Without a stream
+        # dependency, the H2D copy on _h2d_stream can overlap with that
+        # compute, corrupting the data and causing precision degradation.
+        # acc_offload doesn't have this issue because sparse_copy runs on
+        # the default stream and torch.npu.synchronize() syncs all streams.
+        #
+        # Fix: record an event on the compute stream and make _h2d_stream
+        # wait for it before starting the copy. This serializes H2D with
+        # the previous compute, eliminating the race. Performance impact
+        # is minimal because batch_load_to_hbm is already synchronous.
+        if wait_for_compute and self._h2d_stream is not None:
+            compute_event = torch.npu.Event()
+            compute_event.record()  # Record on current (compute) stream
+            with torch.npu.stream(self._h2d_stream):
+                compute_event.wait()  # _h2d_stream waits for compute
+                for src, dst in pairs:
+                    dst.copy_(src, non_blocking=True)
+        else:
+            with torch.npu.stream(self._h2d_stream):
+                for src, dst in pairs:
+                    dst.copy_(src, non_blocking=True)
         if sync:
             self._h2d_stream.synchronize()
 
@@ -605,7 +633,8 @@ class ExpertWeightStore:
 
             results[eid] = expert_views
 
-        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id)
+        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id,
+                             wait_for_compute=True)
 
         return results
 

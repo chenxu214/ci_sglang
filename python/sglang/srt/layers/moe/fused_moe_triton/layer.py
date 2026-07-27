@@ -1500,14 +1500,22 @@ class FusedMoE(torch.nn.Module):
         # from a previous decode (e.g., [num_active, ...]) would persist
         # and cause a shape mismatch error.
         target_device = "npu" if torch.npu.is_available() else "cpu"
-        shared_buffers = {}
+        # Pre-allocate HBM buffers once and reuse across forward passes.
+        # Per-forward torch.empty() causes OOM on repeated requests because
+        # old buffers aren't freed fast enough by the caching allocator.
+        if not hasattr(self, "_shared_hbm_buffers") or self._shared_hbm_buffers is None:
+            self._shared_hbm_buffers = {}
+            for name in weight_names:
+                sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
+                full_shape = (self.num_local_experts,) + sample_tensor.shape
+                dtype = sample_tensor.dtype
+                self._shared_hbm_buffers[name] = torch.empty(
+                    full_shape, dtype=dtype, device=target_device
+                )
+        # Reuse pre-allocated buffers (H2D will overwrite contents)
+        shared_buffers = self._shared_hbm_buffers
         for name in weight_names:
-            sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
-            full_shape = (self.num_local_experts,) + sample_tensor.shape
-            dtype = sample_tensor.dtype
-            buf = torch.empty(full_shape, dtype=dtype, device=target_device)
-            shared_buffers[name] = buf
-            setattr(self, name, buf)
+            setattr(self, name, shared_buffers[name])
 
         # During prefill (_is_decode_mode == False), load ALL local experts
         # into the shared buffer. DeepEP dispatch redistributes tokens
@@ -1553,6 +1561,13 @@ class FusedMoE(torch.nn.Module):
         # orphaning the previous HBM buffer and triggering redundant H2D.
         if hasattr(self, "_prefetched_buffers"):
             return
+        # Free _shared_hbm_buffers (from _load_experts_on_demand) to avoid
+        # double HBM allocation when switching to prefetch mode.
+        if hasattr(self, "_shared_hbm_buffers") and self._shared_hbm_buffers is not None:
+            for name in self._shared_hbm_buffers:
+                if hasattr(self, name) and getattr(self, name) is self._shared_hbm_buffers[name]:
+                    setattr(self, name, None)
+            self._shared_hbm_buffers = None
         log_info_on_rank0(
             logger,
             f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
@@ -1626,8 +1641,9 @@ class FusedMoE(torch.nn.Module):
             if hasattr(self, "_prefetch_event"):
                 del self._prefetch_event
         else:
-            # N=0 prefill: _load_experts_on_demand set temp buffers.
-            # Release weight references so caching allocator can reuse HBM.
+            # N=0 prefill: _load_experts_on_demand set weights from
+            # _shared_hbm_buffers. Release weight references but keep
+            # the pre-allocated buffers for reuse on next forward.
             for name in self._get_expert_weight_names():
                 if hasattr(self, name):
                     setattr(self, name, None)

@@ -42,9 +42,9 @@ if _is_npu:
 )
 @triton.autotune(
     configs=[
-        triton.Config({"BK": BK, "BV": 64}, num_warps=num_warps)
+        triton.Config({"BK": BK, "BV": 64}, num_warps=2)
         for BK in [32, 64]
-        for num_warps in [1, 2, 4]
+        #for num_warps in [1, 2, 4]
     ],
     key=["H", "K", "BC", "V", "FUSE_RECOMPUTE", "FUSE_DIAGONAL"],
     **autotune_cache_kwargs,
