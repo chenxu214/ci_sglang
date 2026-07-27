@@ -1452,6 +1452,14 @@ class FusedMoE(torch.nn.Module):
         # Calling once per layer (not per expert) avoids 896x overhead.
         self._expert_weight_store._release_cpu_cache()
 
+        # Pre-compute group_pack_copy buffers (srcPtrs/lenPtrs/numLe).
+        # Must be after all experts registered. dstPtrs are dynamic (per-forward).
+        self._expert_weight_store.prepare_group_pack_buffers(
+            layer_id=self.layer_id,
+            num_experts=num_experts,
+            weight_names=weight_names,
+        )
+
         if torch.npu.is_available():
             alloc_after = torch.npu.memory_allocated() / 1024**3
         else:

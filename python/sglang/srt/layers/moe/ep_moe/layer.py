@@ -176,10 +176,12 @@ class DeepEPMoE(FusedMoE):
         # FusedMoE.forward() is bypassed in the DeepEP path, so the
         # _load_experts_on_demand call must be replicated here.
         # In decode mode, skip — the w4a8 DeepEP path calls
-        # build_active_weight_tensors which builds compact [num_active, ...]
-        # tensors directly from DRAM. Calling _load_experts_on_demand here
-        # would allocate a [num_local_experts, ...] buffer and H2D-copy
-        # active experts into it, only to be immediately overwritten.
+        # build_active_weights_group_pack which compacts active experts
+        # into the pre-allocated [MAX_ACTIVE, ...] HBM buffer via
+        # group_pack_copy kernel (no sync, no allocation). Calling
+        # _load_experts_on_demand here would allocate a [num_local_experts, ...]
+        # buffer and H2D-copy active experts into it, only to be
+        # immediately overwritten.
         if (
             getattr(self, "_dram_offload_enabled", False)
             and self._expert_weight_store is not None

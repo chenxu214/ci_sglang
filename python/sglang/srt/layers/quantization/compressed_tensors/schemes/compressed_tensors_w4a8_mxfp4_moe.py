@@ -457,45 +457,27 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         )
 
     # Decode DRAM offload: build compact [num_active, ...] weight tensors
-    # after dispatch (we know which experts received tokens). Replaces the
-    # [224, ...] shared buffer with a smaller [num_active, ...] tensor.
+    # after dispatch (we know which experts received tokens). Uses
+    # pre-allocated fixed [MAX_ACTIVE, ...] HBM buffer + group_pack_copy
+    # kernel (no .cpu()/.tolist() sync, no per-forward allocation).
     # Prefill uses the shared buffer (pre-loaded by _load_experts_on_demand).
     if (
         getattr(layer, "_dram_offload_enabled", False)
         and layer._expert_weight_store is not None
         and layer._expert_weight_store._is_decode_mode
     ):
-        group_list_cpu = group_list.cpu()
-        active_mask = group_list_cpu > 0
-        active_expert_ids = active_mask.nonzero().squeeze(-1).tolist()
-        if not isinstance(active_expert_ids, list):
-            active_expert_ids = [active_expert_ids]
-        num_active = len(active_expert_ids)
+        num_experts = group_list.shape[0]
 
-        if num_active > 16:
-            logger.debug(
-                f"Decode active experts ({num_active}) exceeds 16, "
-                f"using compact path. active_expert_ids={active_expert_ids}"
+        # group_pack_copy path: pre-allocated fixed HBM buffer + kernel
+        # compaction (no sync, no allocation). Raises on ret!=0.
+        compact_weights, packed_group_list = (
+            layer._expert_weight_store.build_active_weights_group_pack(
+                layer.layer_id, group_list, num_experts
             )
-
-        if num_active == 0:
-            return combine_cls(
-                hidden_states=hidden_states,
-                topk_ids=dispatch_output.topk_ids,
-                topk_weights=dispatch_output.topk_weights,
-            )
-
-        sample_key = (layer.layer_id, active_expert_ids[0])
-        weight_names = list(
-            layer._expert_weight_store.dram_store[sample_key].keys()
-        )
-        compact_weights = layer._expert_weight_store.build_active_weight_tensors(
-            layer.layer_id, active_expert_ids, weight_names
         )
         for name, tensor in compact_weights.items():
             setattr(layer, name, tensor)
-
-        group_list = group_list_cpu[active_mask].to(hidden_states.device)
+        group_list = packed_group_list
 
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
@@ -578,17 +560,18 @@ def w4a8_mxfp4_gmm_npu(
     else:
         x, x_scale = input, input_scale
 
-    # Weights from acc_offload path are NZ-format (stored via sparse_copy
-    # D2H that bypasses format conversion) — non-contiguous, skip conversion.
-    # Weights from fallback path (no acc_offload) are ND-format (stored as
-    # contiguous on CPU) — convert to NZ format for CANN kernel.
+    # Weights from group_pack_copy path are always ND-format (DRAM storage
+    # in register_expert explicitly converts NZ→ND via npu_format_cast().contiguous()
+    # before D2H copy, regardless of pool vs torch.empty storage). The HBM
+    # buffer is contiguous after group_pack_copy, so convert to NZ format
+    # for CANN kernel.
     #
     # Scales from DRAM offload lose their non-contiguous (transposed)
     # state during round-trip (.copy_() flattens to C-order). Restore
     # the transposed state to match NZ weights (CANN requires matching
     # transposition in MX mode).
     if weight.is_contiguous():
-        # Fallback path (no acc_offload): weight is ND from DRAM.
+        # group_pack_copy path: weight is ND from DRAM, contiguous.
         # Convert to NZ format: undo transpose → cast to NZ → re-apply transpose.
         weight = torch_npu.npu_format_cast(
             weight.transpose(1, 2).contiguous().view(torch.uint8),
