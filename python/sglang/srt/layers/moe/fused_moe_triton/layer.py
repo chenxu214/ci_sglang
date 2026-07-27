@@ -1636,6 +1636,34 @@ class FusedMoE(torch.nn.Module):
             f"elapsed={elapsed_ms:.2f} ms",
         )
 
+    def _release_shared_hbm_buffers(self):
+        """Release _shared_hbm_buffers to free HBM when switching to decode.
+
+        During N=0 prefill, _load_experts_on_demand allocates
+        _shared_hbm_buffers [num_local_experts, ...] and keeps them for
+        reuse across prefill forwards. When switching to decode, these
+        buffers are not needed (decode uses compact [num_active, ...]
+        buffers via build_active_weight_tensors). Releasing them frees
+        significant HBM (all offloaded experts' weights) for decode use.
+
+        Next prefill will re-allocate via _load_experts_on_demand
+        (checked by: if _shared_hbm_buffers is None).
+        """
+        if (
+            not getattr(self, "_dram_offload_enabled", False)
+            or not hasattr(self, "_shared_hbm_buffers")
+            or self._shared_hbm_buffers is None
+        ):
+            return
+        # Clear layer weight references that point to shared buffers.
+        for name in self._shared_hbm_buffers:
+            if (
+                hasattr(self, name)
+                and getattr(self, name) is self._shared_hbm_buffers[name]
+            ):
+                setattr(self, name, None)
+        self._shared_hbm_buffers = None
+
     def free_prefill_cache(self):
         """Release this layer's prefetched HBM buffers after compute.
 

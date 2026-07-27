@@ -1094,6 +1094,21 @@ class KimiLinearModel(nn.Module):
                     and experts._expert_weight_store is not None
                 ):
                     experts._expert_weight_store.set_cache_mode(is_prefill)
+                    # When switching to decode, release _shared_hbm_buffers
+                    # (allocated during N=0 prefill) to free HBM. Decode
+                    # uses compact [num_active, ...] buffers via
+                    # build_active_weight_tensors, not _shared_hbm_buffers.
+                    # Without this, all offloaded experts' weights remain
+                    # in HBM during decode, defeating DRAM offload purpose.
+                    if not is_prefill:
+                        experts._release_shared_hbm_buffers()
+        # Return freed HBM to the caching allocator after releasing shared
+        # buffers. Called once per mode switch (not per layer) to avoid
+        # repeated device-wide syncs.
+        if not is_prefill:
+            import gc
+            gc.collect()
+            torch.npu.empty_cache()
 
         # Sliding-window prefetch: pre-trigger async H2D copy for the first
         # N offloaded MoE layers (pipeline fill), then during the compute
