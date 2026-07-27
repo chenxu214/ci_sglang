@@ -6,20 +6,23 @@ Top-K selected experts are loaded from Host DRAM to HBM on demand.
 
 Two backends are supported:
   1. acc_offload (default when available): Uses MemFabric acc_offload
-     AICore AIV kernel with MTE engine for batch sparse copy.
+     group_pack_copy kernel with MTE engine for batch H2D copy.
      Higher performance due to 32-core parallelism and reduced API overhead.
-  2. PyTorch H2D (fallback): Uses tensor.to("npu", non_blocking=True).
+  2. PyTorch H2D (fallback): Uses tensor.copy_(non_blocking=True).
      No external dependency, works everywhere.
 
-Weight loading paths:
+Weight loading paths (all use group_pack_copy kernel):
   - Prefill (with prefetch): prefetch_layer_to_buffer() async-loads ALL
-    experts for the first N layers on h2d_stream. wait_prefill_prefetch()
+    experts for the first N layers on h2d_stream. Uses a fake all-ones
+    group_list (real group_list not available pre-dispatch); CANN later
+    uses the real group_list from DeepEP dispatch. wait_prefill_prefetch()
     synchronizes via per-layer NPU event before compute.
-  - Prefill (no prefetch, N=0): _load_experts_on_demand() loads Top-K
-    experts into shared HBM buffers synchronously per layer.
-  - Decode: build_active_weight_tensors() builds compact [num_active, ...]
-    tensors by loading only active experts from DRAM -- no HBM caching,
-    every decode step reads from Host DRAM in real time.
+  - Prefill (no prefetch, N=0): _load_experts_on_demand() loads ALL
+    local experts into shared HBM buffers synchronously per layer.
+    Same fake all-ones group_list approach as prefetch.
+  - Decode: group_pack_copy_active_weights() uses the real post-dispatch
+    group_list to load and compact active expert weights on-device,
+    outputting a packed group_list for CANN. No D2H sync required.
 """
 
 import logging
@@ -31,22 +34,6 @@ import torch_npu
 from sglang.srt.hardware_backend.npu.utils import NPUACLFormat
 
 logger = logging.getLogger(__name__)
-
-
-def _get_hbm_usage_gb() -> Tuple[float, float]:
-    """Get current HBM allocated/reserved memory in GB.
-
-    Returns:
-        (allocated_gb, reserved_gb)
-        - allocated: memory currently held by tensors
-        - reserved: total memory reserved by the caching allocator
-                    (closer to what system tools report)
-    """
-    if not torch.npu.is_available():
-        return 0.0, 0.0
-    allocated = torch.npu.memory_allocated() / 1024**3
-    reserved = torch.npu.memory_reserved() / 1024**3
-    return allocated, reserved
 
 
 def _drop_kernel_page_cache() -> None:
@@ -141,7 +128,7 @@ class ExpertWeightStore:
         # Decode mode flag: True during decode, False during prefill.
         # Used to select the weight loading path:
         #   - Prefill: _load_experts_on_demand / prefetch_layer_to_buffer
-        #   - Decode: build_active_weight_tensors (compact, real-time)
+        #   - Decode: group_pack_copy_active_weights (on-device compaction)
         self._is_decode_mode = False
 
         # Dedicated stream for H2D transfers (separate from compute stream)
@@ -161,12 +148,6 @@ class ExpertWeightStore:
         self._use_pool_for_storage = use_pool_for_storage
         if not use_pool_for_storage:
             self._dram_pool_size_bytes = 1 * 1024**3  # 1 GB staging
-
-        # Track registered layers for warmup
-        self._registered_layers: set = set()
-
-        # Statistics
-        self._stats = {"dram_load": 0, "total_requests": 0}
 
         # Hybrid storage: layers in _h2d_layer_ids use PyTorch H2D
         # (torch.empty) instead of acc_offload pool. Configured via
@@ -399,7 +380,6 @@ class ExpertWeightStore:
             del temp_cpu_tensors
 
         self.dram_store[key] = cpu_weights
-        self._registered_layers.add(layer_id)
 
         if expert_id % 64 == 0:
             logger.info(
@@ -527,246 +507,268 @@ class ExpertWeightStore:
         except Exception:
             pass
 
-    def _release_layer_cpu_tensors(self, layer_id: int):
-        """Force-release all CPU tensors associated with a layer.
-
-        Called after offload_expert_weights_to_dram() to release:
-          1. Parameter references (via delattr in offload_expert_weights_to_dram)
-          2. layer_ws references (via del in loader.py)
-          3. glibc malloc arenas (via malloc_trim)
-          4. PyTorch CPU caching allocator (via empty_cache)
-
-        This is a more aggressive release than _release_cpu_cache alone,
-        intended to be called once per layer after all references are gone.
-        """
-        self._release_cpu_cache()
-
-    def _batch_h2d_copy(
+    def group_pack_copy_to_buffers(
         self,
-        pairs: List[Tuple[torch.Tensor, torch.Tensor]],
-        sync: bool = True,
-        layer_id: Optional[int] = None,
-        wait_for_compute: bool = False,
+        layer_id: int,
+        weight_names: List[str],
+        target_buffers: Dict[str, torch.Tensor],
     ) -> None:
-        """Batch H2D copy via acc_offload sparse_copy with PyTorch fallback.
+        """Load ALL expert weights from DRAM into target HBM buffers via group_pack_copy.
 
-        Centralizes all H2D transfers so that sparse_copy constraints are
-        enforced in one place:
-          - size tensor MUST be 0-D scalar (matches reference usage)
-          - num_pairs MUST be even: if odd, split the last pair into two
-            halves (src_ptr + half, dst_ptr + half, len/2) to make it even
-          - sparse_copy runs on default stream (no stream context)
+        Prefill path: loads all local experts in order [0..N-1] without
+        compaction. Uses a synthetic all-ones group_list so the kernel copies
+        every expert. CANN later uses the real group_list from DeepEP dispatch
+        (not the synthetic one), so packed_group_list is discarded.
 
         Args:
-            pairs: List of (src_cpu_tensor, dst_hbm_tensor) pairs.
-                   src/dst must have the same nbytes.
-            sync: Whether to synchronize after copy. Set False for async
-                  prefetch (caller records an event instead).
-            layer_id: If in _h2d_layer_ids, skip sparse_copy and use
-                      copy_() directly (H2D tail layers stored via
-                      torch.empty, not in acc_offload pool).
-            wait_for_compute: If True, make _h2d_stream wait for the
-                  current (compute) stream before starting H2D copy.
-                  Required when writing to _shared_hbm_buffers, which
-                  the previous forward's compute may still be reading.
-                  Set True for batch_load_to_hbm (shared buffer reuse),
-                  False for prefetch_layer_to_buffer (separate buffers).
-        """
-        num_pairs = len(pairs)
-        if num_pairs == 0:
-            return
+            layer_id: Layer index
+            weight_names: List of weight parameter names
+            target_buffers: {name: [num_local_experts, ...] HBM tensor} —
+                            weights are written directly into these buffers
 
-        # H2D tail layers: src tensors are torch.empty (not in pool).
-        # Skip sparse_copy entirely — it would fail and waste time.
-        use_sparse = (
+        Raises:
+            RuntimeError: if group_pack_copy kernel returns a non-zero error.
+        """
+        self._ensure_initialize()
+
+        num_local_experts = target_buffers[weight_names[0]].shape[0]
+        target_device = target_buffers[weight_names[0]].device
+
+        use_group_pack = (
             self.use_acc_offload
             and self._offload_initialized
-            and (layer_id is None or layer_id not in self._h2d_layer_ids)
+            and (layer_id not in self._h2d_layer_ids)
         )
 
-        if use_sparse:
-            # Build (src_ptr, dst_ptr, nbytes) triples from pairs.
-            # If num_pairs is odd, split the last pair into two halves
-            # to make it even (sparse_copy requires even count).
+        if not use_group_pack:
+            # H2D tail layers: weights are stored via torch.empty (not in
+            # the acc_offload pool). Fall back to tensor.copy_() on the
+            # current stream — serialized with preceding compute and
+            # subsequent CANN ops on the same stream. non_blocking=True
+            # enables async H2D when called within a stream context (e.g.
+            # prefetch on _h2d_stream); for unpinned sources PyTorch
+            # silently falls back to synchronous copy.
+            for eid in range(num_local_experts):
+                key = (layer_id, eid)
+                if key not in self.dram_store:
+                    continue
+                dram_weights = self.dram_store[key]
+                for name in weight_names:
+                    target_buffers[name][eid].copy_(
+                        dram_weights[name], non_blocking=True
+                    )
+            return
+
+        # All-ones group_list: kernel copies ALL experts in order [0..N-1]
+        # without compaction. packed_group_list is all-ones and discarded —
+        # CANN uses the real group_list from DeepEP dispatch.
+        group_list = torch.ones(
+            num_local_experts, dtype=torch.int64, device=target_device
+        )
+        packed_group_list = torch.zeros(
+            num_local_experts, dtype=torch.int64, device=target_device
+        )
+        device = torch.device(f"npu:{torch.npu.current_device()}")
+
+        for name in weight_names:
             src_ptrs = []
             dst_ptrs = []
             len_ptrs = []
-
-            for src, dst in pairs:
-                src_ptrs.append(src.data_ptr())
-                dst_ptrs.append(dst.data_ptr())
-                len_ptrs.append(src.nbytes)
-
-            if num_pairs % 2 != 0:
-                # Split last pair into two halves
-                last_src = src_ptrs[-1]
-                last_dst = dst_ptrs[-1]
-                last_len = len_ptrs[-1]
-                half = last_len // 2
-                # Replace last pair with two half-size pairs
-                src_ptrs[-1] = last_src
-                dst_ptrs[-1] = last_dst
-                len_ptrs[-1] = half
-                src_ptrs.append(last_src + half)
-                dst_ptrs.append(last_dst + half)
-                len_ptrs.append(half)
-                num_pairs += 1
-
-            src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device="npu")
-            dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device="npu")
-            len_t = torch.tensor(len_ptrs, dtype=torch.int32, device="npu")
-            # 0-D scalar, matches reference usage in local_dram_offload.py
-            size_t = torch.tensor(num_pairs, dtype=torch.int32, device="npu")
-
-            device = torch.device(f"npu:{torch.npu.current_device()}")
-            # sparse_copy on default stream (no stream context), matching
-            # the reference usage. Running on h2d_stream causes the kernel
-            # to execute on a different stream than its args tensors.
-            ret = self._offload.sparse_copy(
-                src_ptr_t, dst_ptr_t, len_t, size_t, device
-            )
-
-            if ret == 0:
-                if sync:
-                    torch.npu.synchronize()
-                return
-
-            logger.warning(
-                f"[ExpertWeightStore] sparse_copy ret={ret}, "
-                f"using copy_() fallback"
-            )
-
-        # Fallback: PyTorch H2D copy_ (runs on h2d_stream).
-        #
-        # Race condition fix: when writing to _shared_hbm_buffers (reused
-        # across forwards), the previous forward's compute on the default
-        # stream may still be reading from the buffer. Without a stream
-        # dependency, the H2D copy on _h2d_stream can overlap with that
-        # compute, corrupting the data and causing precision degradation.
-        # acc_offload doesn't have this issue because sparse_copy runs on
-        # the default stream and torch.npu.synchronize() syncs all streams.
-        #
-        # Fix: record an event on the compute stream and make _h2d_stream
-        # wait for it before starting the copy. This serializes H2D with
-        # the previous compute, eliminating the race. Performance impact
-        # is minimal because batch_load_to_hbm is already synchronous.
-        if wait_for_compute and self._h2d_stream is not None:
-            compute_event = torch.npu.Event()
-            compute_event.record()  # Record on current (compute) stream
-            with torch.npu.stream(self._h2d_stream):
-                compute_event.wait()  # _h2d_stream waits for compute
-                for src, dst in pairs:
-                    dst.copy_(src, non_blocking=True)
-        else:
-            with torch.npu.stream(self._h2d_stream):
-                for src, dst in pairs:
-                    dst.copy_(src, non_blocking=True)
-        if sync:
-            self._h2d_stream.synchronize()
-
-    def batch_load_to_hbm(
-        self,
-        layer_id: int,
-        expert_ids: List[int],
-        shared_buffers: Dict[str, torch.Tensor],
-    ) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Batch load expert weights from DRAM to HBM buffers.
-
-        Writes weights directly into the provided HBM buffers indexed by
-        expert_id, avoiding an extra HBM→HBM copy.
-
-        Args:
-            layer_id: Layer index
-            expert_ids: List of expert IDs to load
-            shared_buffers: {weight_name: HBM tensor of shape [num_experts, ...]}
-
-        Returns:
-            {expert_id: {weight_name: view into shared_buffer}} for stats
-        """
-        self._ensure_initialize()
-        results = {}
-        missing = []
-
-        for eid in expert_ids:
-            key = (layer_id, eid)
-            self._stats["total_requests"] += 1
-
-            if key not in self.dram_store:
-                continue
-
-            self._stats["dram_load"] += 1
-            missing.append(key)
-
-        if not missing:
-            return results
-
-        # Build (src_cpu, dst_hbm) pairs pointing directly into the shared
-        # buffers. _batch_h2d_copy handles sparse_copy + fallback + sync.
-        pairs = []
-        for key in missing:
-            eid = key[1]
-            dram_weights = self.dram_store[key]
-            expert_views = {}
-
-            for name, dram_tensor in dram_weights.items():
-                if name not in shared_buffers:
+            for eid in range(num_local_experts):
+                key = (layer_id, eid)
+                if key not in self.dram_store:
+                    src_ptrs.append(0)
+                    dst_ptrs.append(target_buffers[name][eid].data_ptr())
+                    len_ptrs.append(0)
                     continue
-                dst_tensor = shared_buffers[name][eid]
-                expert_views[name] = dst_tensor
-                pairs.append((dram_tensor, dst_tensor))
+                dram_tensor = self.dram_store[key][name]
+                src_ptrs.append(dram_tensor.data_ptr())
+                dst_ptrs.append(target_buffers[name][eid].data_ptr())
+                len_ptrs.append(dram_tensor.nbytes)
 
-            results[eid] = expert_views
+            # Guard against int32 overflow: kernel lens are uint32.
+            max_len = max(len_ptrs) if len_ptrs else 0
+            if max_len >= 2**31:
+                msg = (
+                    f"expert weight nbytes ({max_len}) exceeds int32 range, "
+                    f"layer={layer_id} name={name}"
+                )
+                logger.error(msg)
+                raise ValueError(msg)
 
-        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id,
-                             wait_for_compute=True)
+            src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
+            dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
+            len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
+            num_le_t = torch.tensor(num_local_experts, dtype=torch.int32, device=target_device)
 
-        return results
+            ret = self._offload.group_pack_copy(
+                src_ptr_t, dst_ptr_t, len_t, num_le_t,
+                group_list, packed_group_list, device,
+            )
+            if ret != 0:
+                msg = (
+                    f"[ExpertWeightStore] group_pack_copy failed ret={ret} "
+                    f"layer={layer_id} name={name}"
+                )
+                logger.error(msg)
+                raise RuntimeError(msg)
 
-    def build_active_weight_tensors(
+    def group_pack_copy_active_weights(
         self,
         layer_id: int,
-        active_expert_ids: List[int],
+        group_list: torch.Tensor,
         weight_names: List[str],
-    ) -> Dict[str, torch.Tensor]:
-        """Build compact [num_active, ...] weight tensors for active experts.
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        """Build compact weight tensors via group_pack_copy kernel.
 
-        Loads only the active (token-bearing) experts from Host DRAM to HBM
-        in real time. No HBM caching -- every decode step reads from DRAM.
+        Decode path: passes ALL local experts to group_pack_copy with the
+        per-expert group_list; the NPU kernel copies only non-zero entries
+        to the front of the output buffer and outputs packedGroupList
+        (compacted group_list).
+
+        Eliminates:
+          - group_list.cpu() D2H sync
+          - nonzero().squeeze(-1).tolist() host materialization
+          - group_list_cpu[active_mask].to(device) H2D re-upload
+          - sparse_copy odd-pair halving workaround
 
         Args:
             layer_id: Layer index
-            active_expert_ids: Sorted list of expert IDs with tokens
+            group_list: [num_local_experts] int64 tensor on device,
+                        per-expert token counts from DeepEP dispatch
             weight_names: List of weight parameter names
 
         Returns:
-            {weight_name: tensor of shape [num_active, ...]}
+            (weights, packed_group_list):
+              weights: {name: [num_local_experts, ...] tensor} — only
+                       [0..M) slots are valid (M = non-zero group_list count)
+              packed_group_list: [num_local_experts] int64 tensor —
+                       first M entries are non-zero (compacted), rest are zero
+
+        Raises:
+            RuntimeError: if group_pack_copy kernel returns a non-zero error.
         """
         self._ensure_initialize()
 
-        num_active = len(active_expert_ids)
-        sample_key = (layer_id, active_expert_ids[0])
+        # Validate group_list properties to catch mismatches early.
+        assert group_list.dim() == 1, (
+            f"group_list must be 1-D, got shape {group_list.shape}"
+        )
+        assert group_list.dtype == torch.int64, (
+            f"group_list must be int64, got {group_list.dtype}"
+        )
+        assert group_list.device.type == "npu", (
+            f"group_list must be on NPU, got {group_list.device}"
+        )
 
-        # Allocate compact [num_active, ...] HBM buffers
-        result = {}
+        num_local_experts = group_list.shape[0]
+        target_device = group_list.device
+        sample_key = (layer_id, 0)
+        if sample_key not in self.dram_store:
+            return {}, group_list
+
+        # Pre-allocate [num_local_experts, ...] HBM buffers (reusable across
+        # decode steps). The kernel writes compacted data to [0..M); the tail
+        # [M..N) is stale but CANN skips it because packed_group_list[M..N)==0.
+        # Validate shape on reuse to handle heterogeneous MoE layers safely.
+        if not hasattr(self, "_shared_decode_buffers") or self._shared_decode_buffers is None:
+            self._shared_decode_buffers = {}
         for name in weight_names:
             sample_tensor = self.dram_store[sample_key][name]
-            full_shape = (num_active,) + sample_tensor.shape
-            result[name] = torch.empty(
-                full_shape, dtype=sample_tensor.dtype, device="npu"
+            full_shape = (num_local_experts,) + tuple(sample_tensor.shape)
+            buf = self._shared_decode_buffers.get(name)
+            if buf is None or tuple(buf.shape) != full_shape:
+                buf = torch.empty(
+                    full_shape, dtype=sample_tensor.dtype, device=target_device
+                )
+                self._shared_decode_buffers[name] = buf
+        result = self._shared_decode_buffers
+
+        use_group_pack = (
+            self.use_acc_offload
+            and self._offload_initialized
+            and (layer_id not in self._h2d_layer_ids)
+        )
+
+        if not use_group_pack:
+            # H2D tail layers: weights are stored via torch.empty (not in the
+            # acc_offload pool), so group_pack_copy cannot be used. Fall back
+            # to tensor.copy_() directly on the current (default) stream.
+            # No cross-stream synchronization needed — copy_() is serialized
+            # with preceding compute and subsequent CANN ops on the same
+            # stream. Use original group_list (uncompacted); CANN skips zero
+            # entries.
+            for eid in range(num_local_experts):
+                key = (layer_id, eid)
+                if key not in self.dram_store:
+                    continue
+                dram_weights = self.dram_store[key]
+                for name in weight_names:
+                    result[name][eid].copy_(
+                        dram_weights[name], non_blocking=True
+                    )
+            return result, group_list
+
+        # Allocate packed_group_list output buffer (zero-filled so the tail
+        # beyond M remains zero for CANN to skip). Small tensor (N int64
+        # values, e.g. 2 KB for 256 experts), no need to cache across calls.
+        packed_group_list = torch.zeros(
+            num_local_experts, dtype=torch.int64, device=target_device
+        )
+
+        device = torch.device(f"npu:{torch.npu.current_device()}")
+
+        # Call group_pack_copy once per weight name. Each call gets the same
+        # group_list and packed_group_list (per-expert, not per-weight).
+        for name in weight_names:
+            src_ptrs = []
+            dst_ptrs = []
+            len_ptrs = []
+            for eid in range(num_local_experts):
+                key = (layer_id, eid)
+                if key not in self.dram_store:
+                    src_ptrs.append(0)
+                    dst_ptrs.append(result[name][eid].data_ptr())
+                    len_ptrs.append(0)
+                    continue
+                dram_tensor = self.dram_store[key][name]
+                src_ptrs.append(dram_tensor.data_ptr())
+                dst_ptrs.append(result[name][eid].data_ptr())
+                len_ptrs.append(dram_tensor.nbytes)
+
+            # Guard against int32 overflow: kernel lens are uint32, so any
+            # single expert weight exceeding 2^31 bytes would wrap silently.
+            max_len = max(len_ptrs) if len_ptrs else 0
+            if max_len >= 2**31:
+                msg = (
+                    f"expert weight nbytes ({max_len}) exceeds int32 range, "
+                    f"layer={layer_id} name={name}"
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+
+            src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
+            dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
+            len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
+            num_le_t = torch.tensor(num_local_experts, dtype=torch.int32, device=target_device)
+
+            ret = self._offload.group_pack_copy(
+                src_ptr_t, dst_ptr_t, len_t, num_le_t,
+                group_list, packed_group_list, device,
             )
+            if ret != 0:
+                msg = (
+                    f"[ExpertWeightStore] group_pack_copy failed ret={ret} "
+                    f"layer={layer_id} name={name}"
+                )
+                logger.error(msg)
+                raise RuntimeError(msg)
 
-        # Build (src_cpu, dst_hbm) pairs for batch sparse_copy.
-        pairs = []
-        for i, eid in enumerate(active_expert_ids):
-            self._stats["total_requests"] += 1
-            self._stats["dram_load"] += 1
-            dram_weights = self.dram_store[(layer_id, eid)]
-            for name in weight_names:
-                pairs.append((dram_weights[name], result[name][i]))
-
-        self._batch_h2d_copy(pairs, sync=True, layer_id=layer_id)
-
-        return result
+        # No explicit sync needed: group_pack_copy runs on the current (default)
+        # NPU stream via c10_npu::getCurrentNPUStream, and subsequent CANN GMM
+        # operations also run on the default stream. Stream ordering guarantees
+        # the copy completes before GMM reads the buffer.
+        return result, packed_group_list
 
     # ------------------------------------------------------------------
     # Prefill full-layer prefetch + cache mode management
@@ -777,9 +779,12 @@ class ExpertWeightStore:
 
         Sets _is_decode_mode which controls the weight loading path:
           - Prefill (is_prefill=True): _load_experts_on_demand /
-            prefetch_layer_to_buffer loads into [num_local_experts, ...] buffers
-          - Decode (is_prefill=False): build_active_weight_tensors builds
-            compact [num_active, ...] tensors directly from DRAM
+            prefetch_layer_to_buffer uses group_pack_copy with a fake
+            all-ones group_list to load ALL experts into
+            [num_local_experts, ...] buffers
+          - Decode (is_prefill=False): group_pack_copy_active_weights uses
+            the real post-dispatch group_list to compact active expert
+            weights on-device with no D2H sync
         """
         self._is_decode_mode = not is_prefill
 
@@ -795,9 +800,15 @@ class ExpertWeightStore:
         """Prefetch ALL experts for a layer into per-layer HBM buffers.
 
         Allocates [num_experts, ...] tensors and loads from DRAM on
-        h2d_stream (async, no sync). Caller must wait on the returned
-        event (or call sync_prefetch() if the event is None) before using
-        the buffers, and free_layer_buffers() after compute to release HBM.
+        h2d_stream (async, no sync). Uses group_pack_copy with an all-ones
+        (fake) group_list — at prefetch time the real group_list from
+        DeepEP dispatch is not yet available. After dispatch, CANN uses
+        the real group_list to index into the loaded weights; the fake
+        group_list is never passed to CANN.
+
+        Caller must wait on the returned event (or call sync_prefetch()
+        if the event is None) before using the buffers, and
+        free_layer_buffers() after compute to release HBM.
 
         Returns:
             (buffers, event): buffers is {weight_name: hbm_tensor of shape
@@ -811,6 +822,12 @@ class ExpertWeightStore:
         self._ensure_initialize()
 
         sample_key = (layer_id, 0)
+        if sample_key not in self.dram_store:
+            logger.warning(
+                f"[ExpertWeightStore] prefetch_layer_to_buffer: "
+                f"layer_id={layer_id} not in dram_store, skipping"
+            )
+            return {}, None
         weight_names = list(self.dram_store[sample_key].keys())
 
         buffers = {}
@@ -821,29 +838,27 @@ class ExpertWeightStore:
                 full_shape, dtype=sample_tensor.dtype, device="npu"
             )
 
-        expert_ids = list(range(num_experts))
-
-        # Build (src_cpu, dst_hbm) pairs for batch sparse_copy.
-        pairs = []
-        for eid in expert_ids:
-            key = (layer_id, eid)
-            dram_weights = self.dram_store[key]
-            for name, dram_tensor in dram_weights.items():
-                if name in buffers:
-                    pairs.append((dram_tensor, buffers[name][eid]))
-
         event = None
         if self._h2d_stream is not None:
             event = torch.npu.Event()
-            # Async batch H2D: sparse_copy runs on h2d_stream without sync.
-            # Caller waits on event (recorded below) before using buffers.
-            self._batch_h2d_copy(pairs, sync=False, layer_id=layer_id)
+            # Run group_pack_copy on _h2d_stream for async prefetch.
+            # The stream context ensures group_pack_copy (which calls
+            # c10_npu::getCurrentNPUStream internally) executes on
+            # _h2d_stream, and the event captures its completion.
             with torch.npu.stream(self._h2d_stream):
+                self.group_pack_copy_to_buffers(
+                    layer_id=layer_id,
+                    weight_names=weight_names,
+                    target_buffers=buffers,
+                )
                 event.record()
         else:
             # No h2d_stream (CPU-only): synchronous copy, no event needed.
-            for src, dst in pairs:
-                dst.copy_(src)
+            self.group_pack_copy_to_buffers(
+                layer_id=layer_id,
+                weight_names=weight_names,
+                target_buffers=buffers,
+            )
 
         return buffers, event
 
@@ -858,26 +873,7 @@ class ExpertWeightStore:
         """
         if not buffers:
             return
-        freed_mb = sum(t.nbytes for t in buffers.values()) / 1024**2
         buffers.clear()
-
-    def uninitialize(self):
-        """Cleanup acc_offload resources."""
-        if self._offload_initialized:
-            try:
-                self._offload.uninitialize()
-            except Exception:
-                pass
-            self._offload_initialized = False
-
-    def get_stats(self) -> dict:
-        total = max(self._stats["total_requests"], 1)
-        return {
-            "dram_load_count": self._stats["dram_load"],
-            "total_requests": self._stats["total_requests"],
-            "dram_total_experts": len(self.dram_store),
-            "backend": "acc_offload" if self.use_acc_offload else "pytorch_h2d",
-        }
 
     def get_dram_usage_gb(self) -> float:
         """Get total DRAM usage in GB."""

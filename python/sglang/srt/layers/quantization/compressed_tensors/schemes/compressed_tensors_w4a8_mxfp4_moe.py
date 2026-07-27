@@ -466,46 +466,29 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
             topk_weights=dispatch_output.topk_weights,
         )
 
-    # Decode DRAM offload: build compact [num_active, ...] weight tensors
-    # after dispatch (we know which experts received tokens). Replaces the
-    # [224, ...] shared buffer with a smaller [num_active, ...] tensor.
-    # Prefill uses the shared buffer (pre-loaded by _load_experts_on_demand).
+    # Decode DRAM offload: use group_pack_copy to load active expert weights
+    # from DRAM and compact group_list, entirely on-device (no D2H sync).
+    # The kernel copies only non-zero group_list entries to the front of the
+    # weight buffer and outputs packedGroupList. CANN skips experts with 0
+    # tokens in the tail. Prefill uses the shared buffer (pre-loaded by
+    # _load_experts_on_demand).
     if (
         getattr(layer, "_dram_offload_enabled", False)
         and layer._expert_weight_store is not None
         and layer._expert_weight_store._is_decode_mode
     ):
-        group_list_cpu = group_list.cpu()
-        active_mask = group_list_cpu > 0
-        active_expert_ids = active_mask.nonzero().squeeze(-1).tolist()
-        if not isinstance(active_expert_ids, list):
-            active_expert_ids = [active_expert_ids]
-        num_active = len(active_expert_ids)
-
-        if num_active > 16:
-            logger.debug(
-                f"Decode active experts ({num_active}) exceeds 16, "
-                f"using compact path. active_expert_ids={active_expert_ids}"
+        store = layer._expert_weight_store
+        sample_key = (layer.layer_id, 0)
+        # Guard against missing dram_store entry (e.g., skip-layers or
+        # initialization timing). group_pack_copy_active_weights has its
+        # own defense, but we need weight_names before calling it.
+        if sample_key in store.dram_store:
+            weight_names = list(store.dram_store[sample_key].keys())
+            compact_weights, group_list = store.group_pack_copy_active_weights(
+                layer.layer_id, group_list, weight_names
             )
-
-        if num_active == 0:
-            return combine_cls(
-                hidden_states=hidden_states,
-                topk_ids=dispatch_output.topk_ids,
-                topk_weights=dispatch_output.topk_weights,
-            )
-
-        sample_key = (layer.layer_id, active_expert_ids[0])
-        weight_names = list(
-            layer._expert_weight_store.dram_store[sample_key].keys()
-        )
-        compact_weights = layer._expert_weight_store.build_active_weight_tensors(
-            layer.layer_id, active_expert_ids, weight_names
-        )
-        for name, tensor in compact_weights.items():
-            setattr(layer, name, tensor)
-
-        group_list = group_list_cpu[active_mask].to(hidden_states.device)
+            for name, tensor in compact_weights.items():
+                setattr(layer, name, tensor)
 
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
@@ -545,11 +528,15 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         is_nd_format=is_nd_format,
     )
     # Release w13 compact weights after GMM to reduce HBM peak.
-    # In DRAM offload path, build_active_weight_tensors allocates compact
-    # [num_active, ...] ND tensors. The NZ conversion inside
-    # w4a8_mxfp4_gmm_npu creates additional tensors. Without releasing
-    # the compact weights here, w13 compact + w13 NZ + w2 compact + w2 NZ
-    # all coexist in HBM, causing OOM during prefill (num_active ≈ 112).
+    # In the DRAM offload prefill path, _load_experts_on_demand loads
+    # [num_local_experts, ...] ND tensors into shared HBM buffers. The NZ
+    # conversion inside w4a8_mxfp4_gmm_npu creates additional tensors.
+    # Without dropping the layer reference here, w13 ND + w13 NZ + w2 ND
+    # + w2 NZ all coexist in HBM, causing OOM during prefill.
+    # NOTE: In the decode path, weights point to _shared_decode_buffers
+    # (reused across steps); setting to None here only drops the layer's
+    # reference, not the underlying HBM. This is harmless — decode M is
+    # small so peak pressure is lower.
     if is_nd_format:
         layer.w13_weight = None
         layer.w13_weight_scale = None

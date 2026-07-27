@@ -1459,37 +1459,26 @@ class FusedMoE(torch.nn.Module):
         )
 
     def _load_experts_on_demand(self, topk_output: TopKOutput):
-        """Load Top-K selected experts from DRAM directly into shared HBM buffer."""
-        if not hasattr(topk_output, "topk_ids") or topk_output.topk_ids is None:
-            return
+        """Load ALL local experts from DRAM into shared HBM buffer.
 
-        topk_ids = topk_output.topk_ids
-        # Flatten and get unique local expert IDs.
-        # .unique().cpu().tolist() triggers NPU→CPU sync; use .view(-1).tolist()
-        # + set() on CPU side to avoid the extra unique() kernel launch.
-        global_expert_ids = list(set(topk_ids.view(-1).cpu().tolist()))
+        Prefill-only: DeepEPMoE.forward_impl skips this in decode via the
+        _is_decode_mode guard; decode uses group_pack_copy_active_weights
+        (post-dispatch) in npu_apply_w4a8_mxfp4_moe_deepep instead.
 
-        local_expert_ids = []
-        for gid in global_expert_ids:
-            lid = self._map_global_expert_id_to_local_expert_id(gid)
-            if lid >= 0 and lid < self.num_local_experts:
-                local_expert_ids.append(lid)
-
-        # Determine weight names from a sample expert's stored weights.
-        # Use expert 0 as sample when no local experts are selected (can
-        # happen in DeepEP when pre-dispatch topk_ids don't include local
-        # experts, but post-dispatch may still route tokens here).
-        sample_eid = local_expert_ids[0] if local_expert_ids else 0
-        sample_key = (self.layer_id, sample_eid)
+        Since DeepEP dispatch redistributes tokens across ranks post-routing,
+        pre-dispatch topk_ids cannot predict which local experts will receive
+        tokens. All local experts are loaded unconditionally. The topk_output
+        parameter is retained for API compatibility but is no longer used.
+        """
+        sample_key = (self.layer_id, 0)
         if sample_key not in self._expert_weight_store.dram_store:
             return
         weight_names = list(
             self._expert_weight_store.dram_store[sample_key].keys()
         )
 
-        # Always allocate [num_local_experts, ...] HBM buffers and set
-        # them as layer weights — even when no local experts are selected.
-        # This ensures the weight shape is correct for the CANN kernel
+        # Allocate [num_local_experts, ...] HBM buffers and set them as
+        # layer weights. The full shape is required for the CANN kernel
         # (group_list size == weight dim 0). Without this, stale weights
         # from a previous decode (e.g., [num_active, ...]) would persist
         # and cause a shape mismatch error.
@@ -1511,27 +1500,14 @@ class FusedMoE(torch.nn.Module):
         for name in weight_names:
             setattr(self, name, shared_buffers[name])
 
-        # During prefill (_is_decode_mode == False), load ALL local experts
-        # into the shared buffer. DeepEP dispatch redistributes tokens
-        # post-routing, so pre-dispatch topk_ids may not include all experts
-        # that will receive tokens. Loading only selected experts leaves
-        # stale data (from a previous decode) in unselected slots, causing
-        # precision degradation. During decode, only selected experts are
-        # loaded (compact path handles weight extraction separately).
-        is_prefill = not self._expert_weight_store._is_decode_mode
-        if is_prefill:
-            load_expert_ids = list(range(self.num_local_experts))
-        else:
-            load_expert_ids = local_expert_ids
-
-        if not load_expert_ids:
-            return
-
-        # Batch H2D directly into the allocated buffers.
-        self._expert_weight_store.batch_load_to_hbm(
+        # Load ALL local experts via group_pack_copy — same kernel as decode.
+        # Uses an all-ones group_list so the kernel copies every expert in
+        # order without compaction. CANN later uses the real group_list from
+        # DeepEP dispatch.
+        self._expert_weight_store.group_pack_copy_to_buffers(
             layer_id=self.layer_id,
-            expert_ids=load_expert_ids,
-            shared_buffers=shared_buffers,
+            weight_names=weight_names,
+            target_buffers=shared_buffers,
         )
 
     # ------------------------------------------------------------------ #
