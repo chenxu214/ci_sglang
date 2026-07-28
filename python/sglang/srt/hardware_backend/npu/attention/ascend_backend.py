@@ -1785,11 +1785,11 @@ class AscendAttnBackend(AttentionBackend):
                 )
 
                 attn_output, _ = torch.ops.npu.npu_fused_infer_attention_score(
-                    q_nope,
-                    k_nope,
-                    v,
-                    query_rope=q_rope,
-                    key_rope=k_rope,
+                    q_nope.contiguous(),
+                    k_nope.contiguous(),
+                    v.contiguous(),
+                    query_rope=q_rope.contiguous(),
+                    key_rope=k_rope.contiguous(),
                     num_heads=layer.tp_q_head_num,
                     input_layout="TND",
                     atten_mask=self.fia_mask,

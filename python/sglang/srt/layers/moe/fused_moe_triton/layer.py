@@ -10,6 +10,7 @@ from functools import cached_property
 from typing import List, Optional, Tuple
 
 import torch
+import torch_npu
 from torch.nn.parameter import UninitializedParameter
 
 from sglang.srt.batch_overlap.single_batch_overlap import DownGemmOverlapArgs
@@ -1458,69 +1459,82 @@ class FusedMoE(torch.nn.Module):
         )
 
     def _load_experts_on_demand(self, topk_output: TopKOutput):
-        """Load ALL local experts from DRAM into shared HBM buffer.
+        """Load ALL local experts from DRAM into global shared HBM buffer.
 
         Prefill-only: DeepEPMoE.forward_impl skips this in decode via the
         _is_decode_mode guard; decode uses group_pack_copy_active_weights
         (post-dispatch) in npu_apply_w4a8_mxfp4_moe_deepep instead.
 
-        Since DeepEP dispatch redistributes tokens across ranks post-routing,
-        pre-dispatch topk_ids cannot predict which local experts will receive
-        tokens. All local experts are loaded unconditionally. The topk_output
-        parameter is retained for API compatibility but is no longer used.
+        Uses ExpertWeightStore's global shared buffers (all offloaded layers
+        share one NZ-format HBM buffer set) instead of per-layer
+        _shared_hbm_buffers. Prefill layers are processed sequentially, so
+        only one layer's weights need to be resident at a time. This
+        eliminates 58 × ~60 MB = 3.5 GB of per-layer buffer accumulation
+        that caused HBM OOM. Global buffers are pre-allocated once (NZ
+        format) at first use, no per-layer npu_format_cast during prefill.
+
+        The topk_output parameter is retained for API compatibility but is
+        no longer used.
         """
         sample_key = (self.layer_id, 0)
-        if sample_key not in self._expert_weight_store.dram_store:
+        store = self._expert_weight_store
+        if sample_key not in store.dram_store:
             return
-        weight_names = list(
-            self._expert_weight_store.dram_store[sample_key].keys()
-        )
+        weight_names = list(store.dram_store[sample_key].keys())
 
-        # Allocate [num_local_experts, ...] HBM buffers and set them as
-        # layer weights. The full shape is required for the CANN kernel
-        # (group_list size == weight dim 0). Without this, stale weights
-        # from a previous decode (e.g., [num_active, ...]) would persist
-        # and cause a shape mismatch error.
         target_device = "npu" if torch.npu.is_available() else "cpu"
-        # Pre-allocate HBM buffers once and reuse across forward passes.
-        # Per-forward torch.empty() causes OOM on repeated requests because
-        # old buffers aren't freed fast enough by the caching allocator.
-        if not hasattr(self, "_shared_hbm_buffers") or self._shared_hbm_buffers is None:
-            self._shared_hbm_buffers = {}
-            for name in weight_names:
-                sample_tensor = self._expert_weight_store.dram_store[sample_key][name]
-                full_shape = (self.num_local_experts,) + sample_tensor.shape
-                dtype = sample_tensor.dtype
-                self._shared_hbm_buffers[name] = torch.empty(
-                    full_shape, dtype=dtype, device=target_device
-                )
-        # Reuse pre-allocated buffers (H2D will overwrite contents)
-        shared_buffers = self._shared_hbm_buffers
-        for name in weight_names:
-            setattr(self, name, shared_buffers[name])
 
-        # Load ALL local experts via group_pack_copy — same kernel as decode.
-        # Uses an all-ones group_list so the kernel copies every expert in
-        # order without compaction. CANN later uses the real group_list from
-        # DeepEP dispatch.
-        self._expert_weight_store.group_pack_copy_to_buffers(
-            layer_id=self.layer_id,
-            weight_names=weight_names,
-            target_buffers=shared_buffers,
+        # Graph capture: skip dynamic loading. Warmup (eager mode) already
+        # ran this path and loaded weights into the global buffers; graph
+        # replay reuses those resident values. Loading during capture
+        # would allocate new tensors whose addresses differ from the
+        # captured graph, causing silent data corruption.
+        if torch.npu.is_available() and torch.npu.is_current_stream_capturing():
+            # Global buffers were populated during warmup. Just set layer
+            # refs to the buffer dict (stored in _shared_hbm_buffers during
+            # warmup's first call).
+            if (
+                hasattr(self, "_shared_hbm_buffers")
+                and self._shared_hbm_buffers is not None
+            ):
+                for name in weight_names:
+                    setattr(self, name, self._shared_hbm_buffers[name])
+            return
+
+        # Use global shared HBM buffers from ExpertWeightStore.
+        # Pre-allocated once (NZ format) on first call; reused across all
+        # offloaded layers.
+        global_buffers = store._ensure_shared_global_buffers(
+            self.layer_id, self.num_local_experts, weight_names,
+            sample_key, target_device,
         )
 
-    # ------------------------------------------------------------------ #
-    # DRAM offload buffer management
-    # ------------------------------------------------------------------ #
+        # Cache global buffer ref on this layer so _release_shared_hbm_buffers
+        # can clear weight refs on prefill→decode transition. The buffers
+        # themselves are owned by ExpertWeightStore, not this layer instance.
+        self._shared_hbm_buffers = global_buffers
+
+        # Load weights from DRAM into the global HBM buffers via group_pack_copy.
+        store.group_pack_copy_to_buffers(
+            self.layer_id, weight_names, global_buffers
+        )
+
+        # Set layer weight references to the global buffers.
+        for name in weight_names:
+            setattr(self, name, global_buffers[name])
 
     def _release_shared_hbm_buffers(self):
-        """Release _shared_hbm_buffers to free HBM when switching to decode.
+        """Clear layer weight refs on prefill→decode transition.
 
-        Clears layer weight references that point into the shared buffers
-        and sets _shared_hbm_buffers to None so the HBM is returned to the
-        caching allocator. Called from kimi_k3 on prefill→decode transition
-        to avoid leaving all offloaded layers' [num_local_experts, ...]
-        HBM buffers resident during decode.
+        With global shared HBM buffers (all offloaded layers reuse one set
+        of NZ-format buffers owned by ExpertWeightStore), we only clear
+        this layer's weight references to the global buffers, NOT the
+        buffers themselves. Decode's group_pack_copy_active_weights will
+        overwrite the same global buffers with compacted active experts.
+
+        Called from kimi_k3 on prefill→decode transition so each layer's
+        w13_weight/w2_weight/scale attrs don't retain stale references to
+        prefill data that decode will overwrite.
         """
         if (
             not getattr(self, "_dram_offload_enabled", False)
@@ -1534,7 +1548,9 @@ class FusedMoE(torch.nn.Module):
                 and getattr(self, name) is self._shared_hbm_buffers[name]
             ):
                 setattr(self, name, None)
-        self._shared_hbm_buffers = None
+        # Keep _shared_hbm_buffers ref — it points to ExpertWeightStore's
+        # global buffers, needed for graph capture (capture uses the refs
+        # set during warmup). The buffers are reused, not freed.
 
     @classmethod
     def make_expert_params_mapping(

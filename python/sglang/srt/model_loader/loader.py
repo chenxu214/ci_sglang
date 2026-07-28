@@ -877,7 +877,10 @@ class DefaultModelLoader(BaseModelLoader):
         import re
         from collections import defaultdict
 
-        from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+        from sglang.srt.layers.moe.fused_moe_triton.layer import (
+            FusedMoE,
+            _force_cpu_allocation,
+        )
 
         quant_config = getattr(model, "quant_config", None)
         is_nvfp4_online = getattr(quant_config, "is_nvfp4_online", False)
@@ -1061,9 +1064,17 @@ class DefaultModelLoader(BaseModelLoader):
             with device_loading_context(module, target_device):
                 quant_method.process_weights_after_loading(module)
         gc.collect()
+        # Synchronize NPU stream before Phase 3 to ensure all async
+        # format_cast(NZ) operations from Phase 2's process_weights_after_loading
+        # are complete. Without this, Phase 3's param.data.copy_() (H2D on the
+        # same default stream) waits for 35 layers of accumulated format_cast
+        # work, exceeding NPU's vector core timeout threshold and causing
+        # "vector core timeout" (error 507034).
+        # Only needed for large skip-layer counts (e.g., 35 HBM-resident MoE
+        # layers in full-network offload); 5-layer test passes without it.
+        if torch.npu.is_available():
+            torch.npu.synchronize()
         _log_host_dram("Phase-2-end")
-
-        # ---- Phase 3: layer-by-layer load + process + offload ----
         for layer_id in sorted(deferred_layer_weights.keys()):
             moe_mod = non_skip_moe_modules.get(layer_id)
             layer_ws = deferred_layer_weights[layer_id]
@@ -1076,36 +1087,47 @@ class DefaultModelLoader(BaseModelLoader):
                 gc.collect()
                 continue
 
+            # Synchronize NPU stream before materializing meta params.
+            # Phase-3's 3a step calls torch.empty(device="cpu").cpu(),
+            # which transfer_to_npu.py redirects to NPU allocation +
+            # D2H copy. If the NPU default stream has accumulated async
+            # work (from prior layer's register_layer_batch H2D/D2H or
+            # Phase-2's format_cast tail), the D2H copy blocks on the
+            # stream and may exceed vector core timeout under multi-rank
+            # contention. Explicit sync per layer prevents accumulation.
+            if torch.npu.is_available():
+                torch.npu.synchronize()
+
             # 3a. Materialize meta params → CPU (single layer only).
-            # Replace meta Parameter with a new CPU Parameter directly,
-            # bypassing Parameter.set_data() which rejects meta→CPU
-            # assignment with "incompatible tensor type". The .cpu()
-            # guard handles transfer_to_npu.py redirecting torch.empty
-            # to NPU even when device="cpu" is specified explicitly.
+            # Use _force_cpu_allocation to ensure torch.empty allocates
+            # on CPU directly, bypassing transfer_to_npu.py's redirect
+            # to NPU. This avoids an unnecessary NPU→CPU D2H copy that
+            # could block on pending async NPU operations.
             meta_params = [
                 (n, p) for n, p in moe_mod.named_parameters()
                 if p.device.type == "meta"
             ]
-            for full_name, param in meta_params:
-                new_data = torch.empty(
-                    param.shape, dtype=param.dtype, device="cpu"
-                ).cpu()
-                new_param = torch.nn.Parameter(
-                    new_data, requires_grad=False
-                )
-                # Preserve custom attributes (weight_loader, etc.)
-                for key, value in param.__dict__.items():
-                    if not key.startswith("_"):
-                        setattr(new_param, key, value)
-                # Navigate to parent module for nested param names.
-                if "." in full_name:
-                    parts = full_name.split(".")
-                    parent = moe_mod
-                    for part in parts[:-1]:
-                        parent = getattr(parent, part)
-                    setattr(parent, parts[-1], new_param)
-                else:
-                    setattr(moe_mod, full_name, new_param)
+            with _force_cpu_allocation():
+                for full_name, param in meta_params:
+                    new_data = torch.empty(
+                        param.shape, dtype=param.dtype
+                    )
+                    new_param = torch.nn.Parameter(
+                        new_data, requires_grad=False
+                    )
+                    # Preserve custom attributes (weight_loader, etc.)
+                    for key, value in param.__dict__.items():
+                        if not key.startswith("_"):
+                            setattr(new_param, key, value)
+                    # Navigate to parent module for nested param names.
+                    if "." in full_name:
+                        parts = full_name.split(".")
+                        parent = moe_mod
+                        for part in parts[:-1]:
+                            parent = getattr(parent, part)
+                        setattr(parent, parts[-1], new_param)
+                    else:
+                        setattr(moe_mod, full_name, new_param)
             # Release meta_params references so the meta device Parameters
             # can be GC'd before weight loading.
             del meta_params, full_name, param, new_data, new_param
