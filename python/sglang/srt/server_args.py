@@ -2054,15 +2054,6 @@ class ServerArgs:
         "for batch sparse copy from DRAM to HBM. Falls back to PyTorch "
         "H2D if memfabric_hybrid is not available. Defaults to True.",
     ] = True
-    moe_dram_prefetch_layers: A[
-        int,
-        "Number of offloaded MoE layers to async-prefetch at prefill "
-        "start. Prefetch loads all experts for the first N offloaded "
-        "layers from Host DRAM to HBM on a dedicated stream, overlapping "
-        "H2D transfer with compute. 0 (default) = no prefetch; each "
-        "offloaded layer falls back to synchronous on-demand loading. "
-        "Only effective when --moe-dram-offload is enabled.",
-    ] = 0
 
     # -------------------------------------------------------------------------
     # Cuda graphs

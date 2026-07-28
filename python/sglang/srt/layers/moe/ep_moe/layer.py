@@ -183,7 +183,6 @@ class DeepEPMoE(FusedMoE):
         if (
             getattr(self, "_dram_offload_enabled", False)
             and self._expert_weight_store is not None
-            and not hasattr(self, "_prefetched_buffers")
             and not self._expert_weight_store._is_decode_mode
         ):
             self._load_experts_on_demand(topk_output)

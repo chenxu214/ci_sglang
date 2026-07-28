@@ -12,14 +12,10 @@ Two backends are supported:
      No external dependency, works everywhere.
 
 Weight loading paths (all use group_pack_copy kernel):
-  - Prefill (with prefetch): prefetch_layer_to_buffer() async-loads ALL
-    experts for the first N layers on h2d_stream. Uses a fake all-ones
+  - Prefill: group_pack_copy_to_buffers() loads ALL local experts into
+    shared HBM buffers synchronously per layer. Uses a fake all-ones
     group_list (real group_list not available pre-dispatch); CANN later
-    uses the real group_list from DeepEP dispatch. wait_prefill_prefetch()
-    synchronizes via per-layer NPU event before compute.
-  - Prefill (no prefetch, N=0): _load_experts_on_demand() loads ALL
-    local experts into shared HBM buffers synchronously per layer.
-    Same fake all-ones group_list approach as prefetch.
+    uses the real group_list from DeepEP dispatch.
   - Decode: group_pack_copy_active_weights() uses the real post-dispatch
     group_list to load and compact active expert weights on-device,
     outputting a packed group_list for CANN. No D2H sync required.
@@ -113,8 +109,7 @@ class ExpertWeightStore:
 
     Attributes:
         dram_store: {(layer_id, expert_id): {weight_name: cpu_tensor}}
-        h2d_stream: Dedicated NPU stream for H2D transfers
-        use_acc_offload: Whether to use acc_offload sparse_copy
+        use_acc_offload: Whether to use acc_offload group_pack_copy
     """
 
     def __init__(
@@ -127,12 +122,10 @@ class ExpertWeightStore:
 
         # Decode mode flag: True during decode, False during prefill.
         # Used to select the weight loading path:
-        #   - Prefill: _load_experts_on_demand / prefetch_layer_to_buffer
+        #   - Prefill: group_pack_copy_to_buffers (synchronous, all experts)
         #   - Decode: group_pack_copy_active_weights (on-device compaction)
         self._is_decode_mode = False
 
-        # Dedicated stream for H2D transfers (separate from compute stream)
-        self._h2d_stream = None
         self._initialized = False
 
         # acc_offload backend
@@ -197,8 +190,6 @@ class ExpertWeightStore:
     def _ensure_initialize(self):
         if not self._initialized:
             if torch.npu.is_available():
-                self._h2d_stream = torch.npu.Stream()
-
                 # Try to initialize acc_offload
                 if self.use_acc_offload:
                     self._init_acc_offload()
@@ -468,9 +459,8 @@ class ExpertWeightStore:
             # the acc_offload pool). Fall back to tensor.copy_() on the
             # current stream — serialized with preceding compute and
             # subsequent CANN ops on the same stream. non_blocking=True
-            # enables async H2D when called within a stream context (e.g.
-            # prefetch on _h2d_stream); for unpinned sources PyTorch
-            # silently falls back to synchronous copy.
+            # enables async H2D for pinned sources; for unpinned sources
+            # PyTorch silently falls back to synchronous copy.
             for eid in range(num_local_experts):
                 key = (layer_id, eid)
                 if key not in self.dram_store:
@@ -745,109 +735,21 @@ class ExpertWeightStore:
         return src_ptr_t, dst_ptr_t, len_t, self._num_le_t
 
     # ------------------------------------------------------------------
-    # Prefill full-layer prefetch + cache mode management
+    # Cache mode management
     # ------------------------------------------------------------------ #
 
     def set_cache_mode(self, is_prefill: bool):
         """Toggle between prefill and decode mode.
 
         Sets _is_decode_mode which controls the weight loading path:
-          - Prefill (is_prefill=True): _load_experts_on_demand /
-            prefetch_layer_to_buffer uses group_pack_copy with a fake
-            all-ones group_list to load ALL experts into
-            [num_local_experts, ...] buffers
+          - Prefill (is_prefill=True): group_pack_copy_to_buffers loads
+            ALL experts with a fake all-ones group_list into
+            [num_local_experts, ...] shared HBM buffers
           - Decode (is_prefill=False): group_pack_copy_active_weights uses
             the real post-dispatch group_list to compact active expert
             weights on-device with no D2H sync
         """
         self._is_decode_mode = not is_prefill
-
-    def sync_prefetch(self):
-        """Block until all pending h2d_stream operations complete."""
-        self._ensure_initialize()
-        if self._h2d_stream is not None:
-            self._h2d_stream.synchronize()
-
-    def prefetch_layer_to_buffer(
-        self, layer_id: int, num_experts: int
-    ) -> Tuple[Dict[str, torch.Tensor], Optional["torch.npu.Event"]]:
-        """Prefetch ALL experts for a layer into per-layer HBM buffers.
-
-        Allocates [num_experts, ...] tensors and loads from DRAM on
-        h2d_stream (async, no sync). Uses group_pack_copy with an all-ones
-        (fake) group_list — at prefetch time the real group_list from
-        DeepEP dispatch is not yet available. After dispatch, CANN uses
-        the real group_list to index into the loaded weights; the fake
-        group_list is never passed to CANN.
-
-        Caller must wait on the returned event (or call sync_prefetch()
-        if the event is None) before using the buffers, and
-        free_layer_buffers() after compute to release HBM.
-
-        Returns:
-            (buffers, event): buffers is {weight_name: hbm_tensor of shape
-            [num_experts, ...]}; event is an NPU event recorded on the
-            h2d_stream after all H2D copies for this layer, or None when
-            h2d_stream is unavailable (CPU-only). Use event.wait() on the
-            compute stream to synchronize ONLY this layer's prefetch --
-            avoids global h2d_stream.synchronize() which would stall all
-            in-flight prefetches and destroy H2D/compute overlap.
-        """
-        self._ensure_initialize()
-
-        sample_key = (layer_id, 0)
-        if sample_key not in self.dram_store:
-            logger.warning(
-                f"[ExpertWeightStore] prefetch_layer_to_buffer: "
-                f"layer_id={layer_id} not in dram_store, skipping"
-            )
-            return {}, None
-        weight_names = list(self.dram_store[sample_key].keys())
-
-        buffers = {}
-        for name in weight_names:
-            sample_tensor = self.dram_store[sample_key][name]
-            full_shape = (num_experts,) + sample_tensor.shape
-            buffers[name] = torch.empty(
-                full_shape, dtype=sample_tensor.dtype, device="npu"
-            )
-
-        event = None
-        if self._h2d_stream is not None:
-            event = torch.npu.Event()
-            # Run group_pack_copy on _h2d_stream for async prefetch.
-            # The stream context ensures group_pack_copy (which calls
-            # c10_npu::getCurrentNPUStream internally) executes on
-            # _h2d_stream, and the event captures its completion.
-            with torch.npu.stream(self._h2d_stream):
-                self.group_pack_copy_to_buffers(
-                    layer_id=layer_id,
-                    weight_names=weight_names,
-                    target_buffers=buffers,
-                )
-                event.record()
-        else:
-            # No h2d_stream (CPU-only): synchronous copy, no event needed.
-            self.group_pack_copy_to_buffers(
-                layer_id=layer_id,
-                weight_names=weight_names,
-                target_buffers=buffers,
-            )
-
-        return buffers, event
-
-    def free_layer_buffers(self, buffers: Dict[str, torch.Tensor]):
-        """Free per-layer HBM buffers allocated by prefetch_layer_to_buffer.
-
-        Only clears Python references; the caching allocator reclaims and
-        reuses the memory automatically. No gc.collect()/empty_cache() here
-        -- empty_cache() triggers a device-wide sync on NPU, which waits for
-        pending h2d_stream prefetch operations, destroying compute/prefetch
-        overlap and causing multi-second stalls per layer.
-        """
-        if not buffers:
-            return
-        buffers.clear()
 
     def get_dram_usage_gb(self) -> float:
         """Get total DRAM usage in GB."""

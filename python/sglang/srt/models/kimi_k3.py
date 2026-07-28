@@ -990,10 +990,6 @@ class KimiLinearModel(nn.Module):
 
         self.config = config
 
-        self._prefetch_layers = getattr(
-            get_global_server_args(), "moe_dram_prefetch_layers", 0
-        )
-
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.pp_group = get_pp_group()
@@ -1082,15 +1078,14 @@ class KimiLinearModel(nn.Module):
         # TODO: capture aux hidden states
         aux_hidden_states = []
         is_prefill = forward_batch.forward_mode.is_prefill()
-        N = self._prefetch_layers if is_prefill else 0
 
-        # Toggle ExpertWeightStore LRU slot limit: unlimited during prefill
-        # (loads all 112 experts per layer), 20-slot LRU during decode.
-        # When transitioning prefill->decode (N=0 prefetch), release the
-        # _shared_hbm_buffers allocated during prefill so the HBM is
-        # returned to the caching allocator. Only release on the
-        # transition boundary — subsequent decode forwards reuse the
-        # decode-allocated buffers to avoid repeated alloc/free churn.
+        # Toggle ExpertWeightStore cache mode:
+        # - Prefill: _load_experts_on_demand loads ALL local experts into
+        #   _shared_hbm_buffers via group_pack_copy (synchronous, per-layer)
+        # - Decode: group_pack_copy_active_weights compacts active experts
+        #   on-device post-dispatch (no D2H sync)
+        # On prefill→decode transition, release _shared_hbm_buffers so the
+        # HBM is returned to the caching allocator.
         released_any = False
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
@@ -1113,46 +1108,10 @@ class KimiLinearModel(nn.Module):
             if torch.npu.is_available():
                 torch.npu.empty_cache()
 
-        # Sliding-window prefetch: pre-trigger async H2D copy for the first
-        # N offloaded MoE layers (pipeline fill), then during the compute
-        # loop trigger prefetch for layer i+N when computing layer i. This
-        # keeps N layers' H2D copies in flight at all times, giving EVERY
-        # offloaded layer H2D/compute overlap — not just the first N.
-        offloaded_moe_indices: List[int] = []
-        if is_prefill and N > 0:
-            for i in range(self.start_layer, self.end_layer):
-                layer = self.layers[i]
-                if hasattr(layer, "block_sparse_moe"):
-                    experts = layer.block_sparse_moe.experts
-                    if getattr(experts, "_dram_offload_enabled", False):
-                        offloaded_moe_indices.append(i)
-            # Pipeline fill: prefetch the first min(N, len) offloaded layers.
-            for k in range(min(N, len(offloaded_moe_indices))):
-                idx = offloaded_moe_indices[k]
-                self.layers[idx].block_sparse_moe.experts.start_prefill_prefetch()
-
-        moe_idx = 0  # Position in offloaded_moe_indices
         for i in range(self.start_layer, self.end_layer):
             ctx = get_global_expert_distribution_recorder().with_current_layer(i)
             with ctx:
                 layer = self.layers[i]
-                if is_prefill and hasattr(layer, "block_sparse_moe"):
-                    experts = layer.block_sparse_moe.experts
-                    if getattr(experts, "_dram_offload_enabled", False):
-                        # Sliding window: trigger prefetch for the layer N
-                        # positions ahead. By the time we finish computing
-                        # this layer and reach that layer, its H2D copy will
-                        # be in flight (or done), achieving overlap.
-                        if (
-                            N > 0
-                            and moe_idx + N < len(offloaded_moe_indices)
-                        ):
-                            next_idx = offloaded_moe_indices[moe_idx + N]
-                            self.layers[
-                                next_idx
-                            ].block_sparse_moe.experts.start_prefill_prefetch()
-                        # Wait for THIS layer's prefetch H2D to complete.
-                        experts.wait_prefill_prefetch()
                 hidden_states, residual = layer(
                     positions=positions,
                     hidden_states=hidden_states,
@@ -1165,13 +1124,6 @@ class KimiLinearModel(nn.Module):
                     f"KimiMoE layer compute done (layer_idx={i}, "
                     f"mode={'prefill' if is_prefill else 'decode'})",
                 )
-                # After prefill compute, free this layer's prefetched HBM
-                # buffers to cap HBM at ~(N+1) concurrent layers' worth.
-                if is_prefill and hasattr(layer, "block_sparse_moe"):
-                    experts = layer.block_sparse_moe.experts
-                    if getattr(experts, "_dram_offload_enabled", False):
-                        experts.free_prefill_cache()
-                        moe_idx += 1
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(

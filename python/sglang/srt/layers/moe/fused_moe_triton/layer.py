@@ -1284,13 +1284,12 @@ class FusedMoE(torch.nn.Module):
 
             return forward_fuseep(self, hidden_states, topk_output)
 
-        # MoE DRAM offload: load Top-K experts from Host DRAM to HBM.
-        # Skip when prefill prefetch has already set weights via
-        # wait_prefill_prefetch (_prefetched_buffers exists).
+        # MoE DRAM offload: load ALL local experts from Host DRAM to HBM
+        # via group_pack_copy (prefill only; decode uses
+        # group_pack_copy_active_weights post-dispatch).
         if (
             self._dram_offload_enabled
             and self._expert_weight_store is not None
-            and not hasattr(self, "_prefetched_buffers")
         ):
             self._load_experts_on_demand(topk_output)
 
@@ -1511,86 +1510,17 @@ class FusedMoE(torch.nn.Module):
         )
 
     # ------------------------------------------------------------------ #
-    # Prefill full-layer prefetch wrappers (called by KimiLinearModel).
+    # DRAM offload buffer management
     # ------------------------------------------------------------------ #
-
-    def start_prefill_prefetch(self):
-        """Async prefetch ALL local experts for this layer into per-layer HBM buffers.
-
-        Allocates [num_experts, ...] tensors and loads from DRAM on h2d_stream.
-        Does NOT use LRU cache. Call wait_prefill_prefetch() before compute
-        and free_prefill_cache() after compute.
-        """
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-        ):
-            return
-        # Guard against double prefetch: if _prefetched_buffers already
-        # exists (e.g., start_prefill_prefetch called twice), skip to avoid
-        # orphaning the previous HBM buffer and triggering redundant H2D.
-        if hasattr(self, "_prefetched_buffers"):
-            return
-        # Free _shared_hbm_buffers (from _load_experts_on_demand) to avoid
-        # double HBM allocation when switching to prefetch mode.
-        self._release_shared_hbm_buffers()
-        log_info_on_rank0(
-            logger,
-            f"[FusedMoE] start_prefill_prefetch layer_id={self.layer_id} "
-            f"num_experts={self.num_local_experts}",
-        )
-        self._prefetched_buffers, self._prefetch_event = (
-            self._expert_weight_store.prefetch_layer_to_buffer(
-                self.layer_id, self.num_local_experts
-            )
-        )
-
-    def wait_prefill_prefetch(self):
-        """Block until this layer's prefetch H2D copy completes, then set weights.
-
-        Uses a per-layer NPU event (recorded on h2d_stream after this
-        layer's copies) to synchronize only this layer's H2D, instead of
-        a global h2d_stream.synchronize() which would stall all in-flight
-        prefetches and destroy H2D/compute overlap.
-        """
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-            or not hasattr(self, "_prefetched_buffers")
-        ):
-            return
-        log_info_on_rank0(
-            logger,
-            f"[FusedMoE] wait_prefill_prefetch start layer_id={self.layer_id}",
-        )
-        t0 = time.perf_counter()
-        event = getattr(self, "_prefetch_event", None)
-        if event is not None:
-            # Per-layer sync: make current (compute) stream wait for this
-            # layer's H2D copies only. Other layers' prefetches on h2d_stream
-            # continue in parallel.
-            event.wait()
-        else:
-            # Fallback (e.g., CPU-only path with no event): global sync.
-            self._expert_weight_store.sync_prefetch()
-        for name, tensor in self._prefetched_buffers.items():
-            setattr(self, name, tensor)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        log_info_on_rank0(
-            logger,
-            f"[FusedMoE] wait_prefill_prefetch done layer_id={self.layer_id} "
-            f"elapsed={elapsed_ms:.2f} ms",
-        )
 
     def _release_shared_hbm_buffers(self):
         """Release _shared_hbm_buffers to free HBM when switching to decode.
 
         Clears layer weight references that point into the shared buffers
         and sets _shared_hbm_buffers to None so the HBM is returned to the
-        caching allocator. Called from kimi_k3.set_cache_mode when
-        transitioning prefill->decode (N=0 prefetch mode) to avoid leaving
-        all offloaded layers' [num_local_experts, ...] HBM buffers
-        resident during decode.
+        caching allocator. Called from kimi_k3 on prefill→decode transition
+        to avoid leaving all offloaded layers' [num_local_experts, ...]
+        HBM buffers resident during decode.
         """
         if (
             not getattr(self, "_dram_offload_enabled", False)
@@ -1605,38 +1535,6 @@ class FusedMoE(torch.nn.Module):
             ):
                 setattr(self, name, None)
         self._shared_hbm_buffers = None
-
-    def free_prefill_cache(self):
-        """Release this layer's prefetched HBM buffers after compute.
-
-        Clears layer weight references and frees the per-layer buffers.
-        When N=0 (prefetch disabled), _load_experts_on_demand allocated
-        per-forward temp buffers — release those references too.
-        """
-        if (
-            not self._dram_offload_enabled
-            or self._expert_weight_store is None
-        ):
-            return
-        log_info_on_rank0(
-            logger,
-            f"[FusedMoE] free_prefill_cache layer_id={self.layer_id}",
-        )
-        if hasattr(self, "_prefetched_buffers"):
-            for name in self._prefetched_buffers:
-                if hasattr(self, name):
-                    setattr(self, name, None)
-            self._expert_weight_store.free_layer_buffers(self._prefetched_buffers)
-            del self._prefetched_buffers
-            if hasattr(self, "_prefetch_event"):
-                del self._prefetch_event
-        else:
-            # N=0 prefill: _load_experts_on_demand set weights from
-            # _shared_hbm_buffers. Release weight references but keep
-            # the pre-allocated buffers for reuse on next forward.
-            for name in self._get_expert_weight_names():
-                if hasattr(self, name):
-                    setattr(self, name, None)
 
     @classmethod
     def make_expert_params_mapping(

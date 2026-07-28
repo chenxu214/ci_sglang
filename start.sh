@@ -54,7 +54,6 @@ sglang serve \
     --moe-dram-offload \
     --moe-dram-offload-skip-layers 30 \
     --moe-dram-acc-offload-layers 63 \
-    --moe-dram-prefetch-layers 3 \
     --moe-a2a-backend deepep \
     --deepep-mode auto \
     --skip-server-warmup \
