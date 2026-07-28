@@ -149,6 +149,9 @@ class ExpertWeightStore:
         if not use_pool_for_storage:
             self._dram_pool_size_bytes = 1 * 1024**3  # 1 GB staging
 
+        # Track registered layers for warmup
+        self._registered_layers: set = set()
+
         # Hybrid storage: layers in _h2d_layer_ids use PyTorch H2D
         # (torch.empty) instead of acc_offload pool. Configured via
         # --moe-dram-acc-offload-layers: only the first N offloaded
