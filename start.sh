@@ -19,6 +19,7 @@ export SGLANG_MAMBA_CONV_DTYPE=bfloat16
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh
+source /usr/local/memfabric_hybrid/set_env.sh   # --moe-dram-acc-offload-layers depends on
 
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_SOCKET_IFNAME=lo
@@ -51,13 +52,14 @@ sglang serve \
     --host 0.0.0.0 \
     --port 8880 \
     --moe-dram-offload \
-    --moe-dram-offload-skip-layers 20 \
+    --moe-dram-offload-skip-layers 30 \
+    --moe-dram-acc-offload-layers 63 \
     --moe-dram-prefetch-layers 3 \
     --moe-a2a-backend deepep \
     --deepep-mode auto \
     --skip-server-warmup \
     --weight-loader-drop-cache-after-load \
-    --disable-cuda-graph
+    --cuda-graph-bs ${tp}
 
 exit 1
-    #--cuda-graph-bs 2 4
+    #--disable-cuda-graph

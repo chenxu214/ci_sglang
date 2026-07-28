@@ -152,6 +152,18 @@ class ExpertWeightStore:
         # Track registered layers for warmup
         self._registered_layers: set = set()
 
+        # Graph-safe caches for decode path (group_pack_copy_active_weights).
+        # These tensors are fixed across decode steps (DRAM pool addresses,
+        # shared buffer addresses, and weight sizes don't change), so they
+        # are computed once before graph capture and reused during replay —
+        # avoiding H2D transfers from torch.tensor(python_list, device="npu")
+        # which crash NPU graph capture.
+        # Key: (layer_id, name) → (src_ptr_t, dst_ptr_t, len_t)
+        self._decode_ptr_cache: Dict[Tuple[int, str], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+        self._num_le_t: Optional[torch.Tensor] = None
+        self._num_le_cache: Optional[int] = None
+        self._packed_group_list_buf: Optional[torch.Tensor] = None
+
         # Hybrid storage: layers in _h2d_layer_ids use PyTorch H2D
         # (torch.empty) instead of acc_offload pool. Configured via
         # --moe-dram-acc-offload-layers: only the first N offloaded
@@ -620,48 +632,29 @@ class ExpertWeightStore:
                     )
             return result, group_list
 
-        # Allocate packed_group_list output buffer (zero-filled so the tail
-        # beyond M remains zero for CANN to skip). Small tensor (N int64
-        # values, e.g. 2 KB for 256 experts), no need to cache across calls.
-        packed_group_list = torch.zeros(
-            num_local_experts, dtype=torch.int64, device=target_device
-        )
+        # Pre-allocated packed_group_list buffer (reused via .zero_()).
+        # .zero_() is a capturable memset kernel; torch.zeros() allocates a
+        # new tensor each call whose address is non-deterministic on graph
+        # replay, causing silent data corruption.
+        if (
+            self._packed_group_list_buf is None
+            or self._packed_group_list_buf.shape[0] != num_local_experts
+        ):
+            self._packed_group_list_buf = torch.zeros(
+                num_local_experts, dtype=torch.int64, device=target_device
+            )
+        else:
+            self._packed_group_list_buf.zero_()
+        packed_group_list = self._packed_group_list_buf
 
         device = torch.device(f"npu:{torch.npu.current_device()}")
 
         # Call group_pack_copy once per weight name. Each call gets the same
         # group_list and packed_group_list (per-expert, not per-weight).
         for name in weight_names:
-            src_ptrs = []
-            dst_ptrs = []
-            len_ptrs = []
-            for eid in range(num_local_experts):
-                key = (layer_id, eid)
-                if key not in self.dram_store:
-                    src_ptrs.append(0)
-                    dst_ptrs.append(result[name][eid].data_ptr())
-                    len_ptrs.append(0)
-                    continue
-                dram_tensor = self.dram_store[key][name]
-                src_ptrs.append(dram_tensor.data_ptr())
-                dst_ptrs.append(result[name][eid].data_ptr())
-                len_ptrs.append(dram_tensor.nbytes)
-
-            # Guard against int32 overflow: kernel lens are uint32, so any
-            # single expert weight exceeding 2^31 bytes would wrap silently.
-            max_len = max(len_ptrs) if len_ptrs else 0
-            if max_len >= 2**31:
-                msg = (
-                    f"expert weight nbytes ({max_len}) exceeds int32 range, "
-                    f"layer={layer_id} name={name}"
-                )
-                logger.error(msg)
-                raise ValueError(msg)
-
-            src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
-            dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
-            len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
-            num_le_t = torch.tensor(num_local_experts, dtype=torch.int32, device=target_device)
+            src_ptr_t, dst_ptr_t, len_t, num_le_t = self._get_decode_ptr_tensors(
+                layer_id, name, num_local_experts, result[name], target_device
+            )
 
             ret = self._offload.group_pack_copy(
                 src_ptr_t, dst_ptr_t, len_t, num_le_t,
@@ -680,6 +673,76 @@ class ExpertWeightStore:
         # operations also run on the default stream. Stream ordering guarantees
         # the copy completes before GMM reads the buffer.
         return result, packed_group_list
+
+    def _get_decode_ptr_tensors(
+        self,
+        layer_id: int,
+        name: str,
+        num_local_experts: int,
+        dst_buffer: torch.Tensor,
+        target_device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Get or build cached pointer tensors for group_pack_copy (decode).
+
+        On first call: builds src_ptr_t, dst_ptr_t, len_t from dram_store
+        addresses and caches them. On subsequent calls: returns cached
+        tensors directly, avoiding H2D transfer from
+        torch.tensor(python_list, device="npu") which crashes NPU graph
+        capture.
+
+        These values are fixed across decode steps because:
+          - DRAM pool addresses (src) are allocated once in register_layer_batch
+          - Shared decode buffer addresses (dst) are pre-allocated once
+          - Weight nbytes (len) don't change
+          - num_local_experts is constant
+
+        Returns:
+            (src_ptr_t, dst_ptr_t, len_t, num_le_t) — all on-device tensors
+        """
+        cache_key = (layer_id, name)
+        cached = self._decode_ptr_cache.get(cache_key)
+        if cached is not None:
+            return cached[0], cached[1], cached[2], self._num_le_t
+
+        src_ptrs = []
+        dst_ptrs = []
+        len_ptrs = []
+        for eid in range(num_local_experts):
+            key = (layer_id, eid)
+            if key not in self.dram_store:
+                src_ptrs.append(0)
+                dst_ptrs.append(dst_buffer[eid].data_ptr())
+                len_ptrs.append(0)
+                continue
+            dram_tensor = self.dram_store[key][name]
+            src_ptrs.append(dram_tensor.data_ptr())
+            dst_ptrs.append(dst_buffer[eid].data_ptr())
+            len_ptrs.append(dram_tensor.nbytes)
+
+        # Guard against int32 overflow: kernel lens are uint32, so any
+        # single expert weight exceeding 2^31 bytes would wrap silently.
+        max_len = max(len_ptrs) if len_ptrs else 0
+        if max_len >= 2**31:
+            msg = (
+                f"expert weight nbytes ({max_len}) exceeds int32 range, "
+                f"layer={layer_id} name={name}"
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
+        dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
+        len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
+
+        self._decode_ptr_cache[cache_key] = (src_ptr_t, dst_ptr_t, len_t)
+
+        if self._num_le_cache != num_local_experts:
+            self._num_le_t = torch.tensor(
+                num_local_experts, dtype=torch.int32, device=target_device
+            )
+            self._num_le_cache = num_local_experts
+
+        return src_ptr_t, dst_ptr_t, len_t, self._num_le_t
 
     # ------------------------------------------------------------------
     # Prefill full-layer prefetch + cache mode management
