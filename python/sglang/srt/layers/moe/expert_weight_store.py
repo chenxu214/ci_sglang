@@ -297,96 +297,6 @@ class ExpertWeightStore:
         )
         self.use_acc_offload = False
 
-    def register_expert(
-        self,
-        layer_id: int,
-        expert_id: int,
-        weights: Dict[str, torch.Tensor],
-    ):
-        """Register expert weights from HBM to Host DRAM.
-
-        Called after process_weights_after_loading(). Copies the processed
-        (NZ-format, packed) weights from HBM to Host DRAM.
-
-        Args:
-            layer_id: Layer index
-            expert_id: Expert index within the layer
-            weights: Dict of {weight_name: hbm_tensor} e.g.
-                     {"w13_weight": ..., "w2_weight": ...,
-                      "w13_weight_scale": ..., "w2_weight_scale": ...}
-        """
-        self._ensure_initialize()
-        key = (layer_id, expert_id)
-
-        cpu_weights = {}
-        total_bytes = 0
-        # Track temporary CPU tensors (created by .cpu()) so we can release
-        # them explicitly after copying to the DRAM pool. Without this,
-        # PyTorch CPU caching allocator holds the memory and does not return
-        # it to the OS, causing host DRAM usage to grow unbounded.
-        #
-        # Note: We do NOT call torch.cpu.empty_cache() here because it would
-        # be invoked 896 times per layer (once per expert), causing significant
-        # overhead. The caller (offload_expert_weights_to_dram) is responsible
-        # for calling _release_cpu_cache() once after all experts are registered.
-        temp_cpu_tensors = []
-        try:
-            for name, tensor in weights.items():
-                # NPU internal format (e.g., FRACTAL_NZ) cannot be copied via
-                # copy_() or .cpu() -- NPU raises "do not support internal
-                # format". npu_format_cast to ND may only change metadata
-                # without reformatting storage, so .contiguous() forces a real
-                # ND copy.
-                if tensor.device.type != "cpu":
-                    # FRACTAL_NZ format cannot be copied via .copy_() or .cpu().
-                    # Cast to ND first, then .contiguous() forces a real format
-                    # conversion (not just metadata change). If this fails,
-                    # raise immediately -- a silent fallback to .contiguous()
-                    # alone does NOT guarantee NZ->ND and would cause "do not
-                    # support internal format" errors later in copy_().
-                    nd_tensor = torch_npu.npu_format_cast(
-                        tensor, NPUACLFormat.ACL_FORMAT_ND
-                    ).contiguous()
-                    cpu_tensor = nd_tensor.cpu()
-                    del nd_tensor
-                    temp_cpu_tensors.append(cpu_tensor)
-                else:
-                    cpu_tensor = tensor
-
-                use_pool = (
-                    self._use_pool_for_storage
-                    and self.use_acc_offload
-                    and self._offload_initialized
-                    and layer_id not in self._h2d_layer_ids
-                )
-                if use_pool:
-                    # Allocate from acc_offload DRAM pool.
-                    dram_tensor = self._offload.empty(
-                        cpu_tensor.shape, dtype=cpu_tensor.dtype
-                    )
-                else:
-                    # H2D tail layer or pool unavailable: PyTorch torch.empty.
-                    dram_tensor = torch.empty(
-                        cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
-                    )
-                dram_tensor.copy_(cpu_tensor)
-                cpu_weights[name] = dram_tensor
-                total_bytes += dram_tensor.nbytes
-        finally:
-            # Release temporary CPU tensor Python references immediately.
-            # PyTorch CPU caching allocator may still hold the underlying
-            # memory; caller must invoke _release_cpu_cache() after the full
-            # layer registration loop to return it to the OS.
-            del temp_cpu_tensors
-
-        self.dram_store[key] = cpu_weights
-
-        if expert_id % 64 == 0:
-            logger.info(
-                f"[ExpertWeightStore] D2H layer_id={layer_id} expert_id={expert_id}: "
-                f"{len(cpu_weights)} tensors, {total_bytes / 1024**2:.1f} MB copied to DRAM"
-            )
-
     def register_layer_batch(
         self,
         layer_id: int,
@@ -394,9 +304,7 @@ class ExpertWeightStore:
     ):
         """Batch-register all experts of a layer to DRAM in one pass.
 
-        Instead of calling register_expert() per expert (112 iterations
-        with 4 offload.empty + 4 copy_ each = 448 calls), this method
-        processes each weight name once with a single large allocation
+        Processes each weight name once with a single large allocation
         and copy, then slices per-expert views into dram_store.
 
         Args:
@@ -462,7 +370,7 @@ class ExpertWeightStore:
         )
 
     def _release_cpu_cache(self):
-        """Release CPU memory back to the OS after register_expert() calls.
+        """Release CPU memory back to the OS after register_layer_batch() calls.
 
         PyTorch CPU tensors are allocated via glibc malloc (not PyTorch's
         CPU caching allocator unless PYTORCH_CPU_ALLOC_CONF is set).

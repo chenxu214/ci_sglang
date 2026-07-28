@@ -1438,7 +1438,7 @@ class FusedMoE(torch.nn.Module):
             torch.npu.empty_cache()
 
         # Release PyTorch CPU caching allocator memory back to the OS.
-        # register_expert() creates temporary CPU tensors via .cpu() for
+        # register_layer_batch() creates temporary CPU tensors via .cpu() for
         # NZ->ND format conversion before copying to the acc_offload pool.
         # PyTorch CPU allocator caches these (~5GB per expert) and does NOT
         # return them to the OS automatically, causing host DRAM to appear
