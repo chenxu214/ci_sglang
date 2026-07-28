@@ -163,6 +163,34 @@ class ExpertWeightStore:
         # layers use the pool; the rest use H2D.
         self._h2d_layer_ids: set = set()  # layer_ids that use PyTorch H2D
 
+        # Store original weight logical shapes for NZ storage path.
+        # NZ-format DRAM buffers are flat byte arrays whose .shape doesn't
+        # reflect the original [num_experts, N, K] layout needed for HBM
+        # buffer allocation. Key: (layer_id, name) → original full_shape.
+        self._weight_shapes: Dict[Tuple[int, str], Tuple[int, ...]] = {}
+
+        # Global shared HBM buffers (all offloaded layers reuse these).
+        # Prefill layers are processed sequentially, so only one layer's
+        # weights need to reside in HBM at a time. Allocating once at init
+        # eliminates per-layer npu_format_cast during prefill, which was
+        # the primary cause of HBM OOM when 58 layers' buffers accumulated.
+        #
+        # _global_buffer_template stores the first-registered layer's
+        # shape/dtype/NZ metadata so subsequent layers can verify compatibility.
+        # _shared_global_buffers: {name: [num_local_experts, ...] NZ tensor}
+        self._shared_global_buffers: Optional[Dict[str, torch.Tensor]] = None
+        self._global_buffer_template: Optional[Dict[str, Tuple[Tuple[int, ...], torch.dtype, bool]]] = None
+
+        # Cache for prefill ptr_t tensors (reused across layers).
+        # group_pack_copy_to_buffers builds src_ptr_t/dst_ptr_t/len_t each
+        # call; caching them avoids H2D tensor allocations inside graph capture.
+        # Key: (layer_id, name) → (src_ptr_t, dst_ptr_t, len_t, num_le_t)
+        self._prefill_ptr_cache: Dict[Tuple[int, str], Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+        self._prefill_num_le_t: Optional[torch.Tensor] = None
+        self._prefill_num_le_cache: Optional[int] = None
+        self._prefill_group_list_buf: Optional[torch.Tensor] = None
+        self._prefill_packed_group_list_buf: Optional[torch.Tensor] = None
+
     def set_acc_offload_layers(
         self, acc_offload_layers: int, all_offloaded_layer_ids: list
     ):
@@ -303,6 +331,123 @@ class ExpertWeightStore:
         )
         self.use_acc_offload = False
 
+    def _is_nz_storage(self, layer_id: int) -> bool:
+        """Check if NZ format direct storage is active for this layer.
+
+        NZ storage requires acc_offload pool (sparse_copy is the only API
+        that can handle NZ format D2H transfer; torch copy_() does not).
+        H2D tail layers (torch.empty) use ND format and need forward-time
+        ND→NZ conversion.
+        """
+        return (
+            self._use_pool_for_storage
+            and self.use_acc_offload
+            and self._offload_initialized
+            and layer_id not in self._h2d_layer_ids
+        )
+
+    def _ensure_shared_global_buffers(
+        self,
+        layer_id: int,
+        num_local_experts: int,
+        weight_names: List[str],
+        sample_key: Tuple[int, int],
+        target_device: torch.device,
+    ) -> Dict[str, torch.Tensor]:
+        """Allocate (once) and return global shared NZ HBM buffers.
+
+        All offloaded layers share one set of HBM buffers because prefill
+        processes layers sequentially — only one layer's weights need to
+        be resident at a time. This eliminates 58 × ~60 MB = 3.5 GB of
+        per-layer _shared_hbm_buffers accumulation that caused HBM OOM.
+
+        The first registered layer determines the buffer shape/dtype; all
+        subsequent layers must match (same model architecture guarantee).
+
+        Weight tensors (uint8) are allocated in NZ format + transpose(1,2)
+        to match the HBM-resident path exactly. Scale tensors remain ND.
+
+        Graph-safe: allocation happens once before graph capture (warmup),
+        so buffer addresses are stable across replay.
+        """
+        if self._shared_global_buffers is not None:
+            return self._shared_global_buffers
+
+        self._shared_global_buffers = {}
+        self._global_buffer_template = {}
+        use_nz = self._is_nz_storage(layer_id)
+
+        for name in weight_names:
+            sample_tensor = self.dram_store[sample_key][name]
+            dtype = sample_tensor.dtype
+            shape_key = (layer_id, name)
+            if shape_key in self._weight_shapes:
+                full_shape = self._weight_shapes[shape_key]
+            else:
+                full_shape = (num_local_experts,) + tuple(sample_tensor.shape)
+
+            buf = torch.empty(full_shape, dtype=dtype, device=target_device)
+            is_nz_weight = (
+                use_nz
+                and dtype == torch.uint8
+                and "scale" not in name
+                and shape_key in self._weight_shapes
+            )
+            if is_nz_weight:
+                buf = torch_npu.npu_format_cast(
+                    buf, 29,
+                    customize_dtype=torch.float8_e4m3fn,
+                    input_dtype=torch_npu.float4_e2m1fn_x2,
+                )
+                buf = buf.transpose(1, 2)
+
+            self._shared_global_buffers[name] = buf
+            self._global_buffer_template[name] = (
+                tuple(full_shape), dtype, is_nz_weight
+            )
+
+        total_bytes = sum(
+            t.element_size() * t.numel()
+            for t in self._shared_global_buffers.values()
+        )
+        logger.info(
+            f"[ExpertWeightStore] Pre-allocated global shared HBM buffers: "
+            f"{total_bytes / 1024**3:.3f} GB for {len(weight_names)} tensors "
+            f"(NZ-weights={use_nz}). All offloaded layers reuse these."
+        )
+        # Invalidate decode ptr cache: dst addresses changed (from legacy
+        # _shared_decode_buffers per-layer buffers to the new global buffers).
+        # Without this, the first decode forward after a warmup prefill would
+        # use stale dst pointers pointing to freed/never-allocated memory.
+        self._decode_ptr_cache.clear()
+        return self._shared_global_buffers
+
+    def _sparse_copy_d2h(self, src_npu_tensor: torch.Tensor, dst_dram_tensor: torch.Tensor):
+        """Copy NZ-format NPU tensor to DRAM pool via sparse_copy.
+
+        sparse_copy is the only API that can transfer NZ-format data
+        (torch copy_()/.cpu() fail with "do not support internal format").
+        The kernel operates on raw bytes, preserving the NZ block layout.
+
+        Requires even num_pairs; split into 2 halves for odd-sized tensors.
+        """
+        storage_size = src_npu_tensor.element_size() * src_npu_tensor.numel()
+        half = storage_size // 2
+        src_ptrs = [src_npu_tensor.data_ptr(), src_npu_tensor.data_ptr() + half]
+        dst_ptrs = [dst_dram_tensor.data_ptr(), dst_dram_tensor.data_ptr() + half]
+        len_ptrs = [half, half]
+
+        target_device = torch.device(f"npu:{torch.npu.current_device()}")
+        src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
+        dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
+        len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
+        size_t = torch.tensor(2, dtype=torch.int32, device=target_device)
+
+        ret = self._offload.sparse_copy(src_ptr_t, dst_ptr_t, len_t, size_t, target_device)
+        if ret != 0:
+            raise RuntimeError(f"sparse_copy D2H failed ret={ret}")
+        torch.npu.synchronize()
+
     def register_layer_batch(
         self,
         layer_id: int,
@@ -310,8 +455,11 @@ class ExpertWeightStore:
     ):
         """Batch-register all experts of a layer to DRAM in one pass.
 
-        Processes each weight name once with a single large allocation
-        and copy, then slices per-expert views into dram_store.
+        For acc_offload pool layers: weight tensors (uint8) are stored in
+        NZ format via sparse_copy (D2H), eliminating forward-time ND→NZ
+        conversion. Scale tensors are stored in ND format via copy_.
+
+        For H2D tail layers: all tensors stored in ND format via copy_.
 
         Args:
             layer_id: Layer index
@@ -322,41 +470,80 @@ class ExpertWeightStore:
         total_bytes = 0
         temp_cpu_tensors = []
 
-        use_pool = (
-            self._use_pool_for_storage
-            and self.use_acc_offload
-            and self._offload_initialized
-            and layer_id not in self._h2d_layer_ids
-        )
+        use_pool = self._is_nz_storage(layer_id)
 
         try:
             for name, full_tensor in weights_dict.items():
                 if num_experts is None:
                     num_experts = full_tensor.shape[0]
 
-                # Handle NPU→CPU conversion (NZ→ND + .cpu()) in one shot
-                # for the entire [num_experts, ...] tensor.
-                if full_tensor.device.type != "cpu":
-                    nd_tensor = torch_npu.npu_format_cast(
-                        full_tensor, NPUACLFormat.ACL_FORMAT_ND
-                    ).contiguous()
-                    cpu_tensor = nd_tensor.cpu()
-                    del nd_tensor
-                    temp_cpu_tensors.append(cpu_tensor)
-                else:
-                    cpu_tensor = full_tensor
+                # NZ storage only for weight tensors (w13_weight, w2_weight),
+                # NOT for scales — CANN's antiquant_scale expects ND format.
+                # Both are uint8, so distinguish by name.
+                is_weight = full_tensor.dtype == torch.uint8 and "scale" not in name
 
-                # Single large allocation + single copy for all experts
-                if use_pool:
-                    dram_tensor = self._offload.empty(
-                        cpu_tensor.shape, dtype=cpu_tensor.dtype
+                if use_pool and is_weight:
+                    # NZ storage path: move to NPU → cast to NZ → sparse_copy D2H
+                    #
+                    # Works for both CPU and NPU input tensors. CPU tensors
+                    # (offload mode where process_weights_after_loading keeps
+                    # weights on CPU) are moved via .npu() below.
+                    #
+                    # CRITICAL: Undo process_weights_after_loading's transpose(1,2)
+                    # BEFORE format_cast. The HBM-resident path does:
+                    #   format_cast(NZ) on [E, N, K_packed] → transpose(1,2)
+                    # We must store NZ bytes for [E, N, K_packed] (pre-transpose)
+                    # so the HBM buffer can be allocated with the same shape,
+                    # format_cast to NZ, and then transposed to match HBM-resident.
+                    # Storing post-transpose [E, K_packed, N] NZ bytes would create
+                    # a different NZ block layout that CANN cannot read after
+                    # transpose(1,2).
+                    pre_transpose = full_tensor.transpose(1, 2).contiguous()
+                    npu_tensor = pre_transpose.npu()
+                    nz_tensor = torch_npu.npu_format_cast(
+                        npu_tensor, 29,
+                        customize_dtype=torch.float8_e4m3fn,
+                        input_dtype=torch_npu.float4_e2m1fn_x2,
                     )
+                    storage_size = nz_tensor.element_size() * nz_tensor.numel()
+                    per_expert_nz_nbytes = nz_tensor[0].nbytes
+
+                    # Allocate DRAM buffer matching NZ storage size, reshaped
+                    # to [num_experts, per_expert_nz_nbytes] for per-expert slicing.
+                    dram_flat = self._offload.empty(
+                        [storage_size], dtype=torch.uint8
+                    )
+                    self._sparse_copy_d2h(nz_tensor, dram_flat)
+                    dram_tensor = dram_flat.view(num_experts, per_expert_nz_nbytes)
+                    del npu_tensor, nz_tensor, dram_flat, pre_transpose
+                    total_bytes += storage_size
+
+                    # Store PRE-transpose logical shape for HBM buffer allocation.
+                    # HBM buffer is allocated as [E, N, K_packed], format_cast to NZ,
+                    # then transposed to [E, K_packed, N] to match HBM-resident.
+                    self._weight_shapes[(layer_id, name)] = tuple(full_tensor.transpose(1, 2).shape)
                 else:
-                    dram_tensor = torch.empty(
-                        cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
-                    )
-                dram_tensor.copy_(cpu_tensor)
-                total_bytes += dram_tensor.nbytes
+                    # ND storage path (scales and H2D tail weights):
+                    # Undo transpose before storing so DRAM has pre-transpose
+                    # shape. Forward path (w4a8_mxfp4_gmm_npu) re-applies
+                    # transpose at forward time to match HBM-resident state.
+                    pre_transpose = full_tensor.transpose(1, 2).contiguous()
+                    if pre_transpose.device.type != "cpu":
+                        cpu_tensor = pre_transpose.cpu()
+                    else:
+                        cpu_tensor = pre_transpose
+                    temp_cpu_tensors.append(cpu_tensor)
+
+                    if use_pool:
+                        dram_tensor = self._offload.empty(
+                            cpu_tensor.shape, dtype=cpu_tensor.dtype
+                        )
+                    else:
+                        dram_tensor = torch.empty(
+                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                        )
+                    dram_tensor.copy_(cpu_tensor)
+                    total_bytes += dram_tensor.nbytes
 
                 # Slice per-expert views into dram_store
                 for expert_id in range(num_experts):
@@ -372,7 +559,8 @@ class ExpertWeightStore:
         logger.info(
             f"[ExpertWeightStore] D2H batch layer_id={layer_id}: "
             f"{num_experts} experts, {len(weights_dict)} weights, "
-            f"{total_bytes / 1024**2:.1f} MB copied to DRAM"
+            f"{total_bytes / 1024**2:.1f} MB copied to DRAM "
+            f"(nz_storage={'on' if use_pool else 'off'})"
         )
 
     def _release_cpu_cache(self):
@@ -472,47 +660,71 @@ class ExpertWeightStore:
                     )
             return
 
-        # All-ones group_list: kernel copies ALL experts in order [0..N-1]
-        # without compaction. packed_group_list is all-ones and discarded —
-        # CANN uses the real group_list from DeepEP dispatch.
-        group_list = torch.ones(
-            num_local_experts, dtype=torch.int64, device=target_device
-        )
-        packed_group_list = torch.zeros(
-            num_local_experts, dtype=torch.int64, device=target_device
-        )
+        # Reusable buffers: torch.zeros/ones allocates new tensors each call
+        # with non-deterministic addresses, causing graph replay corruption.
+        # Use a single persistent buffer reinitialized with .fill_(/.zero_()
+        # (capturable element-wise kernels).
+        if (
+            self._prefill_group_list_buf is None
+            or self._prefill_group_list_buf.shape[0] != num_local_experts
+        ):
+            self._prefill_group_list_buf = torch.ones(
+                num_local_experts, dtype=torch.int64, device=target_device
+            )
+            self._prefill_packed_group_list_buf = torch.zeros(
+                num_local_experts, dtype=torch.int64, device=target_device
+            )
+        group_list = self._prefill_group_list_buf
+        packed_group_list = self._prefill_packed_group_list_buf
+        # packed_group_list.zero_() — not strictly needed since all ones
+        # input produces all ones output, but kept for safety.
+        packed_group_list.zero_()
         device = torch.device(f"npu:{torch.npu.current_device()}")
 
         for name in weight_names:
-            src_ptrs = []
-            dst_ptrs = []
-            len_ptrs = []
-            for eid in range(num_local_experts):
-                key = (layer_id, eid)
-                if key not in self.dram_store:
-                    src_ptrs.append(0)
+            # Use cached ptr tensors; addresses are fixed (DRAM pool +
+            # global HBM buffer addresses don't change after init).
+            cache_key = (layer_id, name)
+            if cache_key in self._prefill_ptr_cache:
+                src_ptr_t, dst_ptr_t, len_t, num_le_t = self._prefill_ptr_cache[cache_key]
+            else:
+                src_ptrs = []
+                dst_ptrs = []
+                len_ptrs = []
+                for eid in range(num_local_experts):
+                    key = (layer_id, eid)
+                    if key not in self.dram_store:
+                        src_ptrs.append(0)
+                        dst_ptrs.append(target_buffers[name][eid].data_ptr())
+                        len_ptrs.append(0)
+                        continue
+                    dram_tensor = self.dram_store[key][name]
+                    src_ptrs.append(dram_tensor.data_ptr())
                     dst_ptrs.append(target_buffers[name][eid].data_ptr())
-                    len_ptrs.append(0)
-                    continue
-                dram_tensor = self.dram_store[key][name]
-                src_ptrs.append(dram_tensor.data_ptr())
-                dst_ptrs.append(target_buffers[name][eid].data_ptr())
-                len_ptrs.append(dram_tensor.nbytes)
+                    len_ptrs.append(dram_tensor.nbytes)
 
-            # Guard against int32 overflow: kernel lens are uint32.
-            max_len = max(len_ptrs) if len_ptrs else 0
-            if max_len >= 2**31:
-                msg = (
-                    f"expert weight nbytes ({max_len}) exceeds int32 range, "
-                    f"layer={layer_id} name={name}"
-                )
-                logger.error(msg)
-                raise ValueError(msg)
+                max_len = max(len_ptrs) if len_ptrs else 0
+                if max_len >= 2**31:
+                    msg = (
+                        f"expert weight nbytes ({max_len}) exceeds int32 range, "
+                        f"layer={layer_id} name={name}"
+                    )
+                    logger.error(msg)
+                    raise ValueError(msg)
 
-            src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
-            dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
-            len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
-            num_le_t = torch.tensor(num_local_experts, dtype=torch.int32, device=target_device)
+                src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
+                dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
+                len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
+                if (
+                    self._prefill_num_le_t is None
+                    or self._prefill_num_le_cache != num_local_experts
+                ):
+                    self._prefill_num_le_t = torch.tensor(
+                        num_local_experts, dtype=torch.int32, device=target_device
+                    )
+                    self._prefill_num_le_cache = num_local_experts
+                num_le_t = self._prefill_num_le_t
+                self._prefill_ptr_cache[cache_key] = (src_ptr_t, dst_ptr_t, len_t, num_le_t)
 
             ret = self._offload.group_pack_copy(
                 src_ptr_t, dst_ptr_t, len_t, num_le_t,
@@ -580,22 +792,18 @@ class ExpertWeightStore:
         if sample_key not in self.dram_store:
             return {}, group_list
 
-        # Pre-allocate [num_local_experts, ...] HBM buffers (reusable across
-        # decode steps). The kernel writes compacted data to [0..M); the tail
-        # [M..N) is stale but CANN skips it because packed_group_list[M..N)==0.
-        # Validate shape on reuse to handle heterogeneous MoE layers safely.
-        if not hasattr(self, "_shared_decode_buffers") or self._shared_decode_buffers is None:
-            self._shared_decode_buffers = {}
-        for name in weight_names:
-            sample_tensor = self.dram_store[sample_key][name]
-            full_shape = (num_local_experts,) + tuple(sample_tensor.shape)
-            buf = self._shared_decode_buffers.get(name)
-            if buf is None or tuple(buf.shape) != full_shape:
-                buf = torch.empty(
-                    full_shape, dtype=sample_tensor.dtype, device=target_device
-                )
-                self._shared_decode_buffers[name] = buf
-        result = self._shared_decode_buffers
+        # Reuse global shared NZ HBM buffers (same as prefill path).
+        # Global buffers are allocated once by _ensure_shared_global_buffers
+        # with NZ format + transpose(1,2), matching the exact state required
+        # by CANN GMM. Decode writes compacted active experts to [0..M);
+        # tail [M..N) is stale but CANN skips it (packed_group_list[M..N)==0).
+        #
+        # Using the same buffers for prefill and decode eliminates duplicate
+        # HBM allocation (prev ~120 MB double-buffering) and avoids a second
+        # npu_format_cast call.
+        result = self._ensure_shared_global_buffers(
+            layer_id, num_local_experts, weight_names, sample_key, target_device
+        )
 
         use_group_pack = (
             self.use_acc_offload
