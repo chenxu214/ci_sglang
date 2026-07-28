@@ -454,12 +454,15 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         group_list = group_list.to(torch.int64)
         combine_cls = DeepEPLLCombineInput
 
-    # Early return when this rank received no tokens (group_list_sum == 0).
+    # Early return when this rank received no tokens.
     # In DeepEP, some ranks may receive 0 tokens for certain layers. Running
     # the CANN kernel with 0 tokens still requires group_list size == weight
     # dim 0, but the weight may be stale (e.g., [num_active, ...] from a
     # previous decode). Skip the kernel entirely — there's nothing to compute.
-    if hidden_states.shape[0] == 0 or group_list.sum().item() == 0:
+    # Note: hidden_states.shape[0] == 0 is equivalent to group_list.sum() == 0
+    # (DeepEP guarantees group_list.sum() == num_recv_tokens), so we avoid
+    # the D2H sync from group_list.sum().item() and check shape only.
+    if hidden_states.shape[0] == 0:
         return combine_cls(
             hidden_states=hidden_states,
             topk_ids=dispatch_output.topk_ids,
