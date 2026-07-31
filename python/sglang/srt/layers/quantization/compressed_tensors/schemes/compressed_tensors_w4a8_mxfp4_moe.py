@@ -213,8 +213,14 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         # entire [num_experts, ...] tensor (which doubles HBM and causes
         # OOM). Use the offload flag instead of is_contiguous() because
         # NZ-format weights may also report contiguous=True on NPU.
+        #
+        # torch.unique is incompatible with NPU graph capture (requires
+        # stream sync for dynamic output shape). Skip expert extraction
+        # during capture; GMM processes all experts (lower performance
+        # but graph-safe). acc_offload path (is_nz_stored=True) doesn't
+        # hit this code path and remains fully graph-optimized.
         is_nd_format = getattr(layer, "_dram_offload_enabled", False)
-        if is_nd_format:
+        if is_nd_format and not torch.npu.is_current_stream_capturing():
             unique_ids, inverse_indices = torch.unique(
                 topk_ids, return_inverse=True
             )
@@ -369,6 +375,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
 
     hidden_states, expanded_row_idx, expert_tokens, _ = (
         torch.ops.npu.npu_moe_init_routing_v2(
+            hidden_states,
             topk_ids,
             active_num=num_tokens * top_k,
             expert_num=global_num_experts,
@@ -600,37 +607,38 @@ def w4a8_mxfp4_gmm_npu(
     #   by _load_experts_on_demand (format_cast + transpose(1,2)). DRAM
     #   stores pre-transpose NZ bytes ([E, N, K_packed] NZ) via sparse_copy.
     #   No forward-time format_cast needed — graph-safe path.
-    # - is_nd_format=True (and not is_nz_stored): weight is ND from DRAM
-    #   (H2D tail layers). Convert to NZ: undo transpose → cast to NZ →
-    #   re-apply transpose. Not graph-safe (npu_format_cast is AICPU kernel).
+    # - is_nd_format=True (and not is_nz_stored): weight is ND from DRAM.
+    #   DRAM stores pre-transpose [E, N, K_packed] (register_layer_batch
+    #   undid process_weights_after_loading's transpose before storage).
+    #   Cast to NZ format, then transpose(1,2) to get [E, K_packed, N]
+    #   transposed view matching HBM-resident path's final state.
     if is_nz_stored:
         pass
     elif is_nd_format:
-        # ND storage (H2D tail layers): convert ND → NZ at forward time.
-        # Split into steps and explicitly del intermediates to reduce HBM peak.
-        weight_nd = weight.transpose(1, 2).contiguous().view(torch.uint8)
+        # ND storage (PyTorch H2D path): DRAM stores pre-transpose format
+        # [E, N, K_packed] (register_layer_batch undid process_weights_after_loading's
+        # transpose(1,2) before storage). Cast to NZ format, then transpose(1,2)
+        # to get [E, K_packed, N] transposed view (is_contiguous=False) matching
+        # HBM-resident path's final state. CANN requires weight to be transposed.
         weight = torch_npu.npu_format_cast(
-            weight_nd,
+            weight.contiguous().view(torch.uint8),
             29,
             customize_dtype=torch.float8_e4m3fn,
             input_dtype=torch_npu.float4_e2m1fn_x2,
-        ).transpose(1, 2)
-        del weight_nd
+        )
+        weight = weight.transpose(1, 2)
 
     # Scale: restore transposed state to match weight's transpose state.
-    # CANN requires scale and weight transpose state to match.
     #
-    # For is_nz_stored: weight is NZ format with transpose(1,2) applied
-    # in _load_experts_on_demand (transposed=true). Scale comes from DRAM
-    # (ND storage path) as contiguous [E, N, K//2, 2] (transposed=false).
-    # Re-apply transpose(-3, -2) to match weight's transposed=true.
-    #
-    # For is_nd_format (H2D tail layers): same logic — weight path above
-    # applies transpose(1,2) (transposed=true), so scale must match.
+    # For is_nz_stored AND is_nd_format: weight is transposed (transpose(1,2)
+    # applied). Scale from DRAM is [E, N, K//64, 2] (pre-transpose, because
+    # register_layer_batch undid process_weights_after_loading's transpose
+    # before storage). Re-apply transpose(-3, -2) to get [E, K//64, N, 2]
+    # transposed view (is_contiguous=False) matching HBM-resident path.
     #
     # For HBM-resident (neither flag): scale already transposed from
     # process_weights_after_loading, no action needed.
-    if is_nd_format or is_nz_stored:
+    if is_nz_stored or is_nd_format:
         if weight_scale.is_contiguous():
             weight_scale = weight_scale.transpose(-3, -2)
 
