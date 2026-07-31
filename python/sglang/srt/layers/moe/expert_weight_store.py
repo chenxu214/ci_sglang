@@ -214,6 +214,13 @@ class ExpertWeightStore:
                 f"H2D layers: {len(self._h2d_layer_ids)} "
                 f"({sorted(self._h2d_layer_ids)})"
             )
+        else:
+            # No acc_offload layers — use PyTorch H2D for all offloaded layers.
+            self.use_acc_offload = False
+            logger.info(
+                "[ExpertWeightStore] acc_offload disabled (layers=0), "
+                "using PyTorch H2D for all offloaded layers"
+            )
 
     def _ensure_initialize(self):
         if not self._initialized:
@@ -292,41 +299,26 @@ class ExpertWeightStore:
         config.device_id = torch.npu.current_device()
         config.size = self._dram_pool_size_bytes
 
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            if attempt > 0:
-                # Only drop cache on retry — first attempt tries direct init.
-                logger.info(
-                    f"[ExpertWeightStore] acc_offload init attempt {attempt + 1}/{max_attempts}, "
-                    f"dropping page cache before retry..."
-                )
-                _drop_kernel_page_cache()
-                time.sleep(2)
-            else:
-                logger.info(
-                    f"[ExpertWeightStore] acc_offload init attempt {attempt + 1}/{max_attempts} "
-                    f"(direct, no cache drop)"
-                )
+        logger.info(
+            f"[ExpertWeightStore] acc_offload init attempt 1/1 "
+            f"(direct, no cache drop)"
+        )
 
-            ret = offload.initialize(config)
-            if ret == 0:
-                self._offload = offload
-                self._offload_initialized = True
-                logger.info(
-                    f"[ExpertWeightStore] acc_offload initialized: "
-                    f"device={config.device_id}, "
-                    f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB "
-                    f"(attempt={attempt + 1})"
-                )
-                return
-            logger.warning(
-                f"[ExpertWeightStore] acc_offload init attempt {attempt + 1} "
-                f"failed (ret={ret})"
+        ret = offload.initialize(config)
+        if ret == 0:
+            self._offload = offload
+            self._offload_initialized = True
+            logger.info(
+                f"[ExpertWeightStore] acc_offload initialized: "
+                f"device={config.device_id}, "
+                f"dram_pool={self._dram_pool_size_bytes / 1024**3:.1f} GB "
+                f"(attempt=1)"
             )
+            return
 
-        # All attempts failed — fall back to PyTorch H2D.
+        # Init failed — fall back to PyTorch H2D immediately.
         logger.warning(
-            "[ExpertWeightStore] acc_offload init failed after retries, "
+            f"[ExpertWeightStore] acc_offload init failed (ret={ret}), "
             "falling back to PyTorch H2D"
         )
         self.use_acc_offload = False
