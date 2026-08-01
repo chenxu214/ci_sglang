@@ -20,6 +20,7 @@ from sglang.srt.distributed import (
     divide,
     get_pp_group,
     tensor_model_parallel_all_reduce,
+    tensor_model_parallel_all_gather,
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.layers.attention.fla.fused_norm_gate import FusedRMSNormGated
@@ -251,6 +252,7 @@ class KimiMoE(nn.Module):
         num_experts = config.num_experts
         moe_renormalize = config.moe_renormalize
         self.tp_size = get_parallel().tp_size
+        self.tp_rank = get_parallel().attn_tp_rank
         self.routed_scaling_factor = config.routed_scaling_factor
         self.num_shared_experts = config.num_shared_experts
         self.layer_idx = layer_idx
@@ -343,16 +345,19 @@ class KimiMoE(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_size = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_size)
+        shared_output = self.shared_experts(hidden_states.clone())
 
-        shared_output = None
-        routed_hidden_states = hidden_states
+        hidden_states = hidden_states.tensor_split(self.tp_size)[self.tp_rank]
         if self.routed_expert_hidden_size is not None and num_tokens > 0:
             routed_hidden_states = self.routed_expert_down_proj(hidden_states)[0]
         elif self.routed_expert_hidden_size is not None:
             routed_hidden_states = hidden_states.new_empty(
                 (0, self.routed_expert_hidden_size)
             )
-
+        router_logits, _ = self.gate(hidden_states)
+        topk_output = self.topk(hidden_states, router_logits)
+        final_hidden_states = self.experts(routed_hidden_states, topk_output)
+        '''
         if (
             self.alt_stream is not None
             and self.num_shared_experts is not None
@@ -381,6 +386,7 @@ class KimiMoE(nn.Module):
                     hidden_states.device, layer_id=self.layer_idx
                 )
             final_hidden_states = self.experts(routed_hidden_states, topk_output)
+        '''
 
         if self.routed_expert_hidden_size is not None and num_tokens > 0:
             final_hidden_states = self.routed_expert_norm(final_hidden_states)
@@ -396,14 +402,14 @@ class KimiMoE(nn.Module):
             # after this addition the final hidden states are complete and
             # must NOT be all-reduced again (that would amplify the DeepEP
             # part by attn_tp_size).
-            if is_dp_attention_enabled():
-                shared_output = attention_tensor_model_parallel_all_reduce(
-                    shared_output
-                )
-            final_hidden_states = final_hidden_states + shared_output
+            shared_output = attention_tensor_model_parallel_all_reduce(
+                shared_output
+            )
+        final_hidden_states = tensor_model_parallel_all_gather(final_hidden_states,dim=0)
+        final_hidden_states = final_hidden_states + shared_output
 
-        if self.tp_size > 1 and not is_dp_attention_enabled():
-            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+        #if self.tp_size > 1 and not is_dp_attention_enabled():
+        #    final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
         return final_hidden_states.view(num_tokens, hidden_size)
 
 
@@ -598,7 +604,7 @@ class KimiDeltaAttention(nn.Module):
             prefix=f"{prefix}.o_proj",
             tp_rank=self.attn_tp_rank,
             tp_size=self.attn_tp_size,
-            # reduce_results=False,
+            #reduce_results=False,
         )
 
         conv_weights = self.qkv_conv1d.weight.squeeze(1)
@@ -692,11 +698,11 @@ class KimiDeltaAttention(nn.Module):
         # For decode: gate activation is handled inside fused_recurrent kernel.
         beta = beta.float()
         if not forward_batch.forward_mode.is_decode():
-            # from sglang.srt.layers.attention.fla.kda import fused_kda_gate
-            # forget_gate = fused_kda_gate(
+            #from sglang.srt.layers.attention.fla.kda import fused_kda_gate
+            #forget_gate = fused_kda_gate(
             #     forget_gate, self.A_log, self.head_dim, g_bias=self.dt_bias
-            # )
-            # beta = beta.sigmoid()
+            #)
+            #beta = beta.sigmoid()
 
             forget_gate = forget_gate.unflatten(
                 -1, (-1, self.head_dim)
@@ -900,7 +906,6 @@ class KimiDecoderLayer(nn.Module):
                 (block_residual, prefix_sum.unsqueeze(1)), dim=1
             )
             prefix_sum = None
-
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
@@ -917,7 +922,7 @@ class KimiDecoderLayer(nn.Module):
                 hidden_states
             )
         prefix_sum = hidden_states if prefix_sum is None else prefix_sum + hidden_states
-
+        
         hidden_states = apply_attn_res(
             prefix_sum,
             block_residual,
