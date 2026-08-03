@@ -547,8 +547,10 @@ class ExpertWeightStore:
                         )
                     elif self._pin_memory:
                         # Try pin_memory=True for async H2D (DMA engine).
-                        # If OOM, fall back to pin_memory=False for this
-                        # and all subsequent layers.
+                        # If OOM, drop kernel page cache (safetensors mmap
+                        # leaves large pagecache) and retry once. If still
+                        # fails, fall back to pin_memory=False for all
+                        # remaining layers.
                         try:
                             dram_tensor = torch.empty(
                                 cpu_tensor.shape,
@@ -556,21 +558,35 @@ class ExpertWeightStore:
                                 pin_memory=True,
                             )
                         except (RuntimeError, MemoryError, OSError):
-                            logger.warning(
-                                f"[ExpertWeightStore] pin_memory allocation "
-                                f"failed at layer {layer_id} "
-                                f"({cpu_tensor.shape}, {cpu_tensor.dtype}). "
-                                f"Falling back to pin_memory=False for all "
-                                f"remaining layers."
-                            )
-                            self._pin_memory = False
-                            self._pin_memory_fallback_layer = layer_id
-                            torch.npu.empty_cache()
-                            dram_tensor = torch.empty(
-                                cpu_tensor.shape,
-                                dtype=cpu_tensor.dtype,
-                                pin_memory=False,
-                            )
+                            # Retry after dropping kernel page cache
+                            _drop_kernel_page_cache()
+                            try:
+                                dram_tensor = torch.empty(
+                                    cpu_tensor.shape,
+                                    dtype=cpu_tensor.dtype,
+                                    pin_memory=True,
+                                )
+                                logger.info(
+                                    f"[ExpertWeightStore] pin_memory "
+                                    f"recovered at layer {layer_id} "
+                                    f"after drop_cache"
+                                )
+                            except (RuntimeError, MemoryError, OSError):
+                                logger.warning(
+                                    f"[ExpertWeightStore] pin_memory allocation "
+                                    f"failed at layer {layer_id} "
+                                    f"({cpu_tensor.shape}, {cpu_tensor.dtype}) "
+                                    f"even after drop_cache. Falling back to "
+                                    f"pin_memory=False for all remaining layers."
+                                )
+                                self._pin_memory = False
+                                self._pin_memory_fallback_layer = layer_id
+                                torch.npu.empty_cache()
+                                dram_tensor = torch.empty(
+                                    cpu_tensor.shape,
+                                    dtype=cpu_tensor.dtype,
+                                    pin_memory=False,
+                                )
                     else:
                         dram_tensor = torch.empty(
                             cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
