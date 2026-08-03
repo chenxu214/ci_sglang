@@ -365,6 +365,7 @@ class FusedMoE(torch.nn.Module):
             _moe_dram_offload = False
         self.moe_dram_offload = _moe_dram_offload
         self._dram_offload_enabled = False
+        self._is_h2d_nz_cached = False
         self._expert_weight_store = None
         if _moe_dram_offload:
             # Use meta device: weights are materialized layer-by-layer
@@ -1519,9 +1520,34 @@ class FusedMoE(torch.nn.Module):
             self.layer_id, weight_names, global_buffers
         )
 
-        # Set layer weight references to the global buffers.
-        for name in weight_names:
-            setattr(self, name, global_buffers[name])
+        # Pre-convert ND→NZ format for PyTorch H2D path to eliminate
+        # forward-time npu_format_cast in w4a8_mxfp4_gmm_npu.
+        # acc_offload NZ storage path (use_nz=True) skips this — buffers
+        # are already NZ format from _ensure_shared_global_buffers.
+        use_nz = store._is_nz_storage(self.layer_id)
+        if not use_nz:
+            import torch_npu
+            for name in weight_names:
+                buf = global_buffers[name]
+                is_weight = buf.dtype == torch.uint8 and "scale" not in name
+                if is_weight:
+                    # ND→NZ + transpose(1,2) to match HBM-resident path
+                    nz_buf = torch_npu.npu_format_cast(
+                        buf.contiguous().view(torch.uint8), 29,
+                        customize_dtype=torch.float8_e4m3fn,
+                        input_dtype=torch_npu.float4_e2m1fn_x2,
+                    )
+                    setattr(self, name, nz_buf.transpose(1, 2))
+                else:
+                    # Scale: only transpose, no format_cast
+                    if buf.is_contiguous():
+                        buf = buf.transpose(-3, -2)
+                    setattr(self, name, buf)
+            self._is_h2d_nz_cached = True
+        else:
+            for name in weight_names:
+                setattr(self, name, global_buffers[name])
+            self._is_h2d_nz_cached = False
 
     def _release_shared_hbm_buffers(self):
         """Clear layer weight refs on prefill→decode transition.

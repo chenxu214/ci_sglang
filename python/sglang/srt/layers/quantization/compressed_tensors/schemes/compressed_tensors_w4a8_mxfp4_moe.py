@@ -220,6 +220,7 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         # but graph-safe). acc_offload path (is_nz_stored=True) doesn't
         # hit this code path and remains fully graph-optimized.
         is_nd_format = getattr(layer, "_dram_offload_enabled", False)
+        is_h2d_nz_cached = getattr(layer, "_is_h2d_nz_cached", False)
         if is_nd_format and not torch.npu.is_current_stream_capturing():
             unique_ids, inverse_indices = torch.unique(
                 topk_ids, return_inverse=True
@@ -241,6 +242,7 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             top_k,
             act_fn=self.act_fn,
             is_nd_format=is_nd_format,
+            is_h2d_nz_cached=is_h2d_nz_cached,
         )
         return StandardCombineInput(hidden_states=output)
 
@@ -269,6 +271,7 @@ def npu_fused_experts_w4a8_mxfp4(
     top_k: int,
     act_fn: Callable = _npu_swiglu,
     is_nd_format: bool = False,
+    is_h2d_nz_cached: bool = False,
 ):
     if torch.npu.is_current_stream_capturing():
         return npu_fused_experts_w4a8_mxfp4_decode(
@@ -282,6 +285,7 @@ def npu_fused_experts_w4a8_mxfp4(
             top_k=top_k,
             act_fn=act_fn,
             is_nd_format=is_nd_format,
+            is_h2d_nz_cached=is_h2d_nz_cached,
         )
 
     original_shape = hidden_states.shape
@@ -324,6 +328,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_h2d_nz_cached=is_h2d_nz_cached,
     )
     hidden_states = act_fn(hidden_states, expert_tokens, 0)
     hidden_states = w4a8_mxfp4_gmm_npu(
@@ -335,6 +340,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_h2d_nz_cached=is_h2d_nz_cached,
     )
 
     hidden_states = hidden_states * valid_mask_2d.to(hidden_states.dtype)
@@ -366,6 +372,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
     act_fn: Callable = _npu_swiglu,
     is_nd_format: bool = False,
     is_nz_stored: bool = False,
+    is_h2d_nz_cached: bool = False,
 ):
     num_tokens = hidden_states.shape[:-1].numel()
     global_num_experts = w13.shape[0]
@@ -397,6 +404,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
         is_nz_stored=is_nz_stored,
+        is_h2d_nz_cached=is_h2d_nz_cached,
     )
     hidden_states = act_fn(hidden_states, expert_tokens, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
@@ -409,6 +417,7 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
         is_nz_stored=is_nz_stored,
+        is_h2d_nz_cached=is_h2d_nz_cached,
     )
 
     final_hidden_states = torch.ops.npu.npu_moe_token_unpermute(
@@ -505,6 +514,13 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         and _store is not None
         and _store._is_nz_storage(layer.layer_id)
     )
+    # is_h2d_nz_cached only valid in prefill (weights pre-converted in
+    # _load_experts_on_demand). Decode uses group_pack_copy_active_weights
+    # which loads ND weights — must do forward-time format_cast.
+    _is_decode = _store is not None and _store._is_decode_mode
+    _is_h2d_nz_cached = (
+        getattr(layer, "_is_h2d_nz_cached", False) and not _is_decode
+    )
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
         hidden_states,
@@ -515,6 +531,7 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         act_fn=act_fn,
         is_nd_format=_dram_offload,
         is_nz_stored=_is_nz,
+        is_h2d_nz_cached=_is_h2d_nz_cached,
     )
     return combine_cls(
         hidden_states=hidden_states,
@@ -533,6 +550,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
     act_fn: Callable = _npu_swiglu,
     is_nd_format: bool = False,
     is_nz_stored: bool = False,
+    is_h2d_nz_cached: bool = False,
 ):
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
@@ -544,6 +562,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         output_dtype=output_dtype,
         is_nd_format=is_nd_format,
         is_nz_stored=is_nz_stored,
+        is_h2d_nz_cached=is_h2d_nz_cached,
     )
     # In the DRAM offload prefill path, _load_experts_on_demand loads
     # [num_local_experts, ...] ND tensors into shared HBM buffers. The NZ
@@ -554,7 +573,7 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
     # (reused across steps); setting to None here only drops the layer's
     # reference, not the underlying HBM. This is harmless — decode M is
     # small so peak pressure is lower.
-    if is_nd_format and not is_nz_stored:
+    if is_nd_format and not is_nz_stored and not is_h2d_nz_cached:
         layer.w13_weight_scale = None
     hidden_states = act_fn(hidden_states, group_list, group_list_type)
     hidden_states = w4a8_mxfp4_gmm_npu(
@@ -567,9 +586,10 @@ def npu_apply_without_routing_weights_w4a8_mxfp4(
         output_dtype=output_dtype,
         is_nd_format=is_nd_format,
         is_nz_stored=is_nz_stored,
+        is_h2d_nz_cached=is_h2d_nz_cached,
     )
     # Release w2 compact weights after GMM to reduce HBM peak.
-    if is_nd_format and not is_nz_stored:
+    if is_nd_format and not is_nz_stored and not is_h2d_nz_cached:
         layer.w2_weight = None
         layer.w2_weight_scale = None
     return hidden_states
@@ -585,6 +605,7 @@ def w4a8_mxfp4_gmm_npu(
     output_dtype=torch.bfloat16,
     is_nd_format: bool = False,
     is_nz_stored: bool = False,
+    is_h2d_nz_cached: bool = False,
 ) -> torch.Tensor:
     if group_list is None:
         raise ValueError("group_list must be provided to w4a8_mxfp4_gmm_npu")
@@ -607,12 +628,15 @@ def w4a8_mxfp4_gmm_npu(
     #   by _load_experts_on_demand (format_cast + transpose(1,2)). DRAM
     #   stores pre-transpose NZ bytes ([E, N, K_packed] NZ) via sparse_copy.
     #   No forward-time format_cast needed — graph-safe path.
-    # - is_nd_format=True (and not is_nz_stored): weight is ND from DRAM.
+    # - is_h2d_nz_cached=True: weight was pre-converted to NZ format +
+    #   transpose(1,2) in _load_experts_on_demand (PyTorch H2D path).
+    #   No forward-time format_cast needed — same as is_nz_stored.
+    # - is_nd_format=True (and neither above): weight is ND from DRAM.
     #   DRAM stores pre-transpose [E, N, K_packed] (register_layer_batch
     #   undid process_weights_after_loading's transpose before storage).
     #   Cast to NZ format, then transpose(1,2) to get [E, K_packed, N]
     #   transposed view matching HBM-resident path's final state.
-    if is_nz_stored:
+    if is_nz_stored or is_h2d_nz_cached:
         pass
     elif is_nd_format:
         # ND storage (PyTorch H2D path): DRAM stores pre-transpose format
@@ -638,7 +662,7 @@ def w4a8_mxfp4_gmm_npu(
     #
     # For HBM-resident (neither flag): scale already transposed from
     # process_weights_after_loading, no action needed.
-    if is_nz_stored or is_nd_format:
+    if is_nz_stored or is_h2d_nz_cached or is_nd_format:
         if weight_scale.is_contiguous():
             weight_scale = weight_scale.transpose(-3, -2)
 

@@ -538,10 +538,13 @@ class ExpertWeightStore:
                             cpu_tensor.shape, dtype=cpu_tensor.dtype
                         )
                     else:
-                        # pin_memory=True enables async H2D copy via
-                        # non_blocking=True in group_pack_copy_to_buffers.
+                        # pin_memory=False: page-locked memory has high
+                        # overhead for large tensors (78 layers × 4 = 312
+                        # tensors). Batch copy_ (4 calls/layer) already
+                        # reduces launch overhead by 99%, so synchronous
+                        # copy is acceptable.
                         dram_tensor = torch.empty(
-                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=True
+                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
                         )
                     dram_tensor.copy_(cpu_tensor)
                     total_bytes += dram_tensor.nbytes
