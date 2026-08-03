@@ -163,6 +163,13 @@ class ExpertWeightStore:
         # layers use the pool; the rest use H2D.
         self._h2d_layer_ids: set = set()  # layer_ids that use PyTorch H2D
 
+        # Full-layer DRAM tensor references for batch H2D copy.
+        # Key: (layer_id, name) → full [num_experts, ...] DRAM tensor.
+        # Enables whole-layer copy_ (4 calls) instead of per-expert
+        # serial copy_ (164×4 = 656 calls), reducing Python/NPU launch
+        # overhead by ~99%.
+        self._dram_layer_tensors: Dict[Tuple[int, str], torch.Tensor] = {}
+
         # Store original weight logical shapes for NZ storage path.
         # NZ-format DRAM buffers are flat byte arrays whose .shape doesn't
         # reflect the original [num_experts, N, K] layout needed for HBM
@@ -531,11 +538,18 @@ class ExpertWeightStore:
                             cpu_tensor.shape, dtype=cpu_tensor.dtype
                         )
                     else:
+                        # pin_memory=True enables async H2D copy via
+                        # non_blocking=True in group_pack_copy_to_buffers.
                         dram_tensor = torch.empty(
-                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=True
                         )
                     dram_tensor.copy_(cpu_tensor)
                     total_bytes += dram_tensor.nbytes
+
+                # Save full-layer DRAM tensor reference for batch H2D copy.
+                # group_pack_copy_to_buffers uses this to do whole-layer
+                # copy_ (4 calls) instead of per-expert serial copy_.
+                self._dram_layer_tensors[(layer_id, name)] = dram_tensor
 
                 # Slice per-expert views into dram_store
                 for expert_id in range(num_experts):
@@ -635,21 +649,24 @@ class ExpertWeightStore:
         )
 
         if not use_group_pack:
-            # H2D tail layers: weights are stored via torch.empty (not in
-            # the acc_offload pool). Fall back to tensor.copy_() on the
-            # current stream — serialized with preceding compute and
-            # subsequent CANN ops on the same stream. non_blocking=True
-            # enables async H2D for pinned sources; for unpinned sources
-            # PyTorch silently falls back to synchronous copy.
-            for eid in range(num_local_experts):
-                key = (layer_id, eid)
-                if key not in self.dram_store:
+            # H2D layers: use batch whole-layer copy_ instead of per-expert
+            # serial copy_. Reduces copy_ calls from 164×4=656 to just 4
+            # (one per weight name), cutting Python/NPU launch overhead.
+            # DRAM tensors are pin_memory=True, so non_blocking=True
+            # enables true async H2D.
+            for name in weight_names:
+                layer_key = (layer_id, name)
+                if layer_key not in self._dram_layer_tensors:
+                    # Fallback to per-expert path if full tensor not cached
+                    for eid in range(num_local_experts):
+                        ek = (layer_id, eid)
+                        if ek in self.dram_store:
+                            target_buffers[name][eid].copy_(
+                                self.dram_store[ek][name], non_blocking=True
+                            )
                     continue
-                dram_weights = self.dram_store[key]
-                for name in weight_names:
-                    target_buffers[name][eid].copy_(
-                        dram_weights[name], non_blocking=True
-                    )
+                full_dram = self._dram_layer_tensors[layer_key]
+                target_buffers[name].copy_(full_dram, non_blocking=True)
             return
 
         # Reusable buffers: torch.zeros/ones allocates new tensors each call
