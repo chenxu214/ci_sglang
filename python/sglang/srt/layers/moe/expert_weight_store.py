@@ -134,13 +134,13 @@ class ExpertWeightStore:
         self._offload_initialized = False
         self._dram_pool_size_bytes = int(dram_pool_size_gb * 1024**3)
 
-        # pin_memory auto-fallback: try pin_memory=True first (enables
-        # async H2D via DMA engine, ~30% perf gain). If allocation
-        # fails (OOM), fall back to pin_memory=False for all remaining
-        # layers. This avoids requiring all layers' weights to fit in
-        # page-locked memory simultaneously.
-        self._pin_memory = True
-        self._pin_memory_fallback_layer = None
+        # pin_memory: controlled by MOE_DRAM_PIN_MEMORY env var.
+        # Set to "0" or "false" for single-node (limited DRAM),
+        # "1" or "true" for multi-node (ample DRAM, ~30% perf gain).
+        # Default: True
+        import os
+        _pin_env = os.environ.get("MOE_DRAM_PIN_MEMORY", "1").lower()
+        self._pin_memory = _pin_env not in ("0", "false", "no", "off")
 
         # Storage mode: when False (staging mode), weights are stored in
         # pinned memory instead of the acc_offload pool. The pool is
@@ -545,51 +545,11 @@ class ExpertWeightStore:
                         dram_tensor = self._offload.empty(
                             cpu_tensor.shape, dtype=cpu_tensor.dtype
                         )
-                    elif self._pin_memory:
-                        # Try pin_memory=True for async H2D (DMA engine).
-                        # If OOM, drop kernel page cache (safetensors mmap
-                        # leaves large pagecache) and retry once. If still
-                        # fails, fall back to pin_memory=False for all
-                        # remaining layers.
-                        try:
-                            dram_tensor = torch.empty(
-                                cpu_tensor.shape,
-                                dtype=cpu_tensor.dtype,
-                                pin_memory=True,
-                            )
-                        except (RuntimeError, MemoryError, OSError):
-                            # Retry after dropping kernel page cache
-                            _drop_kernel_page_cache()
-                            try:
-                                dram_tensor = torch.empty(
-                                    cpu_tensor.shape,
-                                    dtype=cpu_tensor.dtype,
-                                    pin_memory=True,
-                                )
-                                logger.info(
-                                    f"[ExpertWeightStore] pin_memory "
-                                    f"recovered at layer {layer_id} "
-                                    f"after drop_cache"
-                                )
-                            except (RuntimeError, MemoryError, OSError):
-                                logger.warning(
-                                    f"[ExpertWeightStore] pin_memory allocation "
-                                    f"failed at layer {layer_id} "
-                                    f"({cpu_tensor.shape}, {cpu_tensor.dtype}) "
-                                    f"even after drop_cache. Falling back to "
-                                    f"pin_memory=False for all remaining layers."
-                                )
-                                self._pin_memory = False
-                                self._pin_memory_fallback_layer = layer_id
-                                torch.npu.empty_cache()
-                                dram_tensor = torch.empty(
-                                    cpu_tensor.shape,
-                                    dtype=cpu_tensor.dtype,
-                                    pin_memory=False,
-                                )
                     else:
                         dram_tensor = torch.empty(
-                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                            cpu_tensor.shape,
+                            dtype=cpu_tensor.dtype,
+                            pin_memory=self._pin_memory,
                         )
                     dram_tensor.copy_(cpu_tensor)
                     total_bytes += dram_tensor.nbytes
