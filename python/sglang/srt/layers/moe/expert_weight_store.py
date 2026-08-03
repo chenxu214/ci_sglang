@@ -134,6 +134,14 @@ class ExpertWeightStore:
         self._offload_initialized = False
         self._dram_pool_size_bytes = int(dram_pool_size_gb * 1024**3)
 
+        # pin_memory auto-fallback: try pin_memory=True first (enables
+        # async H2D via DMA engine, ~30% perf gain). If allocation
+        # fails (OOM), fall back to pin_memory=False for all remaining
+        # layers. This avoids requiring all layers' weights to fit in
+        # page-locked memory simultaneously.
+        self._pin_memory = True
+        self._pin_memory_fallback_layer = None
+
         # Storage mode: when False (staging mode), weights are stored in
         # pinned memory instead of the acc_offload pool. The pool is
         # initialized with a small size (1 GB) only to enable the
@@ -537,12 +545,33 @@ class ExpertWeightStore:
                         dram_tensor = self._offload.empty(
                             cpu_tensor.shape, dtype=cpu_tensor.dtype
                         )
+                    elif self._pin_memory:
+                        # Try pin_memory=True for async H2D (DMA engine).
+                        # If OOM, fall back to pin_memory=False for this
+                        # and all subsequent layers.
+                        try:
+                            dram_tensor = torch.empty(
+                                cpu_tensor.shape,
+                                dtype=cpu_tensor.dtype,
+                                pin_memory=True,
+                            )
+                        except (RuntimeError, MemoryError, OSError):
+                            logger.warning(
+                                f"[ExpertWeightStore] pin_memory allocation "
+                                f"failed at layer {layer_id} "
+                                f"({cpu_tensor.shape}, {cpu_tensor.dtype}). "
+                                f"Falling back to pin_memory=False for all "
+                                f"remaining layers."
+                            )
+                            self._pin_memory = False
+                            self._pin_memory_fallback_layer = layer_id
+                            torch.npu.empty_cache()
+                            dram_tensor = torch.empty(
+                                cpu_tensor.shape,
+                                dtype=cpu_tensor.dtype,
+                                pin_memory=False,
+                            )
                     else:
-                        # pin_memory=False: page-locked memory has high
-                        # overhead for large tensors (78 layers × 4 = 312
-                        # tensors). Batch copy_ (4 calls/layer) already
-                        # reduces launch overhead by 99%, so synchronous
-                        # copy is acceptable.
                         dram_tensor = torch.empty(
                             cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
                         )
@@ -569,7 +598,8 @@ class ExpertWeightStore:
             f"[ExpertWeightStore] D2H batch layer_id={layer_id}: "
             f"{num_experts} experts, {len(weights_dict)} weights, "
             f"{total_bytes / 1024**2:.1f} MB copied to DRAM "
-            f"(nz_storage={'on' if use_pool else 'off'})"
+            f"(nz_storage={'on' if use_pool else 'off'}, "
+            f"pin_memory={'on' if self._pin_memory else 'off'})"
         )
 
     def _release_cpu_cache(self):
