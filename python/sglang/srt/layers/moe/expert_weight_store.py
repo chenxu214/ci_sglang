@@ -8,10 +8,11 @@ Two backends are supported:
   1. acc_offload (default when available): Uses MemFabric acc_offload
      group_pack_copy kernel with MTE engine for batch H2D copy.
      Higher performance due to 32-core parallelism and reduced API overhead.
-  2. PyTorch H2D (fallback): Uses tensor.copy_(non_blocking=True).
-     No external dependency, works everywhere.
+  2. PyTorch H2D (fallback): Uses sgl_kernel_npu transfer_weight kernel
+     (aclrtMemcpyAsync) for D2H/H2D. No acc_offload dependency, works
+     everywhere. Supports NPU graph capture.
 
-Weight loading paths (all use group_pack_copy kernel):
+Weight loading paths:
   - Prefill: group_pack_copy_to_buffers() loads ALL local experts into
     shared HBM buffers synchronously per layer. Uses a fake all-ones
     group_list (real group_list not available pre-dispatch); CANN later
@@ -19,6 +20,12 @@ Weight loading paths (all use group_pack_copy kernel):
   - Decode: group_pack_copy_active_weights() uses the real post-dispatch
     group_list to load and compact active expert weights on-device,
     outputting a packed group_list for CANN. No D2H sync required.
+
+NZ format storage:
+  Weight tensors (w13_weight, w2_weight) are stored in NZ format in DRAM.
+  Both acc_offload (sparse_copy) and PyTorch H2D (transfer_weight) paths
+  preserve NZ byte layout, eliminating forward-time ND→NZ conversion.
+  Scale tensors remain ND format (CANN's antiquant_scale expects ND).
 """
 
 import logging
@@ -30,6 +37,17 @@ import torch_npu
 from sglang.srt.hardware_backend.npu.utils import NPUACLFormat
 
 logger = logging.getLogger(__name__)
+
+# transfer_weight kernel from sgl_kernel_npu: uses aclrtMemcpyAsync for
+# efficient H2D/D2H byte copy. Layout-agnostic (preserves NZ bytes),
+# async (supports graph capture), and faster than torch.copy_.
+try:
+    from sgl_kernel_npu.kvcacheio import transfer_weight, TransferDirection
+    _TRANSFER_WEIGHT_AVAILABLE = True
+except ImportError:
+    _TRANSFER_WEIGHT_AVAILABLE = False
+    transfer_weight = None
+    TransferDirection = None
 
 
 def _drop_kernel_page_cache() -> None:
@@ -142,6 +160,14 @@ class ExpertWeightStore:
         if not use_pool_for_storage:
             self._dram_pool_size_bytes = 1 * 1024**3  # 1 GB staging
 
+        # pin_memory control via environment variable.
+        # MOE_DRAM_PIN_MEMORY=1 (default): use pinned host memory for DRAM
+        #   tensors, enabling async H2D via DMA engine (~30% faster).
+        # MOE_DRAM_PIN_MEMORY=0: use regular host memory (for limited DRAM).
+        import os
+        pin_env = os.environ.get("MOE_DRAM_PIN_MEMORY", "1").lower()
+        self._pin_memory = pin_env not in ("0", "false", "no", "off")
+
         # Track registered layers for warmup
         self._registered_layers: set = set()
 
@@ -156,6 +182,10 @@ class ExpertWeightStore:
         self._num_le_t: Optional[torch.Tensor] = None
         self._num_le_cache: Optional[int] = None
         self._packed_group_list_buf: Optional[torch.Tensor] = None
+        # Padded input group_list buffer for acc_offload path: when DeepEP
+        # returns a shorter group_list (size < weight dim 0), pad with zeros
+        # so group_pack_copy kernel can safely iterate [0, num_le).
+        self._padded_group_list_buf: Optional[torch.Tensor] = None
 
         # Hybrid storage: layers in _h2d_layer_ids use PyTorch H2D
         # (torch.empty) instead of acc_offload pool. Configured via
@@ -168,6 +198,10 @@ class ExpertWeightStore:
         # reflect the original [num_experts, N, K] layout needed for HBM
         # buffer allocation. Key: (layer_id, name) → original full_shape.
         self._weight_shapes: Dict[Tuple[int, str], Tuple[int, ...]] = {}
+
+        # Full-layer DRAM tensor references for batch H2D copy.
+        # Key: (layer_id, name) → full-layer DRAM tensor (all experts).
+        self._dram_layer_tensors: Dict[Tuple[int, str], torch.Tensor] = {}
 
         # Global shared HBM buffers (all offloaded layers reuse these).
         # Prefill layers are processed sequentially, so only one layer's
@@ -326,11 +360,16 @@ class ExpertWeightStore:
     def _is_nz_storage(self, layer_id: int) -> bool:
         """Check if NZ format direct storage is active for this layer.
 
-        NZ storage requires acc_offload pool (sparse_copy is the only API
-        that can handle NZ format D2H transfer; torch copy_() does not).
-        H2D tail layers (torch.empty) use ND format and need forward-time
-        ND→NZ conversion.
+        NZ storage is always active for weight tensors, regardless of
+        whether acc_offload is used. This eliminates forward-time ND→NZ
+        conversion:
+        - acc_offload path: sparse_copy D2H, group_pack_copy H2D
+        - PyTorch H2D path: transfer_weight kernel D2H and H2D
         """
+        return True
+
+    def _is_pool_storage(self, layer_id: int) -> bool:
+        """Check if acc_offload pool is used for DRAM storage."""
         return (
             self._use_pool_for_storage
             and self.use_acc_offload
@@ -462,7 +501,10 @@ class ExpertWeightStore:
         total_bytes = 0
         temp_cpu_tensors = []
 
-        use_pool = self._is_nz_storage(layer_id)
+        use_pool = self._is_pool_storage(layer_id)
+
+        import time
+        t_layer_start = time.time()
 
         try:
             for name, full_tensor in weights_dict.items():
@@ -475,45 +517,95 @@ class ExpertWeightStore:
                 is_weight = full_tensor.dtype == torch.uint8 and "scale" not in name
 
                 if use_pool and is_weight:
-                    # NZ storage path: move to NPU → cast to NZ → sparse_copy D2H
-                    #
-                    # Works for both CPU and NPU input tensors. CPU tensors
-                    # (offload mode where process_weights_after_loading keeps
-                    # weights on CPU) are moved via .npu() below.
-                    #
-                    # CRITICAL: Undo process_weights_after_loading's transpose(1,2)
-                    # BEFORE format_cast. The HBM-resident path does:
-                    #   format_cast(NZ) on [E, N, K_packed] → transpose(1,2)
-                    # We must store NZ bytes for [E, N, K_packed] (pre-transpose)
-                    # so the HBM buffer can be allocated with the same shape,
-                    # format_cast to NZ, and then transposed to match HBM-resident.
-                    # Storing post-transpose [E, K_packed, N] NZ bytes would create
-                    # a different NZ block layout that CANN cannot read after
-                    # transpose(1,2).
-                    pre_transpose = full_tensor.transpose(1, 2).contiguous()
-                    npu_tensor = pre_transpose.npu()
+                    # acc_offload NZ storage path: sparse_copy D2H
+                    # NZ cast on original [E, N, K_packed] shape (matching
+                    # non-offload path), then transpose NZ result (free view).
+                    # Avoids .transpose(1,2).contiguous() on CPU (~22s/4.7GB).
+                    t0 = time.time()
+                    npu_tensor = full_tensor.npu() if full_tensor.device.type == "cpu" else full_tensor
                     nz_tensor = torch_npu.npu_format_cast(
                         npu_tensor, 29,
                         customize_dtype=torch.float8_e4m3fn,
                         input_dtype=torch_npu.float4_e2m1fn_x2,
                     )
+                    nz_tensor = nz_tensor.transpose(1, 2)
                     storage_size = nz_tensor.element_size() * nz_tensor.numel()
                     per_expert_nz_nbytes = nz_tensor[0].nbytes
+                    t1 = time.time()
 
-                    # Allocate DRAM buffer matching NZ storage size, reshaped
-                    # to [num_experts, per_expert_nz_nbytes] for per-expert slicing.
                     dram_flat = self._offload.empty(
                         [storage_size], dtype=torch.uint8
                     )
                     self._sparse_copy_d2h(nz_tensor, dram_flat)
                     dram_tensor = dram_flat.view(num_experts, per_expert_nz_nbytes)
-                    del npu_tensor, nz_tensor, dram_flat, pre_transpose
+                    del npu_tensor, nz_tensor, dram_flat
                     total_bytes += storage_size
 
-                    # Store PRE-transpose logical shape for HBM buffer allocation.
-                    # HBM buffer is allocated as [E, N, K_packed], format_cast to NZ,
-                    # then transposed to [E, K_packed, N] to match HBM-resident.
-                    self._weight_shapes[(layer_id, name)] = tuple(full_tensor.transpose(1, 2).shape)
+                    # Store ORIGINAL shape [E, N, K_packed] (not transposed)
+                    # so HBM buffer allocation casts NZ on the same shape as
+                    # the DRAM data. npu_format_cast with input_dtype=
+                    # float4_e2m1fn_x2 unpacks the LAST dim as packed fp4,
+                    # so the last dim MUST be K_packed (packed), not N.
+                    # Storing transposed shape would cause CANN to unpack N
+                    # instead of K_packed, producing wrong NZ block metadata
+                    # (weight K=2*N instead of K=2*K_packed=hidden).
+                    self._weight_shapes[(layer_id, name)] = tuple(full_tensor.shape)
+                    logger.info(
+                        f"[D2H timing] layer={layer_id} name={name} "
+                        f"nz_cast={t1-t0:.2f}s sparse_copy+d2h={time.time()-t1:.2f}s "
+                        f"size={storage_size/1024**2:.1f}MB"
+                    )
+                elif is_weight and _TRANSFER_WEIGHT_AVAILABLE:
+                    # PyTorch H2D NZ storage path: transfer_weight D2H
+                    # Uses aclrtMemcpyAsync to copy NZ bytes from HBM to DRAM,
+                    # preserving NZ layout without ND→NZ conversion at forward.
+                    #
+                    # NZ cast on original [E, N, K_packed] shape (matching the
+                    # non-offload path in process_weights_after_loading), then
+                    # transpose the NZ result (free view on NZ tensor). This
+                    # avoids the expensive .transpose(1,2).contiguous() on CPU
+                    # which costs ~22s per 4.7GB weight due to non-sequential
+                    # memory access. The .npu() H2D copy is ~0.2s by comparison.
+                    t0 = time.time()
+                    npu_tensor = full_tensor.npu() if full_tensor.device.type == "cpu" else full_tensor
+                    t1 = time.time()
+                    nz_tensor = torch_npu.npu_format_cast(
+                        npu_tensor, 29,
+                        customize_dtype=torch.float8_e4m3fn,
+                        input_dtype=torch_npu.float4_e2m1fn_x2,
+                    )
+                    nz_tensor = nz_tensor.transpose(1, 2)
+                    t2 = time.time()
+                    storage_size = nz_tensor.element_size() * nz_tensor.numel()
+                    per_expert_nz_nbytes = nz_tensor[0].nbytes
+
+                    dram_tensor = torch.empty(
+                        [storage_size], dtype=torch.uint8,
+                        pin_memory=self._pin_memory,
+                    ).view(num_experts, per_expert_nz_nbytes)
+                    t3 = time.time()
+                    transfer_weight(dram_tensor, nz_tensor, direction=TransferDirection.D2H)
+                    torch.npu.synchronize()  # ensure D2H complete before releasing NZ tensor
+                    t4 = time.time()
+                    del npu_tensor, nz_tensor
+                    t5 = time.time()
+                    total_bytes += storage_size
+
+                    # Store ORIGINAL shape [E, N, K_packed] (not transposed)
+                    # so HBM buffer allocation casts NZ on the same shape as
+                    # the DRAM data. npu_format_cast with input_dtype=
+                    # float4_e2m1fn_x2 unpacks the LAST dim as packed fp4,
+                    # so the last dim MUST be K_packed (packed), not N.
+                    # Storing transposed shape would cause CANN to unpack N
+                    # instead of K_packed, producing wrong NZ block metadata
+                    # (weight K=2*N instead of K=2*K_packed=hidden).
+                    self._weight_shapes[(layer_id, name)] = tuple(full_tensor.shape)
+                    logger.info(
+                        f"[D2H timing] layer={layer_id} name={name} "
+                        f"h2d={t1-t0:.2f}s nz_cast={t2-t1:.2f}s "
+                        f"pin_alloc={t3-t2:.2f}s d2h={t4-t3:.2f}s "
+                        f"del={t5-t4:.2f}s size={storage_size/1024**2:.1f}MB"
+                    )
                 else:
                     # ND storage path (scales and H2D tail weights):
                     # Undo transpose before storing so DRAM has pre-transpose
@@ -531,11 +623,22 @@ class ExpertWeightStore:
                             cpu_tensor.shape, dtype=cpu_tensor.dtype
                         )
                     else:
+                        # Scale tensors (ND format) are also copied via
+                        # transfer_weight at forward time. aclrtMemcpyAsync
+                        # requires pinned host memory as src to avoid an
+                        # internal StreamSynchronize, which is not supported
+                        # during NPU graph capture (error 107027
+                        # "stream is captured"). Use self._pin_memory so
+                        # graph mode works when MOE_DRAM_PIN_MEMORY=1.
                         dram_tensor = torch.empty(
-                            cpu_tensor.shape, dtype=cpu_tensor.dtype, pin_memory=False
+                            cpu_tensor.shape, dtype=cpu_tensor.dtype,
+                            pin_memory=self._pin_memory,
                         )
                     dram_tensor.copy_(cpu_tensor)
                     total_bytes += dram_tensor.nbytes
+
+                # Save full-layer DRAM tensor reference for batch H2D copy.
+                self._dram_layer_tensors[(layer_id, name)] = dram_tensor
 
                 # Slice per-expert views into dram_store
                 for expert_id in range(num_experts):
@@ -552,7 +655,8 @@ class ExpertWeightStore:
             f"[ExpertWeightStore] D2H batch layer_id={layer_id}: "
             f"{num_experts} experts, {len(weights_dict)} weights, "
             f"{total_bytes / 1024**2:.1f} MB copied to DRAM "
-            f"(nz_storage={'on' if use_pool else 'off'})"
+            f"(pool={'on' if use_pool else 'off'}, "
+            f"pin_memory={'on' if self._pin_memory else 'off'})"
         )
 
     def _release_cpu_cache(self):
@@ -635,21 +739,43 @@ class ExpertWeightStore:
         )
 
         if not use_group_pack:
-            # H2D tail layers: weights are stored via torch.empty (not in
-            # the acc_offload pool). Fall back to tensor.copy_() on the
-            # current stream — serialized with preceding compute and
-            # subsequent CANN ops on the same stream. non_blocking=True
-            # enables async H2D for pinned sources; for unpinned sources
-            # PyTorch silently falls back to synchronous copy.
-            for eid in range(num_local_experts):
-                key = (layer_id, eid)
-                if key not in self.dram_store:
-                    continue
-                dram_weights = self.dram_store[key]
-                for name in weight_names:
-                    target_buffers[name][eid].copy_(
-                        dram_weights[name], non_blocking=True
-                    )
+            # PyTorch H2D path: use transfer_weight kernel for NZ-stored
+            # weights (aclrtMemcpyAsync, layout-agnostic, graph-safe),
+            # and copy_ for ND-stored scales.
+            for name in weight_names:
+                shape_key = (layer_id, name)
+                is_nz_weight = (
+                    shape_key in self._weight_shapes
+                    and target_buffers[name].dtype == torch.uint8
+                    and "scale" not in name
+                )
+                if is_nz_weight and _TRANSFER_WEIGHT_AVAILABLE:
+                    # NZ weight: batch H2D via transfer_weight (1 call per weight)
+                    full_dram = self._dram_layer_tensors.get((layer_id, name))
+                    if full_dram is not None:
+                        transfer_weight(
+                            target_buffers[name], full_dram,
+                            direction=TransferDirection.H2D,
+                        )
+                    else:
+                        for eid in range(num_local_experts):
+                            key = (layer_id, eid)
+                            if key not in self.dram_store:
+                                continue
+                            transfer_weight(
+                                target_buffers[name][eid],
+                                self.dram_store[key][name],
+                                direction=TransferDirection.H2D,
+                            )
+                else:
+                    # Scale tensor (ND): use copy_
+                    for eid in range(num_local_experts):
+                        key = (layer_id, eid)
+                        if key not in self.dram_store:
+                            continue
+                        target_buffers[name][eid].copy_(
+                            self.dram_store[key][name], non_blocking=True
+                        )
             return
 
         # Reusable buffers: torch.zeros/ones allocates new tensors each call
@@ -797,6 +923,18 @@ class ExpertWeightStore:
             layer_id, num_local_experts, weight_names, sample_key, target_device
         )
 
+        if logger.isEnabledFor(logging.WARNING):
+            w13_buf = result.get("w13_weight", None)
+            logger.warning(
+                f"[group_pack_copy_active] layer_id={layer_id} "
+                f"group_list.shape={group_list.shape} "
+                f"num_local_experts={num_local_experts} "
+                f"buf_w13_shape={w13_buf.shape if w13_buf is not None else 'N/A'} "
+                f"use_acc_offload={self.use_acc_offload} "
+                f"h2d_layer={layer_id in self._h2d_layer_ids} "
+                f"capturing={torch.npu.is_current_stream_capturing()}"
+            )
+
         use_group_pack = (
             self.use_acc_offload
             and self._offload_initialized
@@ -804,34 +942,161 @@ class ExpertWeightStore:
         )
 
         if not use_group_pack:
-            # H2D tail layers: weights are stored via torch.empty (not in the
-            # acc_offload pool), so group_pack_copy cannot be used. Fall back
-            # to tensor.copy_() directly on the current (default) stream.
-            # No cross-stream synchronization needed — copy_() is serialized
-            # with preceding compute and subsequent CANN ops on the same
-            # stream. Use original group_list (uncompacted); CANN skips zero
-            # entries.
-            for eid in range(num_local_experts):
-                key = (layer_id, eid)
-                if key not in self.dram_store:
-                    continue
-                dram_weights = self.dram_store[key]
+            # PyTorch H2D path: dual-mode based on graph capture state.
+            #
+            # Graph mode (capture): transfer_weight batch copy ALL experts.
+            #   - Graph-safe (aclrtMemcpyAsync can be captured/replayed)
+            #   - CANN skips zero-group_list entries (no extra cost)
+            #   - H2D bandwidth: full layer (~347MB)
+            #
+            # Eager mode: CPU-side selective copy via group_list D2H sync.
+            #   - Only copies selected experts (~8 of 164)
+            #   - H2D bandwidth: ~17MB (20x reduction)
+            #   - Generates packed_group_list for CANN
+            #   - Not graph-safe (requires D2H sync)
+            is_capturing = torch.npu.is_current_stream_capturing()
+
+            # CANN aclnnGroupedMatmulWeightNz requires group_list size ==
+            # weight dim 0. The shared HBM buffer (result[name]) dim 0 is
+            # determined by _weight_shapes (NZ storage) or num_local_experts
+            # (ND storage), which may differ from the input group_list size
+            # (e.g., DeepEP may return a shorter list). Pad group_list to
+            # expected_size with zeros so CANN skips the tail experts.
+            expected_size = result[weight_names[0]].shape[0]
+
+            if is_capturing:
+                # === Graph mode: batch copy all experts ===
                 for name in weight_names:
-                    result[name][eid].copy_(
-                        dram_weights[name], non_blocking=True
+                    shape_key = (layer_id, name)
+                    is_nz_weight = (
+                        shape_key in self._weight_shapes
+                        and result[name].dtype == torch.uint8
+                        and "scale" not in name
                     )
-            return result, group_list
+                    if is_nz_weight and _TRANSFER_WEIGHT_AVAILABLE:
+                        full_dram = self._dram_layer_tensors.get((layer_id, name))
+                        if full_dram is not None:
+                            transfer_weight(
+                                result[name], full_dram,
+                                direction=TransferDirection.H2D,
+                            )
+                        else:
+                            for eid in range(num_local_experts):
+                                key = (layer_id, eid)
+                                if key not in self.dram_store:
+                                    continue
+                                transfer_weight(
+                                    result[name][eid],
+                                    self.dram_store[key][name],
+                                    direction=TransferDirection.H2D,
+                                )
+                    elif _TRANSFER_WEIGHT_AVAILABLE:
+                        # Scale tensors: use transfer_weight for graph-safe H2D.
+                        # torch.copy_() is not capturable for CPU→NPU copies.
+                        full_dram = self._dram_layer_tensors.get((layer_id, name))
+                        if full_dram is not None:
+                            transfer_weight(
+                                result[name], full_dram,
+                                direction=TransferDirection.H2D,
+                            )
+                        else:
+                            for eid in range(num_local_experts):
+                                key = (layer_id, eid)
+                                if key not in self.dram_store:
+                                    continue
+                                transfer_weight(
+                                    result[name][eid],
+                                    self.dram_store[key][name],
+                                    direction=TransferDirection.H2D,
+                                )
+                    else:
+                        for eid in range(num_local_experts):
+                            key = (layer_id, eid)
+                            if key not in self.dram_store:
+                                continue
+                            result[name][eid].copy_(
+                                self.dram_store[key][name], non_blocking=True
+                            )
+                # Pad group_list to expected_size for CANN compatibility.
+                if group_list.shape[0] != expected_size:
+                    if (
+                        self._packed_group_list_buf is None
+                        or self._packed_group_list_buf.shape[0] != expected_size
+                    ):
+                        self._packed_group_list_buf = torch.zeros(
+                            expected_size, dtype=torch.int64, device=target_device
+                        )
+                    else:
+                        self._packed_group_list_buf.zero_()
+                    self._packed_group_list_buf[:group_list.shape[0]] = group_list
+                    group_list = self._packed_group_list_buf
+                return result, group_list
+            else:
+                # === Eager mode: CPU-side selective copy ===
+                group_list_cpu = group_list.cpu()
+                packed_indices = []
+                packed_values = []
+                for i in range(num_local_experts):
+                    val = group_list_cpu[i].item()
+                    if val != 0:
+                        packed_indices.append(i)
+                        packed_values.append(val)
+
+                num_packed = len(packed_indices)
+                for name in weight_names:
+                    shape_key = (layer_id, name)
+                    is_nz_weight = (
+                        shape_key in self._weight_shapes
+                        and result[name].dtype == torch.uint8
+                        and "scale" not in name
+                    )
+                    for packed_idx in range(num_packed):
+                        orig_idx = packed_indices[packed_idx]
+                        src_tensor = self.dram_store[(layer_id, orig_idx)][name]
+                        if is_nz_weight and _TRANSFER_WEIGHT_AVAILABLE:
+                            transfer_weight(
+                                result[name][packed_idx], src_tensor,
+                                direction=TransferDirection.H2D,
+                            )
+                        else:
+                            result[name][packed_idx].copy_(
+                                src_tensor, non_blocking=True
+                            )
+
+                # Pad packed_group_list to expected_size (weight dim 0) so
+                # CANN group_list size matches weight dim 0. Tail entries
+                # are zero — CANN skips experts with 0 tokens.
+                if (
+                    self._packed_group_list_buf is None
+                    or self._packed_group_list_buf.shape[0] != expected_size
+                ):
+                    self._packed_group_list_buf = torch.zeros(
+                        expected_size, dtype=torch.int64, device=target_device
+                    )
+                else:
+                    self._packed_group_list_buf.zero_()
+                if num_packed > 0:
+                    self._packed_group_list_buf[:num_packed] = torch.tensor(
+                        packed_values, dtype=torch.int64, device=target_device
+                    )
+                packed_group_list = self._packed_group_list_buf
+                return result, packed_group_list
 
         # Pre-allocated packed_group_list buffer (reused via .zero_()).
         # .zero_() is a capturable memset kernel; torch.zeros() allocates a
         # new tensor each call whose address is non-deterministic on graph
         # replay, causing silent data corruption.
+        #
+        # Buffer size must match weight dim 0 (expected_size), not
+        # num_local_experts, because CANN requires group_list size ==
+        # weight dim 0. When DeepEP returns a shorter group_list (e.g.,
+        # only active experts), num_local_experts < expected_size.
         if (
             self._packed_group_list_buf is None
-            or self._packed_group_list_buf.shape[0] != num_local_experts
+            or self._packed_group_list_buf.shape[0] != expected_size
         ):
             self._packed_group_list_buf = torch.zeros(
-                num_local_experts, dtype=torch.int64, device=target_device
+                expected_size, dtype=torch.int64, device=target_device
             )
         else:
             self._packed_group_list_buf.zero_()
@@ -839,11 +1104,30 @@ class ExpertWeightStore:
 
         device = torch.device(f"npu:{torch.npu.current_device()}")
 
+        # Pad input group_list to expected_size so group_pack_copy kernel can
+        # safely iterate [0, num_le=expected_size) without reading OOB.
+        # group_list and packed_group_list must be separate buffers (kernel
+        # reads group_list while writing packed_group_list).
+        if group_list.shape[0] != expected_size:
+            if (
+                self._padded_group_list_buf is None
+                or self._padded_group_list_buf.shape[0] != expected_size
+            ):
+                self._padded_group_list_buf = torch.zeros(
+                    expected_size, dtype=torch.int64, device=target_device
+                )
+            else:
+                self._padded_group_list_buf.zero_()
+            self._padded_group_list_buf[:group_list.shape[0]] = group_list
+            group_list = self._padded_group_list_buf
+
         # Call group_pack_copy once per weight name. Each call gets the same
         # group_list and packed_group_list (per-expert, not per-weight).
+        # Use expected_size (weight dim 0) so ptr tensors cover all experts
+        # in the HBM buffer, matching CANN's group_list size requirement.
         for name in weight_names:
             src_ptr_t, dst_ptr_t, len_t, num_le_t = self._get_decode_ptr_tensors(
-                layer_id, name, num_local_experts, result[name], target_device
+                layer_id, name, expected_size, result[name], target_device
             )
 
             ret = self._offload.group_pack_copy(

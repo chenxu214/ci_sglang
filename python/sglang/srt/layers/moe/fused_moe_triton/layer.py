@@ -1523,6 +1523,11 @@ class FusedMoE(torch.nn.Module):
         for name in weight_names:
             setattr(self, name, global_buffers[name])
 
+        # Mark that weights are NZ-stored (no forward-time format_cast needed).
+        # Both acc_offload (sparse_copy) and transfer_weight paths store NZ
+        # bytes; HBM buffers are pre-allocated as NZ format.
+        self._is_nz_stored = True
+
     def _release_shared_hbm_buffers(self):
         """Clear layer weight refs on prefill→decode transition.
 
