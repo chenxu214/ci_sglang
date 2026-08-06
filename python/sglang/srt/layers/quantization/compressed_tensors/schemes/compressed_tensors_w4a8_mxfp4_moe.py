@@ -161,10 +161,11 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2)
             layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2)
         else:
-            # ND format: just transpose for offload storage.
-            # Forward will convert to NZ via is_nd_format flag.
-            layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2).contiguous()
-            layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2).contiguous()
+            # ND format: no transpose for weights — register_layer_batch
+            # will cast to NZ on original shape [E, N, K_packed] directly,
+            # avoiding a redundant transpose(1,2).contiguous() round-trip
+            # that costs ~22s per weight on 4.7GB tensors.
+            pass
 
         g, n, k = layer.w13_weight_scale.shape
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(g, n, k // 2, 2).transpose(-3, -2)
@@ -208,18 +209,16 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         w13_scale = layer.w13_weight_scale
         w2_scale = layer.w2_weight_scale
 
-        # DRAM offload path: weights are ND (contiguous). Extract only the
-        # selected experts before NZ conversion to avoid converting the
-        # entire [num_experts, ...] tensor (which doubles HBM and causes
-        # OOM). Use the offload flag instead of is_contiguous() because
-        # NZ-format weights may also report contiguous=True on NPU.
-        #
-        # torch.unique is incompatible with NPU graph capture (requires
-        # stream sync for dynamic output shape). Skip expert extraction
-        # during capture; GMM processes all experts (lower performance
-        # but graph-safe). acc_offload path (is_nz_stored=True) doesn't
-        # hit this code path and remains fully graph-optimized.
-        is_nd_format = getattr(layer, "_dram_offload_enabled", False)
+        # NZ storage path (acc_offload + transfer_weight): weight is already
+        # NZ format in HBM buffer. No format_cast or expert extraction needed.
+        # Skip torch.unique (graph-safe, all experts loaded in HBM buffer).
+        is_nz_stored = getattr(layer, "_is_nz_stored", False)
+        is_nd_format = getattr(layer, "_dram_offload_enabled", False) and not is_nz_stored
+
+        # Legacy ND path: extract only selected experts before NZ conversion
+        # to avoid converting entire [num_experts, ...] tensor (OOM).
+        # torch.unique is incompatible with graph capture (dynamic output
+        # shape). Skip during capture; GMM processes all experts.
         if is_nd_format and not torch.npu.is_current_stream_capturing():
             unique_ids, inverse_indices = torch.unique(
                 topk_ids, return_inverse=True
@@ -241,6 +240,7 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
             top_k,
             act_fn=self.act_fn,
             is_nd_format=is_nd_format,
+            is_nz_stored=is_nz_stored,
         )
         return StandardCombineInput(hidden_states=output)
 
@@ -269,6 +269,7 @@ def npu_fused_experts_w4a8_mxfp4(
     top_k: int,
     act_fn: Callable = _npu_swiglu,
     is_nd_format: bool = False,
+    is_nz_stored: bool = False,
 ):
     if torch.npu.is_current_stream_capturing():
         return npu_fused_experts_w4a8_mxfp4_decode(
@@ -282,6 +283,7 @@ def npu_fused_experts_w4a8_mxfp4(
             top_k=top_k,
             act_fn=act_fn,
             is_nd_format=is_nd_format,
+            is_nz_stored=is_nz_stored,
         )
 
     original_shape = hidden_states.shape
@@ -324,6 +326,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
     hidden_states = act_fn(hidden_states, expert_tokens, 0)
     hidden_states = w4a8_mxfp4_gmm_npu(
@@ -335,6 +338,7 @@ def npu_fused_experts_w4a8_mxfp4(
         group_list=expert_tokens,
         output_dtype=original_dtype,
         is_nd_format=is_nd_format,
+        is_nz_stored=is_nz_stored,
     )
 
     hidden_states = hidden_states * valid_mask_2d.to(hidden_states.dtype)
@@ -386,6 +390,15 @@ def npu_fused_experts_w4a8_mxfp4_decode(
         )
     )
     expert_tokens = expert_tokens.to(torch.int64)
+
+    if logger.isEnabledFor(logging.WARNING):
+        logger.warning(
+            f"[decode] num_tokens={num_tokens} top_k={top_k} "
+            f"global_num_experts={global_num_experts} "
+            f"expert_tokens.shape={expert_tokens.shape} "
+            f"w13.shape={w13.shape} topk_ids.shape={topk_ids.shape} "
+            f"capturing={torch.npu.is_current_stream_capturing()}"
+        )
 
     hidden_states = w4a8_mxfp4_gmm_npu(
         input=hidden_states,
@@ -486,25 +499,38 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         # own defense, but we need weight_names before calling it.
         if sample_key in store.dram_store:
             weight_names = list(store.dram_store[sample_key].keys())
+            if logger.isEnabledFor(logging.WARNING):
+                logger.warning(
+                    f"[deepep] before group_pack_copy: "
+                    f"group_list.shape={group_list.shape} "
+                    f"layer_id={layer.layer_id} "
+                    f"capturing={torch.npu.is_current_stream_capturing()}"
+                )
             compact_weights, group_list = store.group_pack_copy_active_weights(
                 layer.layer_id, group_list, weight_names
             )
+            if logger.isEnabledFor(logging.WARNING):
+                logger.warning(
+                    f"[deepep] after group_pack_copy: "
+                    f"group_list.shape={group_list.shape} "
+                    f"w13.shape={compact_weights.get('w13_weight', None).shape if 'w13_weight' in compact_weights else 'N/A'}"
+                )
             for name, tensor in compact_weights.items():
                 setattr(layer, name, tensor)
+            # Mark NZ-stored: both acc_offload (group_pack_copy) and
+            # transfer_weight paths store NZ bytes in HBM buffers.
+            layer._is_nz_stored = True
 
     # Determine weight storage format for this layer:
-    # - is_nz_stored=True: weight is pre-allocated as NZ format in HBM
-    #   (acc_offload pool layers). No forward-time format_cast needed.
+    # - is_nz_stored=True: weight is NZ format in HBM (acc_offload or
+    #   transfer_weight path). No forward-time format_cast needed.
     # - is_nd_format=True (and not is_nz_stored): weight is ND from DRAM
-    #   (H2D tail layers). Forward-time ND→NZ conversion required.
+    #   (legacy H2D path). Forward-time ND→NZ conversion required.
     # - Both False: HBM-resident weight (already NZ from process_weights).
     _dram_offload = getattr(layer, "_dram_offload_enabled", False)
-    _store = getattr(layer, "_expert_weight_store", None)
-    _is_nz = (
-        _dram_offload
-        and _store is not None
-        and _store._is_nz_storage(layer.layer_id)
-    )
+    _is_nz = getattr(layer, "_is_nz_stored", False)
+    _is_nd = _dram_offload and not _is_nz
+
     hidden_states = npu_apply_without_routing_weights_w4a8_mxfp4(
         layer,
         hidden_states,
@@ -513,7 +539,7 @@ def npu_apply_w4a8_mxfp4_moe_deepep(
         group_list,
         output_dtype,
         act_fn=act_fn,
-        is_nd_format=_dram_offload,
+        is_nd_format=_is_nd,
         is_nz_stored=_is_nz,
     )
     return combine_cls(
@@ -604,8 +630,10 @@ def w4a8_mxfp4_gmm_npu(
 
     # Weight format conversion logic:
     # - is_nz_stored=True: weight is pre-allocated as NZ format in HBM
-    #   by _load_experts_on_demand (format_cast + transpose(1,2)). DRAM
-    #   stores pre-transpose NZ bytes ([E, N, K_packed] NZ) via sparse_copy.
+    #   by _ensure_shared_global_buffers (format_cast on [E, N, K_packed]
+    #   + transpose(1,2) → [E, K_packed, N] NZ). DRAM stores the same NZ
+    #   layout (cast on [E, N, K_packed] + transpose). Both HBM and DRAM
+    #   have NZ blocks for N×K (K=2*K_packed=hidden, unpacked from fp4).
     #   No forward-time format_cast needed — graph-safe path.
     # - is_nd_format=True (and not is_nz_stored): weight is ND from DRAM.
     #   DRAM stores pre-transpose [E, N, K_packed] (register_layer_batch
@@ -641,6 +669,14 @@ def w4a8_mxfp4_gmm_npu(
     if is_nz_stored or is_nd_format:
         if weight_scale.is_contiguous():
             weight_scale = weight_scale.transpose(-3, -2)
+
+    if logger.isEnabledFor(logging.WARNING):
+        logger.warning(
+            f"[w4a8_mxfp4_gmm_npu] group_list.shape={group_list.shape} "
+            f"weight.shape={weight.shape} is_nz_stored={is_nz_stored} "
+            f"is_nd_format={is_nd_format} group_list_type={group_list_type} "
+            f"capturing={torch.npu.is_current_stream_capturing()}"
+        )
 
     return torch.ops.npu.npu_grouped_matmul(
         [x],
