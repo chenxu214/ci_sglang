@@ -1,0 +1,38 @@
+python/sglang/srt/model_executor/model_runner.py
+  s_284cf16ac92aae::t_79ee0a55eaada6 1416
+  s_284cf16ac92aae::t_800b4dc69cdc7f 349
+python/sglang/srt/model_executor/forward_batch_info.py
+  s_284cf16ac92aae::t_e1faade4f3640a 924,927
+  s_284cf16ac92aae::t_5d268296d9a852 740,744
+  s_284cf16ac92aae::t_5c83cf9adc9ba0 883-885
+  s_284cf16ac92aae::t_e08685d156a319 855
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "b74739017afc72039224f526c0b8a8f02ad9c4ad",
+  "prompts": {},
+  "sessions": {
+    "s_284cf16ac92aae": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a06e567666b2919c616098b",
+        "model": "glm-5.2"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "tool_use_id": "6a845a85581f7e9d7a2dc29f",
+        "tool_type": "builtin",
+        "client_type": "ide",
+        "dedupe_key": "6a06e567666b2919c616098b:6a845a85581f7e9d7a2dc29f:afterEdit:bc5b102e",
+        "operation_id": "6a845a85581f7e9d7a2dc29f",
+        "session_id": "6a06e567666b2919c616098b",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "edit_kind": "file_edit",
+        "external_session_id": "6a06e567666b2919c616098b",
+        "runtime_client": "trae-tob-git-ai",
+        "source_scene": "agent"
+      }
+    }
+  }
+}
