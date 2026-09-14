@@ -695,27 +695,23 @@ class AscendKDAHybridLinearAttnBackend:
                         mamba_steps_to_track=track_steps,
                     )
 
-                    intermediate_conv_window_cache = (
-                        mamba_caches.intermediate_conv_window[0]
-                    )
+                    draft_token_num = L
                     if dst_indices_tensor.numel() > 0:
-                        speculative_state_scatter_npu(
+                        conv_state_rollback(
                             conv_states,
-                            intermediate_conv_window_cache,
                             dst_indices_tensor,
-                            src_indices_tensor,
                             last_steps,
+                            draft_token_num,
                         )
                     if (
                         mamba_track_indices is not None
                         and mamba_track_indices.numel() > 0
                     ):
-                        speculative_state_scatter_npu(
+                        conv_state_rollback(
                             conv_states,
-                            intermediate_conv_window_cache,
                             mamba_track_indices.to(torch.int32),
-                            src_indices_tensor,
                             mamba_steps_to_track.to(torch.int32),
+                            draft_token_num,
                         )
                     return
 
