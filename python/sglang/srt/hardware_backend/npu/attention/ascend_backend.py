@@ -73,6 +73,38 @@ def _reshape_kv_for_fia_nz(
     return tensor.view(-1, 1, num_heads * head_dim // 16, page_size, 16)
 
 
+def _stage_kv_pages_nz(
+    src: torch.Tensor, dst_rows: torch.Tensor, num_pages: int, page_size: int
+) -> torch.Tensor:
+    """Stage token-major K/V rows into a scratch paged cache in FIA NZ layout.
+
+    ``src`` is ``[total_kv, num_heads, head_dim]`` in token-major order; row
+    ``i`` lands at scratch token ``dst_rows[i]`` inside a
+    ``num_pages * page_size`` token arena whose untouched slots stay zero.
+    The result exposes the NZ physical layout
+    ``[page, 1, num_heads*head_dim//16, page_size, 16]`` that
+    ``npu_fused_infer_attention_score_v2`` consumes natively with a block
+    table (same byte order the NZ scatter write of the MLA pool produces),
+    sparing the kernel its internal ND->NZ transposition of the K/V operands.
+    """
+    flat_dim = src.shape[1] * src.shape[2]
+    if flat_dim % 16 != 0:
+        raise ValueError(
+            "FIA NZ staging requires num_heads*head_dim divisible by 16, "
+            f"got {flat_dim}."
+        )
+    scratch = torch.zeros(
+        (num_pages * page_size, flat_dim), dtype=src.dtype, device=src.device
+    )
+    scratch[dst_rows] = src.reshape(-1, flat_dim)
+    return (
+        scratch.view(num_pages, page_size, flat_dim // 16, 16)
+        .permute(0, 2, 1, 3)
+        .contiguous()
+        .view(num_pages, 1, flat_dim // 16, page_size, 16)
+    )
+
+
 @dataclass
 class ForwardMetadata:
 
@@ -1640,7 +1672,17 @@ class AscendAttnBackend(AttentionBackend):
             # This branch adds support for prefix cache for GLM-4.7-Flash.
             # When using the MLA architecture, if qk head dim equals v head dim and the head count is not a power of 2,
             # we use the FIA kernel for computation.
+            # The cached latent pages are projected through kv_b_proj and staged, together with the current K/V, into a
+            # scratch paged cache using the FIA NZ physical layout; ONE npu_fused_infer_attention_score_v2 call with a
+            # TND query then covers all sequences (replacing the per-sequence BSND v1 loop — v2 supports GQA in TND).
             q = q.reshape(-1, layer.tp_q_head_num, layer.qk_head_dim)
+            num_token_padding = q.shape[0]
+            num_token_non_padded = forward_batch.num_token_non_padded_cpu
+            if (
+                num_token_non_padded is not None
+                and num_token_padding > num_token_non_padded
+            ):
+                q = q[:num_token_non_padded]
 
             k_buffer = self.token_to_kv_pool.get_key_buffer(layer.layer_id)
             v_buffer = self.token_to_kv_pool.get_value_buffer(layer.layer_id)
@@ -1666,48 +1708,95 @@ class AscendAttnBackend(AttentionBackend):
             k_rope = k_rope_cached.expand(-1, layer.tp_k_head_num, -1)
             k_pre = torch.cat([k_nope, k_rope], dim=-1)
 
-            attn_output = torch.empty(
-                (q.size(0), layer.tp_q_head_num, layer.v_head_dim),
+            # Stage each sequence's [prefix | current] K/V into the scratch
+            # NZ paged cache. Sequence j owns the contiguous page range
+            # [page_starts[j], page_starts[j] + pages_per_seq[j]); with
+            # sparse_mode=3 its query tokens are the causal tail of the
+            # staged KV sequence, i.e. query t attends kv [0, prefix+t] —
+            # identical to the previous per-sequence BSND semantics.
+            page_size = self.page_size
+            extend_lens = self.forward_metadata.extend_seq_lens_cpu_int.tolist()
+            prefix_lens = self.forward_metadata.prefix_lens.tolist()
+            kv_lens = [p + e for p, e in zip(prefix_lens, extend_lens)]
+            pages_per_seq = [-(-kv_len // page_size) for kv_len in kv_lens]
+            page_starts = np.cumsum([0] + pages_per_seq[:-1]).tolist()
+            num_pages = page_starts[-1] + pages_per_seq[-1]
+
+            block_table = torch.zeros(
+                (len(kv_lens), max(pages_per_seq)),
+                dtype=torch.int32,
                 device=q.device,
-                dtype=q.dtype,
             )
+            dst_rows = []
+            k_parts, v_parts = [], []
             q_len_offset = 0
             prefix_len_offset = 0
-            for q_len, prefix_len in zip(
-                self.forward_metadata.extend_seq_lens_cpu_int,
-                self.forward_metadata.prefix_lens,
+            for seq_idx, (q_len, prefix_len) in enumerate(
+                zip(extend_lens, prefix_lens)
             ):
-                k_cur_slice = k[None, q_len_offset : q_len_offset + q_len]
-                v_cur_slice = v[None, q_len_offset : q_len_offset + q_len]
-                k_pre_slice = k_pre[
-                    None, prefix_len_offset : prefix_len_offset + prefix_len
-                ]
-                v_pre_slice = v_pre[
-                    None, prefix_len_offset : prefix_len_offset + prefix_len
-                ]
-
-                k_full = torch.cat([k_pre_slice, k_cur_slice], dim=1)
-                v_full = torch.cat([v_pre_slice, v_cur_slice], dim=1)
-
-                attn_output[q_len_offset : q_len_offset + q_len] = (
-                    torch.ops.npu.npu_fused_infer_attention_score(
-                        q[None, q_len_offset : q_len_offset + q_len],
-                        k_full,
-                        v_full,
-                        num_heads=layer.tp_q_head_num,
-                        num_key_value_heads=layer.tp_k_head_num,
-                        input_layout="BSND",  # todo, TND not supports q_heads!=k_heads
-                        atten_mask=self.fia_mask,
-                        sparse_mode=3,
-                        scale=layer.scaling,
-                        next_tokens=0,
-                    )[0]
+                block_table[seq_idx, : pages_per_seq[seq_idx]] = torch.arange(
+                    page_starts[seq_idx],
+                    page_starts[seq_idx] + pages_per_seq[seq_idx],
+                    dtype=torch.int32,
+                    device=q.device,
                 )
+                dst_rows.append(
+                    torch.arange(
+                        page_starts[seq_idx] * page_size,
+                        page_starts[seq_idx] * page_size + kv_lens[seq_idx],
+                        device=q.device,
+                    )
+                )
+                k_parts.append(
+                    k_pre[prefix_len_offset : prefix_len_offset + prefix_len]
+                )
+                k_parts.append(k[q_len_offset : q_len_offset + q_len])
+                v_parts.append(
+                    v_pre[prefix_len_offset : prefix_len_offset + prefix_len]
+                )
+                v_parts.append(v[q_len_offset : q_len_offset + q_len])
                 q_len_offset += q_len
                 prefix_len_offset += prefix_len
+
+            dst_rows = torch.cat(dst_rows)
+            k_cache_nz = _stage_kv_pages_nz(
+                torch.cat(k_parts, dim=0), dst_rows, num_pages, page_size
+            )
+            v_cache_nz = _stage_kv_pages_nz(
+                torch.cat(v_parts, dim=0), dst_rows, num_pages, page_size
+            )
+
+            attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
+                query=q,
+                key=k_cache_nz,
+                value=v_cache_nz,
+                num_query_heads=layer.tp_q_head_num,
+                num_key_value_heads=layer.tp_k_head_num,
+                input_layout="TND",
+                block_table=block_table,
+                block_size=page_size,
+                actual_seq_qlen=self.forward_metadata.seq_lens_list_cumsum,
+                actual_seq_kvlen=kv_lens,
+                atten_mask=self.fia_mask,
+                sparse_mode=3,
+                softmax_scale=layer.scaling,
+                pre_tokens=FULL_ATTENTION_WINDOW,
+                next_tokens=FULL_ATTENTION_WINDOW,
+            )
             attn_output = attn_output.view(
                 -1, layer.tp_q_head_num * layer.v_head_dim
             )
+            if num_token_padding > attn_output.shape[0]:
+                attn_output = torch.cat(
+                    [
+                        attn_output,
+                        attn_output.new_zeros(
+                            num_token_padding - attn_output.shape[0],
+                            *attn_output.shape[1:],
+                        ),
+                    ],
+                    dim=0,
+                )
         else:
             if layer.qk_head_dim == layer.v_head_dim:
                 """FIA will support multi-bs in the later version of CANN"""
