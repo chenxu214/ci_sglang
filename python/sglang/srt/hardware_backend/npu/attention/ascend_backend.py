@@ -115,6 +115,16 @@ class ForwardMetadata:
     metadata_flash_mla = None
     seqused_q = None
 
+    # A2A FIAS V2 BSND: per-rank local metadata (computed once per step,
+    # reused across all layers in the forward pass)
+    a2a_block_table_local: Optional[torch.Tensor] = None
+    a2a_cache_seqlens_local: Optional[torch.Tensor] = None
+    a2a_seqused_q_local: Optional[torch.Tensor] = None
+    a2a_metadata_flash_mla: Optional[torch.Tensor] = None
+    a2a_num_local_reqs: int = 0
+    a2a_T_padded: int = 0
+    a2a_T_local: int = 0
+
 class AscendAttnMaskBuilder:
     def __init__(self, model_runner: ModelRunner, device, use_fia, use_mla):
         """
@@ -668,6 +678,117 @@ class AscendAttnBackend(AttentionBackend):
         """
         pass
 
+    # ------------------------------------------------------------------
+    # A2A FIAS V2 BSND metadata helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _a2a_fias_v2_sizes(bs: int, attn_tp_size: int, query_seq_len: int):
+        """Return (T_padded, T_local, num_local_reqs, num_total_reqs_padded)
+        for the given captured batch size."""
+        T = bs * query_seq_len
+        unit = attn_tp_size * query_seq_len
+        T_padded = ((T + unit - 1) // unit) * unit
+        T_local = T_padded // attn_tp_size
+        num_local_reqs = T_local // query_seq_len
+        num_total_reqs_padded = T_padded // query_seq_len
+        return T_padded, T_local, num_local_reqs, num_total_reqs_padded
+
+    def _compute_a2a_fias_v2_local_metadata(
+        self,
+        metadata: ForwardMetadata,
+        seq_lens: torch.Tensor,
+        seqused_q: torch.Tensor,
+        block_table: torch.Tensor,
+        bs: int,
+    ):
+        """Slice per-rank local metadata for the FIAS V2 A2A path and store
+        into *metadata*.
+
+        The ``metadata.a2a_*`` buffers are pre-allocated by
+        :py:meth:`_init_cuda_graph_metadata`; this method fills them in-place
+        via ``copy_`` so the captured graph sees stable tensor addresses.
+        """
+        attn_tp_size = get_parallel().attn_tp_size
+        attn_tp_rank = get_parallel().attn_tp_rank
+        query_seq_len = self.speculative_num_draft_tokens
+        H_total = attn_tp_size * self.tp_q_head_num
+        D_total = self.kv_lora_rank + self.qk_rope_head_dim
+
+        T_padded, T_local, num_local_reqs, num_total_reqs_padded = (
+            self._a2a_fias_v2_sizes(bs, attn_tp_size, query_seq_len)
+        )
+        req_start = attn_tp_rank * num_local_reqs
+
+        # --- block_table_local ---
+        if num_total_reqs_padded > block_table.shape[0]:
+            pad_bt = torch.zeros(
+                num_total_reqs_padded - block_table.shape[0],
+                block_table.shape[1],
+                dtype=block_table.dtype,
+                device=block_table.device,
+            )
+            block_table_padded = torch.cat([block_table, pad_bt], dim=0)
+        else:
+            block_table_padded = block_table[:num_total_reqs_padded]
+        block_table_local = block_table_padded[
+            req_start : req_start + num_local_reqs
+        ].contiguous()
+
+        # --- cache_seqlens_local ---
+        seq_lens_i32 = seq_lens.to(torch.int32)
+        if num_total_reqs_padded > seq_lens_i32.shape[0]:
+            pad_sl = torch.ones(
+                num_total_reqs_padded - seq_lens_i32.shape[0],
+                dtype=torch.int32,
+                device=seq_lens_i32.device,
+            )
+            seq_lens_padded = torch.cat([seq_lens_i32, pad_sl], dim=0)
+        else:
+            seq_lens_padded = seq_lens_i32[:num_total_reqs_padded]
+        cache_seqlens_local = seq_lens_padded[
+            req_start : req_start + num_local_reqs
+        ].contiguous()
+
+        # --- seqused_q_local ---
+        seqused_q_i32 = seqused_q.to(torch.int32)
+        if num_total_reqs_padded > seqused_q_i32.shape[0]:
+            pad_sq = torch.zeros(
+                num_total_reqs_padded - seqused_q_i32.shape[0],
+                dtype=torch.int32,
+                device=seqused_q_i32.device,
+            )
+            seqused_q_padded = torch.cat([seqused_q_i32, pad_sq], dim=0)
+        else:
+            seqused_q_padded = seqused_q_i32[:num_total_reqs_padded]
+        seqused_q_local = seqused_q_padded[
+            req_start : req_start + num_local_reqs
+        ].contiguous()
+
+        # --- flash_mla metadata (computed once per step, reused per layer) ---
+        metadata_flash_mla_local = flash_mla_with_kvcache_metadata(
+            cache_seqlens=cache_seqlens_local,
+            num_heads_q=H_total,
+            num_heads_kv=1,
+            cu_seqlens_q=None,
+            seqused_q=seqused_q_local,
+            max_seqlen_q=-1,
+            max_seqlen_kv=-1,
+            head_dim_qk=D_total,
+            head_dim_v=self.kv_lora_rank,
+            mask_mode=3,
+            layout_q="BSND",
+        )
+
+        # Fill pre-allocated buffers in-place (graph-safe)
+        metadata.a2a_block_table_local.copy_(block_table_local)
+        metadata.a2a_cache_seqlens_local.copy_(cache_seqlens_local)
+        metadata.a2a_seqused_q_local.copy_(seqused_q_local)
+        metadata.a2a_metadata_flash_mla.copy_(metadata_flash_mla_local)
+        metadata.a2a_num_local_reqs = num_local_reqs
+        metadata.a2a_T_padded = T_padded
+        metadata.a2a_T_local = T_local
+
     def _init_cuda_graph_metadata(
         self,
         bs: int,
@@ -761,6 +882,30 @@ class AscendAttnBackend(AttentionBackend):
 
             metadata.seqused_q=torch.zeros(bs, dtype=torch.int32, device=device)
             metadata.actual_seq_lengths_q = torch.cat([torch.zeros(1, dtype=torch.int32, device=device),metadata.actual_seq_lengths_q])
+
+            # --- Pre-allocate A2A FIAS V2 local buffers (graph capture) ---
+            if self.use_fias_v2_bsnd and self.use_sparse_attn_a2a:
+                attn_tp_size = get_parallel().attn_tp_size
+                query_seq_len = self.speculative_num_draft_tokens
+                _, _, num_local_reqs, _ = self._a2a_fias_v2_sizes(
+                    bs, attn_tp_size, query_seq_len
+                )
+                max_pages = metadata.block_tables.shape[1]
+                metadata.a2a_block_table_local = torch.empty(
+                    (num_local_reqs, max_pages), dtype=torch.int32, device=device,
+                )
+                metadata.a2a_cache_seqlens_local = torch.empty(
+                    num_local_reqs, dtype=torch.int32, device=device,
+                )
+                metadata.a2a_seqused_q_local = torch.empty(
+                    num_local_reqs, dtype=torch.int32, device=device,
+                )
+                metadata_size_local = _calculate_metadata_size(
+                    num_local_reqs, aic_core_num, aiv_core_num
+                )
+                metadata.a2a_metadata_flash_mla = torch.empty(
+                    (metadata_size_local,), dtype=torch.int32, device=device,
+                )
         self.graph_metadata[bs] = metadata
         return metadata
 
@@ -857,22 +1002,39 @@ class AscendAttnBackend(AttentionBackend):
         metadata.seq_lens[:bs].copy_(seq_lens[:bs])
         if self.use_mla:
             metadata.seqused_q.copy_(seqused_q.to(torch.int32))
-            metadata_flash_mla = flash_mla_with_kvcache_metadata(
-                cache_seqlens=seq_lens.to(torch.int32),
-                num_heads_q=self.tp_q_head_num,
-                num_heads_kv=1,
-                cu_seqlens_q=None,
-                seqused_q=seqused_q,
-                max_seqlen_q=-1,
-                max_seqlen_kv=-1,
-                head_dim_qk=576,
-                head_dim_v=512,
-                mask_mode=3,
-                layout_q="BSND",
-            )
-            metadata.metadata_flash_mla.copy_(metadata_flash_mla)
+            # Compute A2A FIAS V2 local metadata once per step (reused
+            # across all layers by _forward_fias_v2_bsnd_tp_a2a).
+            if (
+                self.use_fias_v2_bsnd
+                and self.use_sparse_attn_a2a
+                and (
+                    forward_mode.is_target_verify()
+                    or forward_mode.is_draft_extend_v2()
+                )
+            ):
+                self._compute_a2a_fias_v2_local_metadata(
+                    metadata,
+                    seq_lens=metadata.seq_lens[:bs],
+                    seqused_q=metadata.seqused_q[:bs],
+                    block_table=metadata.block_tables,
+                    bs=bs,
+                )
+            else:
+                metadata_flash_mla = flash_mla_with_kvcache_metadata(
+                    cache_seqlens=seq_lens.to(torch.int32),
+                    num_heads_q=self.tp_q_head_num,
+                    num_heads_kv=1,
+                    cu_seqlens_q=None,
+                    seqused_q=seqused_q,
+                    max_seqlen_q=-1,
+                    max_seqlen_kv=-1,
+                    head_dim_qk=576,
+                    head_dim_v=512,
+                    mask_mode=3,
+                    layout_q="BSND",
+                )
+                metadata.metadata_flash_mla.copy_(metadata_flash_mla)
         self.forward_metadata = metadata
-
         self.graph_mode = True
 
     def _pad_topk_indices(
@@ -1751,6 +1913,128 @@ class AscendAttnBackend(AttentionBackend):
             attn_out = attn_out[:, :H_local, :]
 
         return attn_out
+
+    def _forward_fias_v2_bsnd_tp_a2a(
+        self,
+        q_nope: torch.Tensor,
+        q_rope: torch.Tensor,
+        kv_cache: torch.Tensor,
+        layer: RadixAttention,
+    ) -> torch.Tensor:
+        """AllToAll-accelerated FIAS V2 BSND MLA attention for target_verify
+        with attn_tp > 1.
+
+        Redistributes query tokens across the attn_tp group so that each
+        rank processes T/tp tokens with all q heads (instead of T tokens
+        with H/tp heads), improving NPU flash_mla kernel utilization.
+
+        Per-step metadata (block_table slice, cache_seqlens, seqused_q,
+        flash_mla metadata) is pre-computed once in
+        :py:meth:`_compute_a2a_fias_v2_local_metadata` and stored in
+        ``self.forward_metadata.a2a_*``; this method only does the
+        per-layer AllToAll + kernel + reverse-AllToAll.
+
+        Only for multi-query attention (kv head_num = 1); the KV cache is
+        full on every rank and needs no communication.
+        """
+        attn_tp_size = get_parallel().attn_tp_size
+        attn_tp_group = get_parallel().attn_tp_group
+
+        T = q_nope.shape[0]  # num_tokens = batch_size * query_seq_len
+        H_local = q_nope.shape[1]
+        D_nope = q_nope.shape[2]
+        D_rope = q_rope.shape[2]
+        D_total = D_nope + D_rope
+
+        if T == 0:
+            return q_nope.new_zeros(0, H_local, D_nope)
+
+        # --- Read pre-computed per-step metadata ---
+        md = self.forward_metadata
+        T_padded = md.a2a_T_padded
+        T_local = md.a2a_T_local
+        num_local_reqs = md.a2a_num_local_reqs
+        query_seq_len = self.speculative_num_draft_tokens
+        H_total = attn_tp_size * H_local
+
+        # --- Pad tokens to T_padded ---
+        if T_padded > T:
+            pad_t = T_padded - T
+            q_nope = torch.cat(
+                [q_nope, q_nope.new_zeros(pad_t, H_local, D_nope)], dim=0
+            )
+            q_rope = torch.cat(
+                [q_rope, q_rope.new_zeros(pad_t, H_local, D_rope)], dim=0
+            )
+
+        # --- Concat q_nope + q_pe -> [T_padded, H_local, D_total] ---
+        q_concat = torch.cat((q_nope, q_rope), dim=-1).contiguous()
+
+        # ============================================================
+        # Forward AllToAll: [T_padded, H_local, D] -> [T_local, H_total, D]
+        # ============================================================
+        q_send = q_concat.view(-1)
+        q_recv = torch.empty_like(q_send)
+        attn_tp_group.all_to_all_single(q_recv, q_send)
+
+        q_local = (
+            q_recv.view(attn_tp_size, T_local, H_local, D_total)
+            .transpose(0, 1)
+            .contiguous()
+            .view(T_local, H_total, D_total)
+        )
+
+        # ============================================================
+        # Reshape query to BSND: [B_local, query_seq_len, H_total, D_total]
+        # ============================================================
+        q_local_bsnd = q_local.view(
+            num_local_reqs, query_seq_len, H_total, D_total
+        ).contiguous()
+
+        # ============================================================
+        # Kernel call: flash_mla_with_kvcache with pre-computed local
+        # metadata (block_table, cache_seqlens, seqused_q, flash_mla
+        # metadata — all computed once per step)
+        # ============================================================
+        attn_out_local, _ = flash_mla_with_kvcache(
+            q_local_bsnd,
+            kv_cache,
+            block_table=md.a2a_block_table_local,
+            cache_seqlens=md.a2a_cache_seqlens_local,
+            cu_seqlens_q=None,
+            seqused_q=md.a2a_seqused_q_local,
+            attn_mask=self.mtp_mask.to(torch.int8),
+            metadata=md.a2a_metadata_flash_mla,
+            head_dim_v=self.kv_lora_rank,
+            softmax_scale=layer.scaling,
+            mask_mode=3,
+            max_seqlen_q=-1,
+            max_seqlen_kv=-1,
+            layout_q="BSND",
+            layout_kv="PA_BBND",
+            layout_out="BSND",
+            return_softmax_lse=False,
+        )
+        # [num_local_reqs, query_seq_len, H_total, kv_lora_rank]
+
+        attn_out_local = attn_out_local.reshape(T_local, H_total, D_nope)
+
+        # ============================================================
+        # Reverse AllToAll: [T_local, H_total, D] -> [T_padded, H_local, D]
+        # ============================================================
+        D_out = attn_out_local.shape[-1]
+        attn_out_send = (
+            attn_out_local.view(T_local, attn_tp_size, H_local, D_out)
+            .transpose(0, 1)  # [tp, T_local, H_local, D_out]
+            .contiguous()
+            .view(-1)
+        )
+        attn_out_recv = torch.empty_like(attn_out_send)
+        attn_tp_group.all_to_all_single(attn_out_recv, attn_out_send)
+        attn_out_full = attn_out_recv.view(T_padded, H_local, D_out)
+
+        # --- Unpad tokens ---
+        return attn_out_full[:T]
 
     def forward_sparse(
         self,
@@ -2918,6 +3202,10 @@ class AscendAttnBackend(AttentionBackend):
                 ), "FIAS V2 target verify requires one fixed draft block per request"
                 if batch_size == 0:
                     attn_output = torch.empty_like(q_nope)
+                elif self.use_sparse_attn_a2a:
+                    attn_output = self._forward_fias_v2_bsnd_tp_a2a(
+                        q_nope, q_rope, kv_cache, layer,
+                    )
                 else:
                     q_nope_bsnd = (
                         q_nope.view(
