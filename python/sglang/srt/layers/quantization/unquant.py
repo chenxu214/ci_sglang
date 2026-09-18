@@ -360,6 +360,10 @@ class UnquantizedLinearMethod(LinearMethodBase):
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         if _is_cpu and _is_cpu_amx_available:
             _amx_process_weight_after_loading(layer, ["weight"])
+        # only for kimi-k3 attn-tp=8
+        if _is_npu and layer.weight.shape in [(7168, 6144), (6144, 7168), (1536, 7168), (7168, 1536)]:
+            from sglang.srt.hardware_backend.npu.utils import npu_format_cast
+            layer.weight.data = npu_format_cast(layer.weight.data)
 
     def apply(
         self,
