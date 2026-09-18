@@ -1022,14 +1022,14 @@ class AscendKDAAttnBackend(KDAAttnBackend):
                 draft_token_num,
                 dtype=torch.int32,
                 device=mixed_qkv.device,
-            )
+            ).to(torch.int64)
             self._verify_dense_cu_seqlens = torch.arange(
                 0,
                 num_dense_tokens + 1,
                 step=draft_token_num,
                 dtype=torch.int32,
                 device=mixed_qkv.device,
-            )
+            ).to(torch.int64)
             self._verify_layout_key = layout_key
         num_accepted_tokens = self._verify_num_accepted_tokens
         dense_query_start_loc = self._verify_dense_cu_seqlens
