@@ -895,6 +895,8 @@ class Envs:
     # routed front / DeepEP dispatch / routed GEMMs, respectively.
     SGLANG_NPU_FINE_GRAINED_MOE_DUAL_STREAM = EnvBool(False)
     SGLANG_NPU_USE_MLAPO = EnvBool(False)
+    SGLANG_NPU_USE_FLASH_MLA = EnvBool(False)
+    SGLANG_NPU_8P_CASE = EnvBool(False)
     # Fuse grouped Kimi-K3 SiTU with valid-row MXFP8 quantization before GMM2.
     # Set to 0 to restore the separate SiTU + npu_dynamic_mx_quant path.
     SGLANG_NPU_MOE_SITU_MXFP8_FUSED = EnvBool(True)
@@ -1649,6 +1651,8 @@ class Envs:
         "/tmp/sglang_weight_cache_rank{global_rank}.ready"
     )
     SGLANG_NPU_SPARSE_ATTN_A2A = EnvBool(False)
+    SGLANG_NPU_INDEXER_TP = EnvBool(False)
+    SGLANG_K3_STREAM_LIMIT = EnvBool(False)
 
 
 envs = Envs()

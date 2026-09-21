@@ -1022,14 +1022,14 @@ class AscendKDAAttnBackend(KDAAttnBackend):
                 draft_token_num,
                 dtype=torch.int32,
                 device=mixed_qkv.device,
-            ).to(torch.int64)
+            )
             self._verify_dense_cu_seqlens = torch.arange(
                 0,
                 num_dense_tokens + 1,
                 step=draft_token_num,
                 dtype=torch.int32,
                 device=mixed_qkv.device,
-            ).to(torch.int64)
+            )
             self._verify_layout_key = layout_key
         num_accepted_tokens = self._verify_num_accepted_tokens
         dense_query_start_loc = self._verify_dense_cu_seqlens
@@ -1172,10 +1172,10 @@ class AscendKDAHybridLinearAttnBackend:
                 model,
                 req_pool_indices=None,
             ):
-                from sgl_kernel_npu.mamba.mamba_state_update_triton import (
-                    conv_state_rollback,
+                # from sgl_kernel_npu.mamba.mamba_state_update_triton import (
+                    # conv_state_rollback,
                     # move_intermediate_cache_kda,
-                )
+                # )
                 from sgl_kernel_npu.mamba.speculative_state_scatter import (
                     speculative_state_scatter_npu,
                 )
@@ -1330,6 +1330,139 @@ class AscendKDAHybridLinearAttnBackend:
 
                     return ssm_states
 
+                @triton.jit
+                def _conv_state_rollback_kernel(
+                        conv_states_ptr,
+                        state_indices_ptr,
+                        step_indices_ptr,
+                        draft_token_num,
+                        num_dims: tl.constexpr,
+                        conv_window_size: tl.constexpr,
+                        layer_stride: tl.constexpr,
+                        req_stride: tl.constexpr,
+                        window_stride: tl.constexpr,
+                        dim_stride: tl.constexpr,
+                ):
+                    """
+                    Triton kernel for rolling back conv states after MTP verification.
+
+                    Args:
+                        conv_states_ptr: Pointer to conv states tensor [num_layers, pool_size, conv_window_size, num_dims]
+                        state_indices_ptr: Pointer to state indices [num_requests]
+                        step_indices_ptr: Pointer to step indices (accepted steps) [num_requests]
+                        draft_token_num: Number of draft tokens
+                        num_layers: Number of layers
+                        num_dims: Number of dimensions
+                        conv_window_size: Convolution window size
+                        layer_stride: Stride for layer dimension
+                        req_stride: Stride for request dimension
+                        window_stride: Stride for window dimension
+                        dim_stride: Stride for dimension dimension
+                    """
+                    pid_req = tl.program_id(0)
+                    pid_layer = tl.program_id(1)
+
+                    # Load state and step indices
+                    state_idx = tl.load(state_indices_ptr + pid_req).to(tl.int64)
+                    step_idx = tl.load(step_indices_ptr + pid_req).to(tl.int64)
+
+                    if step_idx < 0:
+                        return
+
+                    # Calculate rollback shift
+                    shift = (draft_token_num - 1) - step_idx
+
+                    # Early exit if no rollback needed
+                    if shift <= 0:
+                        return
+
+                    # Generate dimension offsets once
+                    dim_offsets = tl.arange(0, num_dims)
+
+                    # Process each layer
+                    # Calculate base offset for this request and layer
+                    base_offset = state_idx * req_stride + pid_layer * layer_stride
+
+                    # Process each window position that needs to be moved
+                    # Move data from [0, conv_window_size-shift) to [shift, conv_window_size)
+                    for window_idx1 in range(0, conv_window_size - shift):
+                        window_idx = conv_window_size - shift - 1 - window_idx1
+
+                        # Calculate source and destination pointers
+                        src_offset = (
+                                base_offset + window_idx * window_stride + dim_offsets * dim_stride
+                        )
+                        src_ptr = conv_states_ptr + src_offset
+
+                        dst_offset = (
+                                base_offset
+                                + (window_idx + shift) * window_stride
+                                + dim_offsets * dim_stride
+                        )
+                        dst_ptr = conv_states_ptr + dst_offset
+
+                        # Load and store all dimensions at once
+                        data = tl.load(src_ptr)
+                        tl.store(dst_ptr, data)
+
+
+                def conv_state_rollback(
+                        conv_states: torch.Tensor,  # [num_layers, pool_size, conv_window_size, num_dims]
+                        state_indices: torch.Tensor,  # [num_requests]
+                        step_indices: torch.Tensor,  # [num_requests]
+                        draft_token_num: int,
+                ):
+                    """
+                    Roll back conv states after MTP verification using Triton kernel.
+
+                    Args:
+                        conv_states: Conv states tensor [num_layers, pool_size, conv_window_size, num_dims]
+                        state_indices: State indices for each request [num_requests]
+                        step_indices: Accepted steps for each request [num_requests]
+                        draft_token_num: Number of draft tokens
+                    """
+                    num_requests = state_indices.shape[0]
+                    if num_requests == 0:
+                        return
+
+                    if conv_states.ndim != 4:
+                        raise ValueError(f"conv_states must be 4D, got {conv_states.ndim}D")
+                    if state_indices.ndim != 1 or step_indices.ndim != 1:
+                        raise ValueError("state_indices and step_indices must be 1D")
+                    if state_indices.shape[0] != step_indices.shape[0]:
+                        raise ValueError("state_indices and step_indices must have the same length")
+
+                    num_layers = conv_states.shape[0]
+                    conv_window_size = conv_states.shape[2]
+                    num_dims = conv_states.shape[3]
+
+                    # Get strides (in elements, not bytes)
+                    layer_stride = conv_states.stride(0)
+                    req_stride = conv_states.stride(1)
+                    window_stride = conv_states.stride(2)
+                    dim_stride = conv_states.stride(3)
+
+                    # Ensure indices are int32 and contiguous
+                    state_indices = state_indices.to(torch.int32).contiguous()
+                    step_indices = step_indices.to(torch.int32).contiguous()
+
+                    # Grid over all requests
+                    grid = (num_requests, num_layers)
+
+                    _conv_state_rollback_kernel[grid](
+                        conv_states,
+                        state_indices,
+                        step_indices,
+                        draft_token_num,
+                        num_dims,
+                        conv_window_size,
+                        layer_stride,
+                        req_stride,
+                        window_stride,
+                        dim_stride,
+                    )
+
+                    return conv_states
                 del req_pool_indices
                 request_number = last_correct_step_indices.shape[0]
 

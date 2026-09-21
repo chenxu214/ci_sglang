@@ -17,6 +17,7 @@ from sglang.srt.layers.attention.dsa.utils import (
 )
 from sglang.srt.layers.communicator import ScatterMode, get_attn_tp_context
 from sglang.srt.model_executor.forward_context import get_token_to_kv_pool
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
 
 if TYPE_CHECKING:
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
@@ -89,9 +90,13 @@ def forward_mha_prepare_npu(
         )
         q_pe = q_pe.reshape(B, -1, m.qk_rope_head_dim)
 
-        kv_cache = get_token_to_kv_pool().get_kv_buffer(m.layer_id)
-        ckv_cache = kv_cache[..., : m.kv_lora_rank]
-        k_rope_cache = kv_cache[..., m.kv_lora_rank :]
+        if envs.SGLANG_NPU_USE_FLASH_MLA.get():
+            kv_cache = get_token_to_kv_pool().get_kv_buffer(m.layer_id)
+            ckv_cache = kv_cache[..., : m.kv_lora_rank]
+            k_rope_cache = kv_cache[..., m.kv_lora_rank :]
+        else:
+            ckv_cache, k_rope_cache = get_token_to_kv_pool().get_kv_buffer(m.layer_id)
+
         _, _, k_pe, kv_a = torch_npu.npu_kv_rmsnorm_rope_cache(
             latent_cache.view(-1, 1, 1, m.kv_lora_rank + m.qk_rope_head_dim),  # bnsd
             m.kv_a_layernorm.weight,
@@ -215,6 +220,7 @@ def forward_mla_prepare_npu(
                     qkv_latent.shape[0] < 65536
                     and not dsa_use_prefill_cp(forward_batch)
                     and not getattr(m, "_disable_npu_fused_split_qk_norm", False)
+                    and forward_batch.forward_mode != ForwardMode.EXTEND
                 ):
                     q, k_nope, k_pe = fused_split_qk_norm(
                         qkv_latent,
@@ -417,6 +423,7 @@ def forward_dsa_prepare_npu(
                 fused_qkv_a_proj_out.shape[0] < 65535
                 and not dsa_use_prefill_cp(forward_batch)
                 and not getattr(m, "_disable_npu_fused_split_qk_norm", False)
+                and forward_batch.forward_mode != ForwardMode.EXTEND
             ):
                 q_lora, k_nope, k_pe = fused_split_qk_norm(
                     fused_qkv_a_proj_out,

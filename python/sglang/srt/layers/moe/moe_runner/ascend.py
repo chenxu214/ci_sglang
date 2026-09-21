@@ -175,6 +175,8 @@ class AscendRunnerCore(MoeRunnerCore):
         """
         Execute the MoE layer using NPU‑specific grouped matmul ops.
         """
+        cur_stream = torch.cuda.current_stream()
+        torch.npu.reset_stream_limit(cur_stream)
         x = runner_input.hidden_states
         original_dtype = torch.float16 if x.dtype == torch.float16 else torch.bfloat16
         expert_tokens = runner_input.expert_tokens

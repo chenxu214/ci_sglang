@@ -726,6 +726,7 @@ class KimiK3MoE(nn.Module):
             and self.routed_expert_up_proj.weight.dtype == torch.bfloat16
             and self.routed_expert_up_proj.weight.is_contiguous()
         )
+        self.need_stream_limit = get_bool_env_var("SGLANG_NPU_USE_FLASH_MLA", "False")
 
     def _merge_front_weights(self) -> None:
         """Merge shared gate_up + router gate + latent down_proj weights.
@@ -1198,6 +1199,12 @@ class KimiK3MoE(nn.Module):
                 # AllGather is already queued. Delay shared GEMMs until the
                 # gate, TopK and latent down projection finish on current.
                 self.alt_stream.wait_stream(torch.cuda.current_stream())
+                if self.need_stream_limit:
+                    if envs.SGLANG_NPU_8P_CASE.get():
+                        core_num = 12
+                    else:
+                        core_num = 8
+                    torch.npu.set_stream_limit(self.alt_stream, cube_num=core_num, vector_num=core_num * 2)
                 with torch.cuda.stream(self.alt_stream):
                     shared_output = self.shared_experts(shared_input)
                     shared_compute_event = self.alt_stream.record_event()
@@ -1209,6 +1216,8 @@ class KimiK3MoE(nn.Module):
                 # communication and the shared MLP, while routed GEMMs wait
                 # only for the MLP (not for RS).
                 self.alt_stream.wait_stream(current_stream)
+                if self.need_stream_limit:
+                    torch.npu.reset_stream_limit(self.alt_stream)
                 with torch.cuda.stream(self.alt_stream):
                     shared_output = self._reduce_scatter_shared_experts(
                         shared_output, hidden_states
@@ -1560,6 +1569,7 @@ class KimiK3MoE(nn.Module):
         once, and prefix_sum is consumed in the tail add like the non-DP
         path — gathering first would just replicate the whole batch onto
         every rank (tp-fold redundant compute + a2a traffic)."""
+
         num_tokens, hidden_size = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_size)
         use_dp = self._dp_attention and forward_batch is not None and not self._ep_a2a
@@ -2128,7 +2138,7 @@ class KimiK3MLAAttention(DeepseekV2AttentionMLA):
         self.use_output_gate = getattr(config, "mla_use_output_gate", False)
         # The fused Ascend split+RMSNorm path is not numerically equivalent for
         # Kimi-K3. Other MLA models retain the existing fused fast path.
-        self._disable_npu_fused_split_qk_norm = True
+        self._disable_npu_fused_split_qk_norm = False
         super().__init__(
             layer_id=layer_idx,
             hidden_size=config.hidden_size,
@@ -3515,8 +3525,8 @@ class KimiK3LinearForCausalLM(nn.Module):
             w_kc, w_vc = kv_b_weight.unflatten(
                 0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim)
             ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
-            self_attn.w_kc = w_kc.transpose(1, 2).contiguous().transpose(1, 2)
-            self_attn.w_vc = w_vc.contiguous().transpose(1, 2)
+            self_attn.w_kc = w_kc.transpose(1, 2).contiguous().transpose(1, 2).contiguous()
+            self_attn.w_vc = w_vc.contiguous().transpose(1, 2).contiguous()
             if hasattr(self_attn.kv_b_proj, "weight_scale"):
                 self_attn.w_scale = self_attn.kv_b_proj.weight_scale
 

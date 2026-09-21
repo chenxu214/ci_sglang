@@ -104,6 +104,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         self.q_b_proj_weight_scale = self.q_b_proj.weight_scale.view(1, -1).to(
             torch.float
         )
+        self.use_flash_mla = get_bool_env_var("SGLANG_NPU_USE_FLASH_MLA", "False")
 
     def preprocess_weights(self, hidden_states):
         self.dummy = torch.zeros(
@@ -259,9 +260,14 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         return cos, sin
 
     def get_kv_cache_and_cache_idx(self, forward_batch):
-        kv_cache = get_token_to_kv_pool().get_kv_buffer(self.layer_id)
-        slot_mapping = forward_batch.out_cache_loc.to(dtype=torch.int32)
-        return kv_cache, slot_mapping
+        if self.use_flash_mla:
+            kv_cache = get_token_to_kv_pool().get_kv_buffer(self.layer_id)
+            slot_mapping = forward_batch.out_cache_loc.to(dtype=torch.int32)
+            return kv_cache, slot_mapping
+        else:
+            k_cache, v_cache = get_token_to_kv_pool().get_kv_buffer(self.layer_id)
+            slot_mapping = forward_batch.out_cache_loc.to(dtype=torch.int32)
+            return k_cache, v_cache, slot_mapping
 
     def forward_absorb_prepare_npu_rms_norm_cache(
         self,
@@ -278,12 +284,16 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         else:
             self.cos, self.sin = self.rotary_emb.cos_cached, self.rotary_emb.sin_cache
 
-        self.kvCache, self.slotmapping = (
-            self.get_kv_cache_and_cache_idx(forward_batch)
-        )
-        self.kvCacheRope = self.kvCache[..., self.kv_lora_rank :]
-        self.kvCache = self.kvCache[..., : self.kv_lora_rank]
-
+        if self.use_flash_mla:
+            self.kvCache, self.slotmapping = (
+                self.get_kv_cache_and_cache_idx(forward_batch)
+            )
+            self.kvCacheRope = self.kvCache[..., self.kv_lora_rank :]
+            self.kvCache = self.kvCache[..., : self.kv_lora_rank]
+        else:
+            self.kvCache, self.kvCacheRope, self.slotmapping = (
+                self.get_kv_cache_and_cache_idx(forward_batch)
+            )
         if not self.has_preprocess_weights:
             self.has_preprocess_weights = True
 
@@ -359,9 +369,12 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         else:
             cos, sin = self.rotary_emb.cos_cached, self.rotary_emb.sin_cache
 
-        kv_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
-        k_cache = kv_cache[..., : self.kv_lora_rank]
-        v_cache = kv_cache[..., self.kv_lora_rank :]
+        if self.use_flash_mla:
+            kv_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
+            k_cache = kv_cache[..., : self.kv_lora_rank]
+            v_cache = kv_cache[..., self.kv_lora_rank :]
+        else:
+            k_cache, v_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
 
         q_nope_out = torch.empty(
             (hidden_states.shape[0], self.w_kc.shape[0], k_cache.shape[-1]),
@@ -439,9 +452,14 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             self.mlaprolog_preprocess_weight()
             self.has_preprocess_weights = True
         self.cos, self.sin = self.get_sin_cos(positions)
-        kv_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
-        k_cache = kv_cache[..., : self.kv_lora_rank]
-        v_cache = kv_cache[..., self.kv_lora_rank :]
+
+        if self.use_flash_mla:
+            kv_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
+            k_cache = kv_cache[..., : self.kv_lora_rank]
+            v_cache = kv_cache[..., self.kv_lora_rank :]
+        else:
+            k_cache, v_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
+
         mla_prolog_input_args = {
             "token_x": hidden_states,
             "weight_dq": self.q_a_proj_weight,
