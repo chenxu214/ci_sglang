@@ -1591,11 +1591,6 @@ class AscendAttnBackend(AttentionBackend):
             acc += s
             actual_seq_qlen_cpu.append(acc)
         num_requests = len(seq_lens_cpu_list)
-        seq_lens_cpu_for_overlap = (
-            forward_batch.seq_lens_cpu.tolist()
-            if forward_batch.seq_lens_cpu is not None
-            else seq_lens_cpu_list
-        )
 
         if fm.seq_lens_cpu_int is not None:
             actual_seq_kvlen_cpu = fm.seq_lens_cpu_int.clamp(min=1).cpu().tolist()
@@ -1621,16 +1616,29 @@ class AscendAttnBackend(AttentionBackend):
         local_bt_indices = []
 
         if seq_lens_cpu_list is not None and total_tokens % num_requests != 0:
-            prev_cs = 0
+            # Variable-length Q: sequence boundaries live in the EXTEND token
+            # coordinate system (cumsum of extend_seq_lens), NOT the full
+            # seq_lens cumsum (prefix+extend) — with a radix-cache prefix the
+            # full-len boundaries misassign tokens to requests. Mirrors
+            # prepare_a2a_attn_metadata.
+            seq_starts = [0] + actual_seq_qlen_cpu[:-1]
             for req in range(num_requests):
-                cur_cs = seq_lens_cpu_for_overlap[req]
-                ov_s = max(prev_cs, token_start)
-                ov_e = min(cur_cs, token_end)
+                seq_end = actual_seq_qlen_cpu[req]
+                ov_s = max(seq_starts[req], token_start)
+                ov_e = min(seq_end, token_end)
                 if ov_e > ov_s:
                     local_q_lens.append(ov_e - ov_s)
-                    local_kvlen_values.append(actual_seq_kvlen_cpu[req])
+                    # Causal kvlen for this rank's slice: with the lightning
+                    # indexer's tail convention (query t sits at position
+                    # kvlen - qlen + t), this places the first local query at
+                    # prefix + its in-sequence offset. The full kvlen would
+                    # lift non-tail ranks' queries to the sequence end and let
+                    # future tokens win topk slots. Same formula as
+                    # prepare_a2a_attn_metadata.
+                    local_kvlen_values.append(
+                        actual_seq_kvlen_cpu[req] - seq_end + ov_e
+                    )
                     local_bt_indices.append(req)
-                prev_cs = cur_cs
         else:
             tokens_per_req = total_tokens // num_requests if num_requests > 0 else 1
             real_end = min(token_end, total_tokens)
@@ -1640,10 +1648,16 @@ class AscendAttnBackend(AttentionBackend):
                 for req in range(req_lo, req_hi):
                     r_start = req * tokens_per_req
                     r_end = r_start + tokens_per_req
-                    q_count = min(r_end, real_end) - max(r_start, token_start)
+                    ov_s = max(r_start, token_start)
+                    ov_e = min(r_end, real_end)
+                    q_count = ov_e - ov_s
                     if q_count > 0:
                         local_q_lens.append(q_count)
-                        local_kvlen_values.append(actual_seq_kvlen_cpu[req])
+                        # Causal kvlen truncation, uniform branch: r_start /
+                        # r_end are the sequence's extend boundaries.
+                        local_kvlen_values.append(
+                            actual_seq_kvlen_cpu[req] - r_end + ov_e
+                        )
                         local_bt_indices.append(req)
 
         pad_in_rank = max(0, token_end - max(token_start, total_tokens))

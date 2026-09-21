@@ -131,23 +131,43 @@ class DSANPUIndexerMixin:
                     for req in range(req_lo, req_hi):
                         r_start = req * tokens_per_req
                         r_end = r_start + tokens_per_req
-                        q_count = min(r_end, real_end) - max(r_start, token_start)
+                        ov_s = max(r_start, token_start)
+                        ov_e = min(r_end, real_end)
+                        q_count = ov_e - ov_s
                         if q_count > 0:
                             local_q_lens.append(q_count)
-                            local_kv_list.append(actual_seq_lengths_kv[req])
+                            # Causal kvlen truncation (r_start / r_end are the
+                            # sequence's extend boundaries); whole sequences
+                            # keep the full kvlen.
+                            local_kv_list.append(
+                                actual_seq_lengths_kv[req] - r_end + ov_e
+                            )
                             local_bt_list.append(block_table[req])
             else:
-                # Variable-length Q (prefill without CP).
+                # Variable-length Q (prefill without CP). Sequence boundaries
+                # are the EXTEND cumsum (actual_seq_lengths_q), NOT the full
+                # seq_lens cumsum — a radix-cache prefix would otherwise
+                # misassign tokens to requests. kvlen is causally truncated
+                # for the rank's slice (prefix + in-sequence offset), mirroring
+                # prepare_a2a_attn_metadata; the full kvlen would lift
+                # non-tail ranks' queries to the sequence end.
+                extend_cumsum = (
+                    actual_seq_lengths_q.tolist()
+                    if isinstance(actual_seq_lengths_q, torch.Tensor)
+                    else list(actual_seq_lengths_q)
+                )
                 prev_cs = 0
                 for req in range(num_requests):
-                    cur_cs = int(forward_batch.seq_lens_cpu[req].item())
+                    seq_end = extend_cumsum[req]
                     ov_s = max(prev_cs, token_start)
-                    ov_e = min(cur_cs, token_end)
+                    ov_e = min(seq_end, token_end)
                     if ov_e > ov_s:
                         local_q_lens.append(ov_e - ov_s)
-                        local_kv_list.append(actual_seq_lengths_kv[req])
+                        local_kv_list.append(
+                            actual_seq_lengths_kv[req] - seq_end + ov_e
+                        )
                         local_bt_list.append(block_table[req])
-                    prev_cs = cur_cs
+                    prev_cs = seq_end
 
             pad_in_rank = max(0, token_end - max(token_start, total_tokens))
             if pad_in_rank > 0:
