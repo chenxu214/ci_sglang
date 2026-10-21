@@ -136,6 +136,9 @@ def main():
     if args.device == "npu":
         import torch_npu
 
+        # format_cast otherwise silently falls back to ND in the default
+        # standalone environment, unlike SGLang's NPU backend initialization.
+        torch.npu.config.allow_internal_format = True
         torch.npu.set_device(int(os.environ["LOCAL_RANK"]))
     global _DEVICE
     _DEVICE = args.device
@@ -208,6 +211,11 @@ def main():
             weight_pointers = [
                 [tensor.data_ptr() for tensor in tensors] for tensors in routed.values()
             ]
+            if args.weight_format == "nz":
+                for tensors in full_weights.values():
+                    for kind, tensor in zip(kinds, tensors, strict=True):
+                        if kind < 2:
+                            assert torch_npu.get_npu_format(tensor) == 29
             updater = ExpertLocationUpdater()
             if args.device == "cpu":
                 # The updater's first-use accelerator cache flush has no CPU
@@ -236,6 +244,8 @@ def main():
                             torch.testing.assert_close(
                                 tensor.cpu(), expected, rtol=0, atol=0
                             )
+                            if args.weight_format == "nz" and kind < 2:
+                                assert torch_npu.get_npu_format(tensor) == 29
                     assert weight_pointers == [
                         [tensor.data_ptr() for tensor in tensors]
                         for tensors in routed.values()

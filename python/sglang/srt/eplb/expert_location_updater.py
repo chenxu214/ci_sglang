@@ -182,6 +182,31 @@ def create_temp_buffers(sample_tensors):
     return [torch.empty_like(tensor) for tensor in sample_tensors]
 
 
+def _stage_npu_p2p_ops(ops):
+    """HCCL cannot send/receive offset views of internal-format tensors.
+
+    Communicate their logical values through ND buffers, then copy receives
+    into the original views. Keep model weights and their formats in place.
+    """
+    staged_ops, receive_copies = [], []
+    for op in ops:
+        tensor = op.tensor
+        if tensor.device.type == "npu":
+            import torch_npu
+
+            if torch_npu.get_npu_format(tensor) not in (0, 2):
+                buffer = torch.empty(
+                    tensor.shape, dtype=tensor.dtype, device=tensor.device
+                )
+                if op.op == torch.distributed.isend:
+                    buffer.copy_(tensor)
+                else:
+                    receive_copies.append((tensor, buffer))
+                op = P2POp(op.op, buffer, op.peer, op.group, op.tag)
+        staged_ops.append(op)
+    return staged_ops, receive_copies
+
+
 def update_expert_weights_single_layer(
     routed_experts_weights: List[torch.Tensor],
     temp_buffers: List[torch.Tensor],
@@ -500,9 +525,12 @@ def update_expert_weights_single_layer(
                 if eid in ops_by_expert:
                     batch_ops.extend(ops_by_expert[eid])
             if batch_ops:
+                batch_ops, receive_copies = _stage_npu_p2p_ops(batch_ops)
                 reqs = torch.distributed.batch_isend_irecv(batch_ops)
                 for req in reqs:
                     req.wait()
+                for target, buffer in receive_copies:
+                    target.copy_(buffer)
 
     def _execute_buffer2weight_copies(buffer2weight_copy_infos):
         for (
