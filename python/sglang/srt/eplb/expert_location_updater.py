@@ -22,6 +22,7 @@ from torch.distributed import P2POp
 
 from sglang.srt.elastic_ep.elastic_ep import ElasticEPStateManager
 from sglang.srt.environ import envs
+from sglang.srt.eplb.comm_utils import get_eplb_device_group
 from sglang.srt.eplb.expert_location import (
     ExpertLocationMetadata,
     get_global_expert_location_metadata,
@@ -226,6 +227,7 @@ def update_expert_weights_single_layer(
     ), f"{num_local_physical_experts=} {[x.shape for x in routed_experts_weights]=}"
     assert isinstance(old_physical_to_logical_map, list)
     assert isinstance(new_physical_to_logical_map, list)
+    p2p_group = get_eplb_device_group()
 
     if _LOG_INPUT:
         logger.info(
@@ -381,6 +383,7 @@ def update_expert_weights_single_layer(
                         op=torch.distributed.irecv,
                         tensor=_get_tensor(temp_buffers, i, dst_expert_location),
                         peer=src_rank,
+                        group=p2p_group,
                     )
                     for i in range(num_tensors)
                 ],
@@ -431,6 +434,7 @@ def update_expert_weights_single_layer(
                             routed_experts_weights, i, src_expert_location
                         ),
                         peer=dst_rank,
+                        group=p2p_group,
                     )
                     for dst_rank in all_dst_ranks
                     for i in range(num_tensors)

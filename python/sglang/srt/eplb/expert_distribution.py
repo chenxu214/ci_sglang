@@ -39,6 +39,7 @@ import torch
 import torch.distributed
 
 from sglang.srt.environ import envs
+from sglang.srt.eplb.comm_utils import get_eplb_device_group
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.observability.metrics_collector import (
     STAT_LOGGER_ROLE_EXPERT_DISPATCH,
@@ -1000,7 +1001,9 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
             torch.get_device_module().empty_cache()
 
         torch.distributed.all_reduce(
-            logical_count_of_buffered_step, op=torch.distributed.ReduceOp.SUM
+            logical_count_of_buffered_step,
+            op=torch.distributed.ReduceOp.SUM,
+            group=get_eplb_device_group(),
         )
 
         output = dict(
@@ -1041,7 +1044,9 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
             avg_rate_tensor = torch.empty(
                 1, dtype=torch.float32, device=get_device_namespace().device
             )
-        torch.distributed.broadcast(avg_rate_tensor, src=0)
+        torch.distributed.broadcast(
+            avg_rate_tensor, src=0, group=get_eplb_device_group()
+        )
         return avg_rate_tensor.item()
 
 
