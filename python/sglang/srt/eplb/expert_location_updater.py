@@ -180,7 +180,21 @@ def _update_expert_weights_raw(
 
 
 def create_temp_buffers(sample_tensors):
-    return [torch.empty_like(tensor) for tensor in sample_tensors]
+    buffers = []
+    for tensor in sample_tensors:
+        if tensor.device.type == "npu":
+            import torch_npu
+
+            if torch_npu.get_npu_format(tensor) not in (0, 2):
+                # NZ-to-NZ copy of offset-zero expert views can copy their
+                # entire backing storage, corrupting unchanged expert slots.
+                # ND staging also lets HCCL receive directly into each view.
+                buffers.append(
+                    torch.empty(tensor.shape, dtype=tensor.dtype, device=tensor.device)
+                )
+                continue
+        buffers.append(torch.empty_like(tensor))
+    return buffers
 
 
 def _stage_npu_p2p_ops(ops):

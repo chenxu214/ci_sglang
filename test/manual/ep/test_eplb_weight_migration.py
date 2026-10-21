@@ -5,6 +5,8 @@ Example: torchrun --standalone --nproc-per-node=2 \
 
 Add --w8a8-postprocess to execute the real NPU W8A8 post-load processor and
 DeepSeek EPLB parameter registration on synthetic tensors. No model is loaded.
+Add --no-fused-shared to cover full expert tensors, including unchanged slots
+next to the offset-zero slice that exposed NZ-to-NZ storage-wide copies.
 """
 
 import argparse
@@ -46,7 +48,7 @@ def _expert_tensor(expert, layer, kind):
     return values.to(torch.bfloat16 if kind == 2 else torch.float32)
 
 
-def _processed_weights(initial, rank, layer, device, weight_format):
+def _processed_weights(initial, rank, layer, device, weight_format, shared_ids):
     with ExitStack() as stack:
         if device == "cpu":
             # Avoid querying hardware architecture while importing the model.
@@ -62,8 +64,8 @@ def _processed_weights(initial, rank, layer, device, weight_format):
         from sglang.srt.hardware_backend.npu.quantization import moe_methods
 
         experts = torch.nn.Module()
-        experts.num_local_experts = 5
-        ids = initial[rank * 4 : (rank + 1) * 4] + [31]
+        experts.num_local_experts = 4 + len(shared_ids)
+        ids = initial[rank * 4 : (rank + 1) * 4] + shared_ids
         names, kinds = [], []
         for weight_kind, prefix in enumerate(("w13", "w2")):
             for suffix, kind in (
@@ -111,7 +113,7 @@ def _processed_weights(initial, rank, layer, device, weight_format):
         for prefix in ("w13", "w2"):
             method.process_weights_after_loading(experts, prefix)
         routed = get_weights(
-            SimpleNamespace(experts=experts, num_fused_shared_experts=1)
+            SimpleNamespace(experts=experts, num_fused_shared_experts=len(shared_ids))
         )
         full = [getattr(experts, name).data for name in names]
         assert len(routed) == len(full) == 6
@@ -127,7 +129,9 @@ def main():
     parser.add_argument("--device", choices=("cpu", "npu"), default="cpu")
     parser.add_argument("--weight-format", choices=("nd", "nz"), default="nd")
     parser.add_argument("--w8a8-postprocess", action="store_true")
+    parser.add_argument("--no-fused-shared", action="store_true")
     args = parser.parse_args()
+    shared_ids = [] if args.no_fused_shared else [31]
     if args.device == "cpu" and args.weight_format != "nd":
         parser.error("NZ requires --device npu")
     if int(os.environ.get("WORLD_SIZE", "1")) != 2:
@@ -191,7 +195,12 @@ def main():
             for layer in range(2):
                 if args.w8a8_postprocess:
                     full_weights[layer], routed[layer], kinds = _processed_weights(
-                        initial, rank, layer, args.device, args.weight_format
+                        initial,
+                        rank,
+                        layer,
+                        args.device,
+                        args.weight_format,
+                        shared_ids,
                     )
                     continue
                 full_weights[layer] = []
@@ -201,7 +210,8 @@ def main():
                     tensor = torch.stack(
                         [
                             _expert_tensor(expert, layer, kind)
-                            for expert in initial[rank * 4 : (rank + 1) * 4] + [31]
+                            for expert in initial[rank * 4 : (rank + 1) * 4]
+                            + shared_ids
                         ]
                     ).to(_DEVICE)
                     if args.weight_format == "nz" and kind < 2:
@@ -238,7 +248,7 @@ def main():
                                     for expert in expected_maps[lid][
                                         rank * 4 : (rank + 1) * 4
                                     ]
-                                    + [31]
+                                    + shared_ids
                                 ]
                             )
                             torch.testing.assert_close(
@@ -276,6 +286,7 @@ def main():
                         "layer_updates": updates,
                         "model_loaded": False,
                         "processed_w8a8": args.w8a8_postprocess,
+                        "fused_shared_experts": len(shared_ids),
                     }
                 )
             )
