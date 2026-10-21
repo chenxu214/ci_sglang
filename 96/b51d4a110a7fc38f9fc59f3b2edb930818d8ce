@@ -1,0 +1,90 @@
+python/sglang/srt/models/sdar_moe.py
+  s_871888365ea6da::t_1e657ec50d8ee3 136
+  s_871888365ea6da::t_dda7eec2689496 119-122
+python/sglang/srt/models/qwen3_moe.py
+  s_871888365ea6da::t_2d55594a197e32 295
+  s_871888365ea6da::t_da5558f05b1dce 319
+python/sglang/srt/models/glm4_moe.py
+  s_871888365ea6da::t_d03f7a2afee21f 487
+  s_871888365ea6da::t_59a32ef147a73e 533
+  s_871888365ea6da::t_3869e6bb65d506 555
+python/sglang/srt/models/exaone_moe.py
+  s_871888365ea6da::t_66c741b48dcd68 279-282
+  s_871888365ea6da::t_067a7dbfb315e4 197-200,205-208
+python/sglang/srt/models/kimi_k3.py
+  s_871888365ea6da::t_97567c24e12462 445
+python/sglang/srt/models/glm4_moe_lite.py
+  s_871888365ea6da::t_4499cb0752ce1f 257
+  s_871888365ea6da::t_b3c0b5c26de2dc 295-297
+  s_871888365ea6da::t_3e419109ec3df6 275-279
+python/sglang/srt/models/mimo_v2.py
+  s_871888365ea6da::t_03682efb760c8c 504-506
+python/sglang/srt/models/bailing_moe.py
+  s_871888365ea6da::t_71bb99a95e409a 328-331
+  s_871888365ea6da::t_08c9d6f077d890 354-357
+python/sglang/srt/models/step3_vl.py
+  s_871888365ea6da::t_22c5524830ddb8 157-163
+python/sglang/srt/models/glm5_next.py
+  s_871888365ea6da::t_24adb59df209b5 1087
+  s_871888365ea6da::t_3f6968f1f47ffe 1113
+python/sglang/srt/models/step3p5.py
+  s_871888365ea6da::t_b2df8d1b5987d1 504
+  s_871888365ea6da::t_fe5a358b384006 174-177
+  s_871888365ea6da::t_55d761aaf53b73 195
+python/sglang/srt/models/xllm.py
+  s_871888365ea6da::t_72b9c38876a485 1049-1053
+  s_871888365ea6da::t_b7612154309373 961,969-973
+python/sglang/srt/models/qwen2_moe.py
+  s_871888365ea6da::t_598f5608ff4368 376
+  s_871888365ea6da::t_5fc9e2ff8e0a09 399
+  s_871888365ea6da::t_4a3470693b2c7a 835
+python/sglang/srt/models/nemotron_h.py
+  s_871888365ea6da::t_cce29379c8e56c 245
+python/sglang/srt/models/gpt_oss.py
+  s_871888365ea6da::t_e072304a2fdd22 273-276
+python/sglang/srt/models/minimax_m3.py
+  s_871888365ea6da::t_201b088ad2e2de 473-476
+  s_871888365ea6da::t_a29d411a75c472 489-492
+  s_871888365ea6da::t_45c18b1b5b722e 441-444
+python/sglang/srt/models/llada2.py
+  s_871888365ea6da::t_63c5382f2e22ab 759-762
+  s_871888365ea6da::t_adf25a299e9402 639-642,644-645
+  s_871888365ea6da::t_3155846a43a040 733-736
+python/sglang/srt/models/dots3_common/modeling.py
+  s_871888365ea6da::t_04a1fc7950794c 366-369,384-396,398-401
+  s_871888365ea6da::t_093852ec98896b 342
+python/sglang/srt/models/minimax_m2.py
+  s_871888365ea6da::t_9f50be72706160 567-570
+  s_871888365ea6da::t_86aa9e50adc3f1 587
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "96b51d4a110a7fc38f9fc59f3b2edb930818d8ce",
+  "prompts": {},
+  "sessions": {
+    "s_871888365ea6da": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6ad72cfb0dc83bdafbf5f8ac",
+        "model": "glm-5.3"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "source_scene": "agent",
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ad8be1b0dc83bdafbf603f2:afterEdit:8f314e34",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
+        "tool_use_id": "6ad8be1b0dc83bdafbf603f2",
+        "operation_id": "6ad8be1b0dc83bdafbf603f2",
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "tool_type": "builtin",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "__trae_file_phase": "post",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "client_type": "ide",
+        "edit_kind": "file_edit"
+      }
+    }
+  }
+}
