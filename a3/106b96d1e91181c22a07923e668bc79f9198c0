@@ -1,0 +1,41 @@
+python/sglang/srt/models/deepseek_v2.py
+  s_871888365ea6da::t_933bd16304295d 923
+  s_871888365ea6da::t_662c5378847ea3 825
+  s_871888365ea6da::t_12e0237749c0f0 947
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a3106b96d1e91181c22a07923e668bc79f9198c0",
+  "prompts": {},
+  "humans": {
+    "h_3ab581817c9a6f": {
+      "author": "chenxu214 <justin_cc2025@16.com>"
+    }
+  },
+  "sessions": {
+    "s_871888365ea6da": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6ad72cfb0dc83bdafbf5f8ac",
+        "model": "kimi-k3"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "operation_id": "6ad87d860dc83bdafbf5fe45",
+        "source_scene": "agent",
+        "__trae_file_phase": "post",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_type": "builtin",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/models/deepseek_v2.py\"]",
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "tool_use_id": "6ad87d860dc83bdafbf5fe45",
+        "client_type": "ide",
+        "edit_kind": "file_edit",
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ad87d860dc83bdafbf5fe45:afterEdit:4442a51e",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac"
+      }
+    }
+  }
+}
