@@ -1,0 +1,218 @@
+"""CPU/Gloo EPLB loop with synthetic routing and real planning/migration.
+
+Run with torchrun --standalone --nproc-per-node=2 \
+    test/manual/ep/test_eplb_online_loop.py
+
+P/D roles run sequentially with separate configurations. This checks manager
+behavior, not PD request transfer or device graph execution.
+"""
+
+import datetime
+import json
+import os
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import torch
+import torch.distributed as dist
+
+
+def main():
+    if int(os.environ.get("WORLD_SIZE", "1")) != 2:
+        raise RuntimeError("launch with torchrun --nproc-per-node=2")
+    rank = int(os.environ["RANK"])
+
+    from sglang.srt.eplb.eplb_manager import EPLBManager
+    from sglang.srt.eplb.expert_distribution import (
+        ExpertDistributionRecorder,
+        set_global_expert_distribution_recorder,
+    )
+    from sglang.srt.eplb.expert_location import (
+        ExpertLocationMetadata,
+        ModelConfigForExpertLocation,
+        set_global_expert_location_metadata,
+    )
+    from sglang.srt.eplb.expert_location_updater import ExpertLocationUpdater
+    from sglang.srt.runtime_context import get_forward, publish
+    from sglang.srt.server_args import ServerArgs
+
+    class ObservedUpdater(ExpertLocationUpdater):
+        def __init__(self):
+            super().__init__()
+            self._first_execution = False  # CPU has no accelerator cache flush.
+            self.completed_chunks = 0
+
+        def update(self, *args, **kwargs):
+            missing = super().update(*args, **kwargs)
+            self.completed_chunks += 1
+            return missing
+
+    dist.init_process_group(backend="gloo", timeout=datetime.timedelta(seconds=60))
+    reports = []
+    try:
+        # Only model metadata and the hardware selection are substituted.
+        # Recorder, all-reduce, planner, manager and P2P updater stay real.
+        with (
+            patch.object(
+                ModelConfigForExpertLocation,
+                "from_model_config",
+                return_value=ModelConfigForExpertLocation(2, 8, 1),
+            ),
+            patch("sglang.srt.eplb.expert_distribution.get_device", return_value="cpu"),
+        ):
+            for role in ("prefill", "decode"):
+                publish(
+                    ServerArgs(
+                        model_path="dummy",
+                        device="cpu",
+                        tp_size=2,
+                        ep_size=2,
+                        disaggregation_mode=role,
+                        moe_a2a_backend="deepep",
+                        deepep_mode="auto",
+                        enable_eplb=True,
+                        ep_dispatch_algorithm="static",
+                        eplb_algorithm="deepseek",
+                        eplb_rebalance_num_iterations=4,
+                        eplb_rebalance_layers_per_chunk=1,
+                        expert_distribution_recorder_mode="stat",
+                        expert_distribution_recorder_buffer_size=4,
+                    ),
+                    role="test",
+                )
+                model_config = SimpleNamespace()
+                metadata = ExpertLocationMetadata.init_trivial(
+                    model_config, moe_ep_rank=rank
+                )
+                set_global_expert_location_metadata(metadata, allow_overwrite=True)
+                model = SimpleNamespace(
+                    routed_experts_weights_of_layer={
+                        layer: [
+                            torch.tensor(
+                                [
+                                    expert + layer * 16
+                                    for expert in range(rank * 4, rank * 4 + 4)
+                                ],
+                                dtype=torch.float32,
+                            ).reshape(4, 1)
+                        ]
+                        for layer in range(2)
+                    }
+                )
+                pointers = [
+                    tensors[0].data_ptr()
+                    for tensors in model.routed_experts_weights_of_layer.values()
+                ]
+                map_pointer = metadata.physical_to_logical_map.data_ptr()
+                recorder = ExpertDistributionRecorder.init_new(metadata, rank)
+                recorder._accumulator._first_dump = (
+                    False  # Same CPU cache-flush exclusion.
+                )
+                set_global_expert_distribution_recorder(recorder)
+                updater = ObservedUpdater()
+                weight_updater = SimpleNamespace(update_weights_from_disk=None)
+                manager = EPLBManager(
+                    model_config=model_config,
+                    ps=SimpleNamespace(tp_rank=rank),
+                    get_model=lambda: model,
+                    get_expert_location_updater=lambda: updater,
+                    get_expert_backup_client=lambda: None,
+                    get_weight_updater=lambda: weight_updater,
+                )
+                step = 0
+                phase_reports = []
+                hot = (0, 1)
+                for phase in range(2):
+                    old_map = metadata.physical_to_logical_map_cpu.clone()
+                    traffic = torch.ones(8, dtype=torch.int32)
+                    traffic[list(hot)] = 40
+                    before_peak = max(
+                        traffic[old_map[0]].reshape(2, 4).sum(dim=1)
+                    ).item()
+                    target_chunks = updater.completed_chunks + 2
+                    for _ in range(20):
+                        get_forward().set("is_extend_in_batch", role == "prefill")
+                        with recorder.with_forward_pass(step, SimpleNamespace()):
+                            for layer in range(2):
+                                with recorder.with_current_layer(layer):
+                                    if role == "prefill":
+                                        logical_ids = (
+                                            torch.repeat_interleave(
+                                                torch.arange(8), traffic.long()
+                                            )
+                                            if rank == 0
+                                            else torch.empty(0, dtype=torch.long)
+                                        )
+                                        physical_ids = metadata.logical_to_rank_dispatch_physical_map[
+                                            layer
+                                        ][logical_ids]
+                                        recorder.on_select_experts(
+                                            physical_ids.reshape(-1, 1)
+                                        )
+                                    else:
+                                        local_experts = (
+                                            metadata.physical_to_logical_map_cpu[
+                                                layer, rank * 4 : (rank + 1) * 4
+                                            ]
+                                        )
+                                        recorder.on_select_experts(
+                                            torch.tensor([[0, 1]])
+                                        )
+                                        recorder.on_deepep_dispatch_low_latency(
+                                            traffic[local_experts]
+                                        )
+                        manager.on_forward_pass_end()
+                        step += 1
+                        if updater.completed_chunks >= target_chunks:
+                            break
+                    else:
+                        raise AssertionError("periodic rebalance did not complete")
+                    new_map = metadata.physical_to_logical_map_cpu.clone()
+                    assert not torch.equal(old_map, new_map)
+                    after_peak = max(
+                        traffic[new_map[0]].reshape(2, 4).sum(dim=1)
+                    ).item()
+                    assert after_peak < before_peak, (before_peak, after_peak)
+                    for layer, tensors in model.routed_experts_weights_of_layer.items():
+                        expected = (
+                            new_map[layer, rank * 4 : (rank + 1) * 4].float()
+                            + layer * 16
+                        )
+                        torch.testing.assert_close(tensors[0].flatten(), expected)
+                        assert tensors[0].data_ptr() == pointers[layer]
+                    assert metadata.physical_to_logical_map.data_ptr() == map_pointer
+                    phase_reports.append(
+                        {
+                            "peak_before": before_peak,
+                            "peak_after": after_peak,
+                            "hot": list(hot),
+                        }
+                    )
+                    # Shift the hot experts onto the same rank in the NEW map.
+                    hot = tuple(new_map[0, :2].tolist())
+                    dist.barrier()
+                reports.append(
+                    {
+                        "role": role,
+                        "steps": step,
+                        "completed_chunks": updater.completed_chunks,
+                        "idle_sender_rank": 1 if role == "prefill" else None,
+                        "phases": phase_reports,
+                    }
+                )
+        if rank == 0:
+            print(
+                json.dumps(
+                    {
+                        "status": "passed",
+                        "scope": "synthetic routing / real CPU EPLB loop",
+                        "reports": reports,
+                    }
+                )
+            )
+    finally:
+        dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    main()

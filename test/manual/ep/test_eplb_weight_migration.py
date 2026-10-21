@@ -3,13 +3,17 @@
 Example: torchrun --standalone --nproc-per-node=2 \
     test/manual/ep/test_eplb_weight_migration.py --device npu --weight-format nd
 
-Uses synthetic processed W8A8-shaped tensors; it does not load a model.
+Add --w8a8-postprocess to execute the real NPU W8A8 post-load processor and
+DeepSeek EPLB parameter registration on synthetic tensors. No model is loaded.
 """
 
 import argparse
 import datetime
 import json
 import os
+from contextlib import ExitStack
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 import torch.distributed as dist
@@ -42,10 +46,87 @@ def _expert_tensor(expert, layer, kind):
     return values.to(torch.bfloat16 if kind == 2 else torch.float32)
 
 
+def _processed_weights(initial, rank, layer, device, weight_format):
+    with ExitStack() as stack:
+        if device == "cpu":
+            # Avoid querying hardware architecture while importing the model.
+            stack.enter_context(
+                patch(
+                    "sglang.srt.hardware_backend.npu.utils.is_npu_arch35",
+                    return_value=False,
+                )
+            )
+        from sglang.srt.models.deepseek_v2 import DeepseekV2MoE
+
+        get_weights = DeepseekV2MoE.get_moe_weights
+        from sglang.srt.hardware_backend.npu.quantization import moe_methods
+
+        experts = torch.nn.Module()
+        experts.num_local_experts = 5
+        ids = initial[rank * 4 : (rank + 1) * 4] + [31]
+        names, kinds = [], []
+        for weight_kind, prefix in enumerate(("w13", "w2")):
+            for suffix, kind in (
+                ("weight", weight_kind),
+                ("weight_scale", 2),
+                ("weight_offset", 3),
+            ):
+                tensor = torch.stack(
+                    [_expert_tensor(expert, layer, kind) for expert in ids]
+                )
+                if kind < 2:
+                    tensor = tensor.transpose(1, 2).contiguous()
+                else:
+                    tensor = tensor.float().unsqueeze(-1)
+                name = prefix + "_" + suffix
+                experts.register_parameter(
+                    name, torch.nn.Parameter(tensor.to(device), requires_grad=False)
+                )
+                names.append(name)
+                kinds.append(kind)
+        experts.correction_bias = torch.nn.Parameter(
+            torch.ones(5, device=device), requires_grad=False
+        )
+        if weight_format == "nd":
+            stack.enter_context(
+                patch.object(
+                    moe_methods, "npu_format_cast", side_effect=lambda tensor: tensor
+                )
+            )
+        else:
+            import torch_npu
+
+            stack.enter_context(
+                patch.object(
+                    moe_methods,
+                    "npu_format_cast",
+                    side_effect=lambda tensor: torch_npu.npu_format_cast(tensor, 29),
+                )
+            )
+        method = (
+            object.__new__(moe_methods.NPUW8A8Int8MoEMethod)
+            if device == "cpu"
+            else moe_methods.NPUW8A8Int8MoEMethod()
+        )
+        for prefix in ("w13", "w2"):
+            method.process_weights_after_loading(experts, prefix)
+        routed = get_weights(
+            SimpleNamespace(experts=experts, num_fused_shared_experts=1)
+        )
+        full = [getattr(experts, name).data for name in names]
+        assert len(routed) == len(full) == 6
+        assert all(
+            view.data_ptr() == tensor.data_ptr()
+            for view, tensor in zip(routed, full, strict=True)
+        )
+        return full, routed, kinds
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", choices=("cpu", "npu"), default="cpu")
     parser.add_argument("--weight-format", choices=("nd", "nz"), default="nd")
+    parser.add_argument("--w8a8-postprocess", action="store_true")
     args = parser.parse_args()
     if args.device == "cpu" and args.weight_format != "nd":
         parser.error("NZ requires --device npu")
@@ -56,8 +137,6 @@ def main():
         import torch_npu
 
         torch.npu.set_device(int(os.environ["LOCAL_RANK"]))
-    else:
-        os.environ["SGLANG_USE_CPU_ENGINE"] = "1"
     global _DEVICE
     _DEVICE = args.device
 
@@ -104,7 +183,14 @@ def main():
                 if isinstance(value, torch.Tensor)
             }
             full_weights = {}
+            routed = {}
+            kinds = list(range(4))
             for layer in range(2):
+                if args.w8a8_postprocess:
+                    full_weights[layer], routed[layer], kinds = _processed_weights(
+                        initial, rank, layer, args.device, args.weight_format
+                    )
+                    continue
                 full_weights[layer] = []
                 for kind in range(4):
                     # The final slot represents a fused shared expert. EPLB
@@ -118,10 +204,7 @@ def main():
                     if args.weight_format == "nz" and kind < 2:
                         tensor = torch_npu.npu_format_cast(tensor, 29)
                     full_weights[layer].append(tensor)
-            routed = {
-                layer: [tensor[:4] for tensor in tensors]
-                for layer, tensors in full_weights.items()
-            }
+                routed[layer] = [tensor[:4] for tensor in full_weights[layer]]
             weight_pointers = [
                 [tensor.data_ptr() for tensor in tensors] for tensors in routed.values()
             ]
@@ -140,7 +223,7 @@ def main():
                     assert missing == {}, missing
                     expected_maps[layer] = layout.copy()
                     for lid, tensors in full_weights.items():
-                        for kind, tensor in enumerate(tensors):
+                        for kind, tensor in zip(kinds, tensors, strict=True):
                             expected = torch.stack(
                                 [
                                     _expert_tensor(expert, lid, kind)
@@ -182,6 +265,7 @@ def main():
                         "world_size": 2,
                         "layer_updates": updates,
                         "model_loaded": False,
+                        "processed_w8a8": args.w8a8_postprocess,
                     }
                 )
             )

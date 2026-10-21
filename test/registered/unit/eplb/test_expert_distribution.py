@@ -164,6 +164,57 @@ class TestDeepEPAutoDistribution(unittest.TestCase):
         self.assertIsInstance(recorder, distribution._ExpertDistributionRecorderNoop)
         self.assertFalse(recorder.recording)
 
+    def test_capture_time_counts_are_reset_without_replacing_buffers(self):
+        recorder = distribution.ExpertDistributionRecorder.init_new(
+            self.metadata, rank=1
+        )
+        gatherer = next(iter(recorder._single_pass_gatherers.values()))
+        pointers = (gatherer._data.data_ptr(), gatherer._low_latency._data.data_ptr())
+        get_forward().set("is_extend_in_batch", False)
+        # Exercise the capture-time hook gate on CPU. This checks buffer
+        # lifetime, not device graph capture/replay.
+        capture_state = SimpleNamespace(is_current_stream_capturing=lambda: True)
+        with patch.object(torch, "get_device_module", return_value=capture_state):
+            with recorder.with_current_layer(0):
+                recorder.on_deepep_dispatch_low_latency(torch.tensor([9, 9, 9, 9]))
+        recorder.start_record()
+        with recorder.with_forward_pass(0, SimpleNamespace()):
+            with recorder.with_current_layer(0):
+                recorder.on_deepep_dispatch_low_latency(torch.tensor([3, 1, 0, 0]))
+        counts = recorder._accumulator._global_physical_count_of_buffered_step.get_all()
+        expected = torch.tensor([[0, 0, 0, 0, 3, 1, 0, 0], [0] * 8])
+        torch.testing.assert_close(counts.sum(dim=0), expected)
+        recorder.stop_record()
+        recorder.start_record()
+        self.assertEqual(
+            pointers,
+            (gatherer._data.data_ptr(), gatherer._low_latency._data.data_ptr()),
+        )
+        self.assertEqual(torch.count_nonzero(counts).item(), 0)
+
+    def test_rolling_window_excludes_old_prefill_and_decode_passes(self):
+        recorder = distribution.ExpertDistributionRecorder.init_new(
+            self.metadata, rank=1
+        )
+        recorder.start_record()
+        # Six passes into a four-pass buffer. The first two large counts must
+        # be evicted even though the communication mode changes each pass.
+        for step, count in enumerate((100, 200, 1, 2, 3, 4)):
+            normal = step % 2 == 0
+            get_forward().set("is_extend_in_batch", normal)
+            with recorder.with_forward_pass(step, SimpleNamespace()):
+                with recorder.with_current_layer(0):
+                    if normal:
+                        recorder.on_select_experts(torch.full((count, 1), 0))
+                    else:
+                        recorder.on_deepep_dispatch_low_latency(
+                            torch.tensor([count, 0, 0, 0])
+                        )
+        counts = recorder._accumulator._global_physical_count_of_buffered_step.get_all()
+        torch.testing.assert_close(
+            counts.sum(dim=0), torch.tensor([[4, 0, 0, 0, 6, 0, 0, 0], [0] * 8])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
