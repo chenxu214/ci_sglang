@@ -1094,9 +1094,10 @@ class ModelRunner:
         #     )
 
         #     warmup_all_flashinfer_megamoe_layers(self.model)
-        capture = capture_cuda_graphs(
-            model_runner=self, capture_decode_cuda_graph=capture_decode_cuda_graph
-        )
+        with self._expert_distribution_recording_context():
+            capture = capture_cuda_graphs(
+                model_runner=self, capture_decode_cuda_graph=capture_decode_cuda_graph
+            )
         self.eager_runner = capture.eager_runner
         self.prefill_cuda_graph_runner = capture.prefill.runner
         self.decode_cuda_graph_runner = capture.decode.runner
@@ -1466,9 +1467,18 @@ class ModelRunner:
         """Return the model layers used by prefill CUDA graph execution."""
         return compute_attention_and_moe_layers(layer_model)
 
+    def _expert_distribution_recording_context(self):
+        # The process-wide recorder describes target expert placement. Draft
+        # weights are not moved by that manager, and draft graphs must not
+        # capture writes into the target's statistics buffers.
+        if self.is_draft_worker:
+            return get_global_expert_distribution_recorder().disable_this_region()
+        return contextlib.nullcontext()
+
     def init_decode_cuda_graph(self):
         self.decode_cuda_graph_runner = None
-        capture = capture_decode_graph(model_runner=self)
+        with self._expert_distribution_recording_context():
+            capture = capture_decode_graph(model_runner=self)
         self.decode_cuda_graph_runner = capture.runner
         self.graph_memory_usage = replace_graph_memory_usage(
             self.graph_memory_usage,
@@ -1483,11 +1493,12 @@ class ModelRunner:
 
     def init_prefill_cuda_graph(self, force_for_draft_worker: bool = False):
         self.prefill_cuda_graph_runner = None
-        capture = capture_prefill_graph(
-            model_runner=self,
-            eager_runner=self.eager_runner,
-            force_for_draft_worker=force_for_draft_worker,
-        )
+        with self._expert_distribution_recording_context():
+            capture = capture_prefill_graph(
+                model_runner=self,
+                eager_runner=self.eager_runner,
+                force_for_draft_worker=force_for_draft_worker,
+            )
         self.prefill_cuda_graph_runner = capture.runner
         self.graph_memory_usage = replace_graph_memory_usage(
             self.graph_memory_usage,
@@ -1662,6 +1673,7 @@ class ModelRunner:
         with (
             canary_ctx,
             step_span_ctx,
+            self._expert_distribution_recording_context(),
             get_global_expert_distribution_recorder().with_forward_pass(
                 self.forward_pass_id,
                 forward_batch,

@@ -189,6 +189,11 @@ class _ExpertDistributionRecorderReal(ExpertDistributionRecorder):
 
     @contextmanager
     def with_forward_pass(self, forward_pass_id: int, forward_batch: ForwardBatch):
+        # A disabled nested runner must not reset the target's gatherers or
+        # enter its non-reentrant forward-id scope.
+        if self._disable_all:
+            yield {}
+            return
         outputs = {}
         with self._current_forward_pass_id.with_value(forward_pass_id):
             self._on_forward_pass_start(forward_batch)
@@ -208,14 +213,14 @@ class _ExpertDistributionRecorderReal(ExpertDistributionRecorder):
             self._disable_all = previous_disable_all
 
     def _on_forward_pass_start(self, forward_batch: ForwardBatch):
-        if not self._recording:
+        if self._disable_all or not self._recording:
             return
         for gatherer_key, gatherer in self._single_pass_gatherers.items():
             gatherer.reset()
             gatherer.on_forward_pass_start(forward_batch)
 
     def _on_forward_pass_end(self, forward_pass_id: int, outputs: Dict[str, Any]):
-        if not self._recording:
+        if self._disable_all or not self._recording:
             return
         for gatherer_key, gatherer in self._single_pass_gatherers.items():
             single_pass_data = gatherer.collect()
