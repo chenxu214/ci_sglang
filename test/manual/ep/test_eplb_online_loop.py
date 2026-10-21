@@ -3,10 +3,14 @@
 Run with torchrun --standalone --nproc-per-node=2 \
     test/manual/ep/test_eplb_online_loop.py
 
+Add --rebalance-threshold 0.9 to also check that uniform routing eventually
+skips migration while balancedness reporting stays off.
+
 P/D roles run sequentially with separate configurations. This checks manager
 behavior, not PD request transfer or device graph execution.
 """
 
+import argparse
 import datetime
 import json
 import os
@@ -18,6 +22,12 @@ import torch.distributed as dist
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--device", choices=["cpu"], default="cpu")
+    parser.add_argument("--rebalance-threshold", type=float, default=1.0)
+    args = parser.parse_args()
+    if not 0 <= args.rebalance_threshold <= 1:
+        parser.error("--rebalance-threshold must be in [0, 1]")
     if int(os.environ.get("WORLD_SIZE", "1")) != 2:
         raise RuntimeError("launch with torchrun --nproc-per-node=2")
     rank = int(os.environ["RANK"])
@@ -47,6 +57,15 @@ def main():
             self.completed_chunks += 1
             return missing
 
+    class ObservedManager(EPLBManager):
+        skipped_decisions = 0
+
+        def _check_rebalance_needed(self, utilization):
+            needed = super()._check_rebalance_needed(utilization)
+            if not needed:
+                self.skipped_decisions += 1
+            return needed
+
     dist.init_process_group(backend="gloo", timeout=datetime.timedelta(seconds=60))
     reports = []
     try:
@@ -75,6 +94,7 @@ def main():
                         eplb_algorithm="deepseek",
                         eplb_rebalance_num_iterations=4,
                         eplb_rebalance_layers_per_chunk=1,
+                        eplb_min_rebalancing_utilization_threshold=args.rebalance_threshold,
                         expert_distribution_recorder_mode="stat",
                         expert_distribution_recorder_buffer_size=4,
                     ),
@@ -111,7 +131,7 @@ def main():
                 set_global_expert_distribution_recorder(recorder)
                 updater = ObservedUpdater()
                 weight_updater = SimpleNamespace(update_weights_from_disk=None)
-                manager = EPLBManager(
+                manager = ObservedManager(
                     model_config=model_config,
                     ps=SimpleNamespace(tp_rank=rank),
                     get_model=lambda: model,
@@ -120,6 +140,40 @@ def main():
                     get_weight_updater=lambda: weight_updater,
                 )
                 step = 0
+
+                def forward(traffic, step):
+                    get_forward().set("is_extend_in_batch", role == "prefill")
+                    with recorder.with_forward_pass(step, SimpleNamespace()):
+                        for layer in range(2):
+                            with recorder.with_current_layer(layer):
+                                if role == "prefill":
+                                    logical_ids = (
+                                        torch.repeat_interleave(
+                                            torch.arange(8), traffic.long()
+                                        )
+                                        if rank == 0
+                                        else torch.empty(0, dtype=torch.long)
+                                    )
+                                    physical_ids = (
+                                        metadata.logical_to_rank_dispatch_physical_map[
+                                            layer
+                                        ][logical_ids]
+                                    )
+                                    recorder.on_select_experts(
+                                        physical_ids.reshape(-1, 1)
+                                    )
+                                else:
+                                    local_experts = (
+                                        metadata.physical_to_logical_map_cpu[
+                                            layer, rank * 4 : (rank + 1) * 4
+                                        ]
+                                    )
+                                    recorder.on_select_experts(torch.tensor([[0, 1]]))
+                                    recorder.on_deepep_dispatch_low_latency(
+                                        traffic[local_experts]
+                                    )
+                    manager.on_forward_pass_end()
+
                 phase_reports = []
                 hot = (0, 1)
                 for phase in range(2):
@@ -131,37 +185,7 @@ def main():
                     ).item()
                     target_chunks = updater.completed_chunks + 2
                     for _ in range(20):
-                        get_forward().set("is_extend_in_batch", role == "prefill")
-                        with recorder.with_forward_pass(step, SimpleNamespace()):
-                            for layer in range(2):
-                                with recorder.with_current_layer(layer):
-                                    if role == "prefill":
-                                        logical_ids = (
-                                            torch.repeat_interleave(
-                                                torch.arange(8), traffic.long()
-                                            )
-                                            if rank == 0
-                                            else torch.empty(0, dtype=torch.long)
-                                        )
-                                        physical_ids = metadata.logical_to_rank_dispatch_physical_map[
-                                            layer
-                                        ][logical_ids]
-                                        recorder.on_select_experts(
-                                            physical_ids.reshape(-1, 1)
-                                        )
-                                    else:
-                                        local_experts = (
-                                            metadata.physical_to_logical_map_cpu[
-                                                layer, rank * 4 : (rank + 1) * 4
-                                            ]
-                                        )
-                                        recorder.on_select_experts(
-                                            torch.tensor([[0, 1]])
-                                        )
-                                        recorder.on_deepep_dispatch_low_latency(
-                                            traffic[local_experts]
-                                        )
-                        manager.on_forward_pass_end()
+                        forward(traffic, step)
                         step += 1
                         if updater.completed_chunks >= target_chunks:
                             break
@@ -191,6 +215,21 @@ def main():
                     # Shift the hot experts onto the same rank in the NEW map.
                     hot = tuple(new_map[0, :2].tolist())
                     dist.barrier()
+                if args.rebalance_threshold < 1:
+                    # Keep the same manager/history alive as the routing turns
+                    # uniform. Once old skew ages out, decisions must skip the
+                    # updater on BOTH ranks, with reporting still off.
+                    uniform = torch.ones(8, dtype=torch.int32)
+                    for index in range(100):
+                        if index == 84:
+                            stable_map = metadata.physical_to_logical_map_cpu.clone()
+                            chunks_before_stable_tail = updater.completed_chunks
+                            skipped_before_stable_tail = manager.skipped_decisions
+                        forward(uniform, step)
+                        step += 1
+                    assert updater.completed_chunks == chunks_before_stable_tail
+                    assert manager.skipped_decisions > skipped_before_stable_tail
+                    assert torch.equal(metadata.physical_to_logical_map_cpu, stable_map)
                 reports.append(
                     {
                         "role": role,
@@ -198,6 +237,8 @@ def main():
                         "completed_chunks": updater.completed_chunks,
                         "idle_sender_rank": 1 if role == "prefill" else None,
                         "phases": phase_reports,
+                        "rebalance_threshold": args.rebalance_threshold,
+                        "skipped_decisions": manager.skipped_decisions,
                     }
                 )
         if rank == 0:

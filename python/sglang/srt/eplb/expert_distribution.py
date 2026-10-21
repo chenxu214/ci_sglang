@@ -742,20 +742,25 @@ class _UtilizationRateAccumulatorMixin(_Accumulator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self._enable = reports_expert_balancedness()
+        # Threshold-based rebalance decisions need history even when reporting
+        # is off. The default threshold keeps this extra reduction disabled.
+        self._enable = reports_expert_balancedness() or not math.isclose(
+            get_exec().moe.eplb_min_rebalancing_utilization_threshold, 1.0
+        )
 
         if self._enable:
             self.window_sizes = EPLB_BALANCEDNESS_WINDOW_SIZES
             self._history = _DequeCollection(maxlens=self.window_sizes)
             self._reset_server_log_history = True
             self._rank = torch.distributed.get_rank()
-            expert_dispatch_cls = resolve_collector_class(
-                STAT_LOGGER_ROLE_EXPERT_DISPATCH,
-                ExpertDispatchCollector,
-            )
-            self._expert_dispatch_collector = expert_dispatch_cls(
-                self._expert_location_metadata.ep_size
-            )
+            if reports_expert_balancedness():
+                expert_dispatch_cls = resolve_collector_class(
+                    STAT_LOGGER_ROLE_EXPERT_DISPATCH,
+                    ExpertDispatchCollector,
+                )
+                self._expert_dispatch_collector = expert_dispatch_cls(
+                    self._expert_location_metadata.ep_size
+                )
             self._metric_heatmap_collection_counter = 0
 
     def append(
@@ -793,7 +798,8 @@ class _UtilizationRateAccumulatorMixin(_Accumulator):
         )
 
         if self._rank == 0:
-            self._handle_metric_eplb_heatmap(gpu_physical_count)
+            if reports_expert_balancedness():
+                self._handle_metric_eplb_heatmap(gpu_physical_count)
 
             utilization_rate_gpu = torch.mean(
                 compute_utilization_rate(gpu_physical_count)
@@ -802,16 +808,17 @@ class _UtilizationRateAccumulatorMixin(_Accumulator):
                 get_exec().moe.eplb_min_rebalancing_utilization_threshold, 1.0
             )
 
-            should_log = logs_expert_balancedness_to_server_log()
-            outputs["metrics"] = ExpertDistributionMetrics(
-                forward_pass_id=forward_pass_id,
-                eplb_balancedness=utilization_rate_gpu,
-                gpu_physical_count_sum=(
-                    gpu_physical_count.sum() if should_log else None
-                ),
-                reset_server_log_history=self._reset_server_log_history,
-            )
-            self._reset_server_log_history = False
+            if reports_expert_balancedness():
+                should_log = logs_expert_balancedness_to_server_log()
+                outputs["metrics"] = ExpertDistributionMetrics(
+                    forward_pass_id=forward_pass_id,
+                    eplb_balancedness=utilization_rate_gpu,
+                    gpu_physical_count_sum=(
+                        gpu_physical_count.sum() if should_log else None
+                    ),
+                    reset_server_log_history=self._reset_server_log_history,
+                )
+                self._reset_server_log_history = False
 
             if should_track_history:
                 self._history.append(utilization_rate_gpu.item())
@@ -992,10 +999,12 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
             avg_rate_tensor = torch.tensor(
                 [average_utilization_rate_over_window],
                 dtype=torch.float32,
-                device="cuda",
+                device=get_device_namespace().device,
             )
         else:
-            avg_rate_tensor = torch.empty(1, dtype=torch.float32, device="cuda")
+            avg_rate_tensor = torch.empty(
+                1, dtype=torch.float32, device=get_device_namespace().device
+            )
         torch.distributed.broadcast(avg_rate_tensor, src=0)
         return avg_rate_tensor.item()
 
