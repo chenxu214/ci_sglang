@@ -57,8 +57,9 @@ class TestEPLBThreshold(unittest.TestCase):
                     accumulator._history.append(0.25)
                     accumulator._history.append(0.75)
 
-                def broadcast(tensor, src):
+                def broadcast(tensor, src, group=None):
                     self.assertEqual(src, 0)
+                    self.assertIsNone(group)
                     self.assertEqual(tensor.device.type, "cpu")
                     self.assertEqual(tensor.dtype, torch.float32)
                     if rank == 0:
