@@ -149,6 +149,18 @@ def _update_expert_weights_raw(
     temp_buffers = create_temp_buffers(
         routed_experts_weights_of_layer[update_layer_ids[0]]
     )
+    sample_tensors = routed_experts_weights_of_layer[update_layer_ids[0]]
+    layer_buffers = None
+    if any(tensor.device.type == "npu" for tensor in sample_tensors):
+        import torch_npu
+
+        if any(
+            torch_npu.get_npu_format(tensor) not in (0, 2) for tensor in sample_tensors
+        ):
+            # Convert each whole layer once. Converting an NZ expert view can
+            # materialize its entire backing storage for every P2P send.
+            # Reuse this ND workspace across layers to bound live allocations.
+            layer_buffers = create_temp_buffers(sample_tensors)
 
     world_size = torch.distributed.get_world_size()
     num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
@@ -158,8 +170,14 @@ def _update_expert_weights_raw(
 
     for layer_id in update_layer_ids:
         missing_logical_experts_info: List[int] = []
+        model_weights = routed_experts_weights_of_layer[layer_id]
+        if layer_buffers is not None:
+            for buffer, weight in zip(layer_buffers, model_weights, strict=True):
+                buffer.copy_(weight)
         update_expert_weights_single_layer(
-            routed_experts_weights=routed_experts_weights_of_layer[layer_id],
+            routed_experts_weights=(
+                layer_buffers if layer_buffers is not None else model_weights
+            ),
             temp_buffers=temp_buffers,
             old_physical_to_logical_map=old_expert_location_metadata.physical_to_logical_map_cpu[
                 layer_id
@@ -174,6 +192,9 @@ def _update_expert_weights_raw(
             missing_logical_experts_info=missing_logical_experts_info,
             log_metrics=log_metrics,
         )
+        if layer_buffers is not None:
+            for weight, buffer in zip(model_weights, layer_buffers, strict=True):
+                weight.copy_(buffer)
         if len(missing_logical_experts_info) > 0:
             missing_logical_experts_by_layers[layer_id] = missing_logical_experts_info
     return missing_logical_experts_by_layers

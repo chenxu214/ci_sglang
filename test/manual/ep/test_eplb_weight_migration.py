@@ -130,6 +130,7 @@ def main():
     parser.add_argument("--weight-format", choices=("nd", "nz"), default="nd")
     parser.add_argument("--w8a8-postprocess", action="store_true")
     parser.add_argument("--no-fused-shared", action="store_true")
+    parser.add_argument("--all-layers-per-update", action="store_true")
     args = parser.parse_args()
     shared_ids = [] if args.no_fused_shared else [31]
     if args.device == "cpu" and args.weight_format != "nd":
@@ -234,12 +235,14 @@ def main():
             expected_maps = [initial.copy(), initial.copy()]
             for layout in layouts:
                 target = _metadata(layout, rank)
-                for layer in range(2):
+                layer_chunks = [[0, 1]] if args.all_layers_per_update else [[0], [1]]
+                for layer_ids in layer_chunks:
                     missing = updater.update(
-                        routed, target, [layer], nnodes=1, rank=rank
+                        routed, target, layer_ids, nnodes=1, rank=rank
                     )
                     assert missing == {}, missing
-                    expected_maps[layer] = layout.copy()
+                    for layer in layer_ids:
+                        expected_maps[layer] = layout.copy()
                     for lid, tensors in full_weights.items():
                         for kind, tensor in zip(kinds, tensors, strict=True):
                             expected = torch.stack(
@@ -265,7 +268,7 @@ def main():
                     torch.testing.assert_close(
                         current.physical_to_logical_map_cpu, torch.tensor(expected_maps)
                     )
-                    if layer == 1:
+                    if 1 in layer_ids:
                         for name in map_pointers:
                             torch.testing.assert_close(
                                 getattr(current, name),
@@ -274,7 +277,7 @@ def main():
                                 atol=0,
                             )
                     dist.barrier()
-                    updates += 1
+                    updates += len(layer_ids)
         if rank == 0:
             print(
                 json.dumps(
@@ -287,6 +290,7 @@ def main():
                         "model_loaded": False,
                         "processed_w8a8": args.w8a8_postprocess,
                         "fused_shared_experts": len(shared_ids),
+                        "all_layers_per_update": args.all_layers_per_update,
                     }
                 )
             )
