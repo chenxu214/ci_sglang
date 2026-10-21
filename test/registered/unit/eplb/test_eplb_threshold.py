@@ -39,7 +39,7 @@ class TestEPLBThreshold(unittest.TestCase):
         # Each layer sends six routes to rank 0 and two to rank 1.
         counts = torch.tensor([[2, 2, 1, 1, 1, 1, 0, 0]] * 2)
         with (
-            patch.object(distribution.torch.distributed, "reduce"),
+            patch.object(distribution.torch.distributed, "reduce") as reduce,
             patch.object(distribution.torch.distributed, "broadcast"),
         ):
             accumulator.append(0, "primary", {"global_physical_count": counts}, outputs)
@@ -48,6 +48,22 @@ class TestEPLBThreshold(unittest.TestCase):
                 (4 + 1e-5) / (6 + 1e-5),
             )
         self.assertNotIn("metrics", outputs)
+        self.assertIsNone(reduce.call_args.kwargs["group"])
+
+    def test_threshold_statistics_use_selected_communication_group(self):
+        accumulator = self.accumulator()
+        group = object()
+        with (
+            patch.object(distribution, "get_eplb_device_group", return_value=group),
+            patch.object(distribution.torch.distributed, "reduce") as reduce,
+        ):
+            accumulator.append(
+                0,
+                "primary",
+                {"global_physical_count": torch.ones(2, 8, dtype=torch.int32)},
+                {},
+            )
+        self.assertIs(reduce.call_args.kwargs["group"], group)
 
     def test_threshold_broadcast_uses_runtime_device_on_both_ranks(self):
         for rank in (0, 1):
