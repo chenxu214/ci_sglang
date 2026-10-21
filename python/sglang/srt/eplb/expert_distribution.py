@@ -48,6 +48,7 @@ from sglang.srt.observability.metrics_collector import (
 from sglang.srt.runtime_context import get_device as get_device_namespace
 from sglang.srt.runtime_context import (
     get_exec,
+    get_forward,
     get_schedule,
     logs_expert_balancedness_to_server_log,
     reports_expert_balancedness,
@@ -348,6 +349,8 @@ class _SinglePassGatherer(ABC):
                     rank,
                     elastic_ep_enabled=get_exec().moe.elastic_ep_backend is not None,
                 )
+            elif get_exec().moe.deepep_mode == "auto":
+                return _DeepepAutoSinglePassGatherer(expert_location_metadata, rank)
             else:
                 raise NotImplementedError
 
@@ -609,6 +612,40 @@ class _DeepepLowLatencySinglePassGatherer(_LayerBasedGpuSinglePassGatherer):
                     (0, n - local_physical_count_of_layer.shape[0]),
                 )
         self._data[layer_idx, :] += local_physical_count_of_layer
+
+
+class _DeepepAutoSinglePassGatherer(_SelectExpertsSinglePassGatherer):
+    """Follow the dispatcher's batch mode without counting decode tokens twice."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._low_latency = _DeepepLowLatencySinglePassGatherer(
+            *args,
+            **kwargs,
+            elastic_ep_enabled=get_exec().moe.elastic_ep_backend is not None,
+        )
+
+    def on_select_experts(self, layer_idx: int, topk_ids: torch.Tensor):
+        # DeepEPMode.AUTO uses this same DP-wide flag, including on idle ranks
+        # and during graph capture. A rank's local forward mode is insufficient.
+        if get_forward().is_extend_in_batch:
+            super().on_select_experts(layer_idx, topk_ids)
+
+    def on_deepep_dispatch_low_latency(
+        self, layer_idx: int, local_physical_count_of_layer: torch.Tensor
+    ):
+        self._low_latency.on_deepep_dispatch_low_latency(
+            layer_idx, local_physical_count_of_layer
+        )
+
+    def reset(self):
+        super().reset()
+        self._low_latency.reset()
+
+    def collect(self) -> Dict:
+        normal_count = super().collect()["global_physical_count"]
+        low_latency_count = self._low_latency.collect()["global_physical_count"]
+        return dict(global_physical_count=normal_count + low_latency_count)
 
 
 def _convert_per_token_to_global_physical_count(
