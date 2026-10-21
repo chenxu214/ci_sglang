@@ -129,7 +129,6 @@ class TestNpuTopKPadding(unittest.TestCase):
                     output = self.route(mode, valid, recorder)
                     n = 4 if valid is None else valid
                     expected = self.mapping[self.ids.long()]
-                    expected[n:] = self.mapping[0]
                     torch.testing.assert_close(output.topk_ids, expected)
                     self.assertEqual(output.topk_ids.dtype, self.ids.dtype)
                     torch.testing.assert_close(
@@ -141,24 +140,34 @@ class TestNpuTopKPadding(unittest.TestCase):
                     )
                     torch.testing.assert_close(counts.sum(dim=(0, 1)), expected_counts)
 
-    def test_padding_is_sanitized_before_expert_map_lookup(self):
-        self.ids[2:] = 99
+    def test_padding_preserves_distinct_gate_routes(self):
         recorder = self.recorder()
         output = self.route("sqrtsoftplus", 2, recorder)
-        self.assertTrue(torch.all(output.topk_ids[2:] == self.mapping[0]))
+        torch.testing.assert_close(output.topk_ids, self.mapping[self.ids.long()])
+        self.assertTrue(torch.all(output.topk_ids[:, 0] != output.topk_ids[:, 1]))
 
     def test_device_row_count_and_int64_buffer_are_kept_in_place(self):
         ids = torch.tensor([[0, 1], [2, 3]], dtype=torch.int64)
         pointer = ids.data_ptr()
         valid = torch.tensor([1])
-        with patch.object(
-            torch.Tensor, "item", side_effect=AssertionError("host read")
+        recorder = self.recorder()
+        with (
+            patch.object(torch.Tensor, "item", side_effect=AssertionError("host read")),
+            recorder.with_forward_pass(1, SimpleNamespace()),
+            recorder.with_current_layer(0),
         ):
-            topk._mask_topk_ids_padded_region(ids, valid, fill_value=0)
-        torch.testing.assert_close(ids, torch.tensor([[0, 1], [0, 0]]))
+            recorder.on_select_experts(ids, valid)
+        torch.testing.assert_close(ids, torch.tensor([[0, 1], [2, 3]]))
         valid.fill_(0)
-        topk._mask_topk_ids_padded_region(ids, valid, fill_value=0)
-        self.assertTrue(torch.all(ids == 0))
+        with (
+            recorder.with_forward_pass(2, SimpleNamespace()),
+            recorder.with_current_layer(0),
+        ):
+            recorder.on_select_experts(ids, valid)
+        counts = recorder._accumulator._global_physical_count_of_buffered_step.get_all()
+        self.assertEqual(int(counts[0].sum()), 2)
+        self.assertEqual(int(counts[1].sum()), 0)
+        torch.testing.assert_close(ids, torch.tensor([[0, 1], [2, 3]]))
         self.assertEqual(pointer, ids.data_ptr())
 
     def test_other_npu_dispatchers_keep_existing_padding_contract(self):

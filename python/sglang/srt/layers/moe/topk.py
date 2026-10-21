@@ -101,7 +101,6 @@ from sglang.srt.eplb.expert_location_dispatch import (
 )
 from sglang.srt.layers.dp_attention import is_allocation_symmetric
 from sglang.srt.layers.moe import (
-    get_moe_a2a_backend,
     get_moe_runner_backend,
     is_moe_input_scattered_across_dp_ranks,
 )
@@ -1573,14 +1572,9 @@ def _mask_topk_ids_padded_region(
     if _is_cuda and topk_ids.dtype == torch.int32 and fill_value == -1:
         mask_topk_ids(topk_ids, num_token_non_padded)
     elif _is_npu:
-        # Ascend LL dispatch kernels cannot consume -1 routes. Only fill
-        # safe ids here; the recorder masks its own copy for statistics.
-        if fill_value >= 0 and get_moe_a2a_backend().is_deepep():
-            padded = (
-                torch.arange(topk_ids.shape[0], device=topk_ids.device)
-                >= num_token_non_padded
-            )
-            topk_ids.masked_fill_(padded.unsqueeze(-1), fill_value)
+        # Ascend LL requires the gate's valid, distinct routes. EPLB masks
+        # padding in its statistics copy instead of modifying dispatch ids.
+        return
     elif _can_fuse_padded_region(topk_ids):
         _fill_padded_rows(topk_ids, num_token_non_padded, fill_value)
     else:
