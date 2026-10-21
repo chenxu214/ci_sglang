@@ -41,6 +41,7 @@ class TestNpuTopKPadding(unittest.TestCase):
             (hash_topk, "_is_npu", True),
             (hash_topk, "_is_xpu", False),
             (distribution, "get_device", "cpu"),
+            (distribution, "_use_npu_sender_statistics", True),
         ):
             item = (
                 patch.object(module, attr, return_value=value)
@@ -120,7 +121,7 @@ class TestNpuTopKPadding(unittest.TestCase):
                 layer_id=0,
             )
 
-    def test_fast_paths_mask_dispatch_and_real_recorder_counts(self):
+    def test_fast_paths_keep_dispatch_valid_and_mask_recorder_counts(self):
         for mode in ("sqrtsoftplus", "softmax", "sigmoid"):
             for valid in (None, 0, 2, 4):
                 with self.subTest(mode=mode, valid=valid):
@@ -128,7 +129,7 @@ class TestNpuTopKPadding(unittest.TestCase):
                     output = self.route(mode, valid, recorder)
                     n = 4 if valid is None else valid
                     expected = self.mapping[self.ids.long()]
-                    expected[n:] = -1
+                    expected[n:] = self.mapping[0]
                     torch.testing.assert_close(output.topk_ids, expected)
                     self.assertEqual(output.topk_ids.dtype, self.ids.dtype)
                     torch.testing.assert_close(
@@ -144,7 +145,7 @@ class TestNpuTopKPadding(unittest.TestCase):
         self.ids[2:] = 99
         recorder = self.recorder()
         output = self.route("sqrtsoftplus", 2, recorder)
-        self.assertTrue(torch.all(output.topk_ids[2:] == -1))
+        self.assertTrue(torch.all(output.topk_ids[2:] == self.mapping[0]))
 
     def test_device_row_count_and_int64_buffer_are_kept_in_place(self):
         ids = torch.tensor([[0, 1], [2, 3]], dtype=torch.int64)
@@ -153,11 +154,11 @@ class TestNpuTopKPadding(unittest.TestCase):
         with patch.object(
             torch.Tensor, "item", side_effect=AssertionError("host read")
         ):
-            topk._mask_topk_ids_padded_region(ids, valid)
-        torch.testing.assert_close(ids, torch.tensor([[0, 1], [-1, -1]]))
+            topk._mask_topk_ids_padded_region(ids, valid, fill_value=0)
+        torch.testing.assert_close(ids, torch.tensor([[0, 1], [0, 0]]))
         valid.fill_(0)
-        topk._mask_topk_ids_padded_region(ids, valid)
-        self.assertTrue(torch.all(ids == -1))
+        topk._mask_topk_ids_padded_region(ids, valid, fill_value=0)
+        self.assertTrue(torch.all(ids == 0))
         self.assertEqual(pointer, ids.data_ptr())
 
     def test_other_npu_dispatchers_keep_existing_padding_contract(self):
@@ -171,7 +172,40 @@ class TestNpuTopKPadding(unittest.TestCase):
             topk._mask_topk_ids_padded_region(ids, torch.tensor([0]))
         torch.testing.assert_close(ids, self.ids)
 
-    def test_hash_topk_masks_dispatch_and_excludes_shared_slots_from_counts(self):
+    def test_npu_modes_count_sender_routes_and_ignore_padded_receiver_counts(self):
+        for mode in ("normal", "low_latency", "auto"):
+            with (
+                self.subTest(mode=mode),
+                patch.object(
+                    distribution,
+                    "get_exec",
+                    return_value=SimpleNamespace(
+                        moe=SimpleNamespace(
+                            expert_distribution_recorder_mode="stat",
+                            moe_a2a_backend="deepep",
+                            deepep_mode=mode,
+                        )
+                    ),
+                ),
+            ):
+                gatherer = distribution._SinglePassGatherer.init_new(
+                    SimpleNamespace(
+                        num_layers=1,
+                        num_physical_experts=8,
+                        num_local_physical_experts=4,
+                    ),
+                    rank=0,
+                )
+                gatherer.on_select_experts(0, torch.tensor([[6, 0], [-1, -1]]))
+                gatherer.on_deepep_dispatch_low_latency(0, torch.full((4,), 999))
+                expected = torch.tensor([[1, 0, 0, 0, 0, 0, 1, 0]])
+                torch.testing.assert_close(
+                    gatherer.collect()["global_physical_count"].long(), expected
+                )
+
+    def test_hash_topk_keeps_dispatch_valid_and_excludes_padding_and_shared_counts(
+        self,
+    ):
         for shared in (0, 1):
             with self.subTest(shared=shared):
                 recorder = self.recorder()
@@ -199,7 +233,7 @@ class TestNpuTopKPadding(unittest.TestCase):
                         num_token_non_padded=torch.tensor([2]),
                         expert_location_dispatch_info=self.info,
                     )
-                self.assertTrue(torch.all(output.topk_ids[2:] == -1))
+                self.assertTrue(torch.all(output.topk_ids >= 0))
                 counts = recorder._accumulator._global_physical_count_of_buffered_step.get_all()
                 expected = torch.bincount(
                     self.mapping[torch.tensor([[0, 1], [1, 2]])].flatten().long(),

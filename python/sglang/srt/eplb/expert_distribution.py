@@ -66,6 +66,13 @@ _OutputMode = Literal["file", "object"]
 EPLB_BALANCEDNESS_WINDOW_SIZES = (10, 100, 1000)
 
 
+def _use_npu_sender_statistics():
+    return (
+        get_device_namespace().device == "npu"
+        and get_exec().moe.moe_a2a_backend == "deepep"
+    )
+
+
 @dataclass
 class ExpertDistributionMetrics:
     forward_pass_id: int
@@ -115,7 +122,11 @@ class ExpertDistributionRecorder(ABC):
     def with_forward_pass(self, forward_pass_id: int, forward_batch: ForwardBatch):
         yield {}
 
-    def on_select_experts(self, topk_ids: torch.Tensor):
+    def on_select_experts(
+        self,
+        topk_ids: torch.Tensor,
+        num_token_non_padded: Optional[torch.Tensor] = None,
+    ):
         pass
 
     def on_deepep_dispatch_normal(
@@ -228,7 +239,23 @@ class _ExpertDistributionRecorderReal(ExpertDistributionRecorder):
                 forward_pass_id, gatherer_key, single_pass_data, outputs
             )
 
-    def on_select_experts(self, topk_ids: torch.Tensor):
+    def on_select_experts(
+        self,
+        topk_ids: torch.Tensor,
+        num_token_non_padded: Optional[torch.Tensor] = None,
+    ):
+        if self._disable_all or not (
+            self._recording or torch.get_device_module().is_current_stream_capturing()
+        ):
+            return
+        if num_token_non_padded is not None and _use_npu_sender_statistics():
+            # Ascend LL kernels require nonnegative dispatch ids. Mask only
+            # the statistics copy, without changing communication inputs.
+            padded = (
+                torch.arange(topk_ids.shape[0], device=topk_ids.device)
+                >= num_token_non_padded
+            )
+            topk_ids = topk_ids.masked_fill(padded.unsqueeze(-1), -1)
         self._on_hook("on_select_experts", topk_ids=topk_ids)
 
     def on_deepep_dispatch_normal(
@@ -346,6 +373,10 @@ class _SinglePassGatherer(ABC):
                 raise NotImplementedError
 
         if get_exec().moe.moe_a2a_backend == "deepep":
+            if _use_npu_sender_statistics():
+                # Receiver counts include graph padding on Ascend. Count the
+                # sender's valid TopK routes in every mode, then all-reduce.
+                return _SelectExpertsSinglePassGatherer(expert_location_metadata, rank)
             if get_exec().moe.deepep_mode == "normal":
                 return _SelectExpertsSinglePassGatherer(expert_location_metadata, rank)
             elif get_exec().moe.deepep_mode == "low_latency":

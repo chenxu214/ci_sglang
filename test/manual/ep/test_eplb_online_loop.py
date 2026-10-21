@@ -161,7 +161,7 @@ def main():
                     with recorder.with_forward_pass(step, SimpleNamespace()):
                         for layer in range(2):
                             with recorder.with_current_layer(layer):
-                                if role == "prefill":
+                                if role == "prefill" or args.device == "npu":
                                     logical_ids = (
                                         torch.repeat_interleave(
                                             torch.arange(8), traffic.long()
@@ -177,6 +177,12 @@ def main():
                                     recorder.on_select_experts(
                                         physical_ids.reshape(-1, 1)
                                     )
+                                    if role == "decode":
+                                        # NPU counts valid sender routes; receiver
+                                        # counters must not double-count them.
+                                        recorder.on_deepep_dispatch_low_latency(
+                                            torch.full((4,), 999, device=args.device)
+                                        )
                                 else:
                                     local_experts = (
                                         metadata.physical_to_logical_map_cpu[

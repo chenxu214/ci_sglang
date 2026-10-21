@@ -1573,10 +1573,9 @@ def _mask_topk_ids_padded_region(
     if _is_cuda and topk_ids.dtype == torch.int32 and fill_value == -1:
         mask_topk_ids(topk_ids, num_token_non_padded)
     elif _is_npu:
-        # Ascend DeepEP accepts -1 for no selected expert. Keep the mask's
-        # shape static for graph capture, with the valid row count on device.
-        # Other NPU dispatchers retain their existing padding contract.
-        if get_moe_a2a_backend().is_deepep():
+        # Ascend LL dispatch kernels cannot consume -1 routes. Only fill
+        # safe ids here; the recorder masks its own copy for statistics.
+        if fill_value >= 0 and get_moe_a2a_backend().is_deepep():
             padded = (
                 torch.arange(topk_ids.shape[0], device=topk_ids.device)
                 >= num_token_non_padded
@@ -2565,7 +2564,7 @@ def select_experts(
     )
 
     get_global_expert_distribution_recorder().on_select_experts(
-        topk_ids=recorder_topk_ids
+        topk_ids=recorder_topk_ids, num_token_non_padded=num_token_non_padded
     )
 
     # ===== TO BE REFACTORED ====
