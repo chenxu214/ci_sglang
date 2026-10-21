@@ -7,6 +7,7 @@ from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_r
 from sglang.srt.eplb.expert_location_dispatch import topk_ids_logical_to_physical
 from sglang.srt.layers.moe.topk import (
     StandardTopKOutput,
+    _mask_topk_ids_padded_region,
     capture_routed_experts_if_allowed,
     select_experts,
 )
@@ -124,8 +125,13 @@ def fused_topk_npu(
             expert_location_dispatch_info=expert_location_dispatch_info,
         )
 
+    # Gate outputs in graph-padding rows need not be valid logical ids. Make
+    # them safe before indexing the layout, then exclude them from dispatch
+    # and EPLB counts after the logical-to-physical remap.
+    _mask_topk_ids_padded_region(topk_ids, num_token_non_padded, fill_value=0)
     if expert_location_dispatch_info is not None:
         topk_ids = topk_ids_logical_to_physical(topk_ids, expert_location_dispatch_info)
+    _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
     get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
     capture_routed_experts_if_allowed(topk_config, layer_id, topk_ids)
 

@@ -101,6 +101,7 @@ from sglang.srt.eplb.expert_location_dispatch import (
 )
 from sglang.srt.layers.dp_attention import is_allocation_symmetric
 from sglang.srt.layers.moe import (
+    get_moe_a2a_backend,
     get_moe_runner_backend,
     is_moe_input_scattered_across_dp_ranks,
 )
@@ -1572,7 +1573,15 @@ def _mask_topk_ids_padded_region(
     if _is_cuda and topk_ids.dtype == torch.int32 and fill_value == -1:
         mask_topk_ids(topk_ids, num_token_non_padded)
     elif _is_npu:
-        return
+        # Ascend DeepEP accepts -1 for no selected expert. Keep the mask's
+        # shape static for graph capture, with the valid row count on device.
+        # Other NPU dispatchers retain their existing padding contract.
+        if get_moe_a2a_backend().is_deepep():
+            padded = (
+                torch.arange(topk_ids.shape[0], device=topk_ids.device)
+                >= num_token_non_padded
+            )
+            topk_ids.masked_fill_(padded.unsqueeze(-1), fill_value)
     elif _can_fuse_padded_region(topk_ids):
         _fill_padded_rows(topk_ids, num_token_non_padded, fill_value)
     else:
