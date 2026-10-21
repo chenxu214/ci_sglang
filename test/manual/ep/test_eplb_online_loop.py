@@ -1,4 +1,4 @@
-"""CPU/Gloo EPLB loop with synthetic routing and real planning/migration.
+"""CPU/Gloo or NPU/HCCL loop with synthetic routing and real migration.
 
 Run with torchrun --standalone --nproc-per-node=2 \
     test/manual/ep/test_eplb_online_loop.py
@@ -14,6 +14,7 @@ import argparse
 import datetime
 import json
 import os
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -23,7 +24,7 @@ import torch.distributed as dist
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", choices=["cpu"], default="cpu")
+    parser.add_argument("--device", choices=["cpu", "npu"], default="cpu")
     parser.add_argument("--rebalance-threshold", type=float, default=1.0)
     args = parser.parse_args()
     if not 0 <= args.rebalance_threshold <= 1:
@@ -31,6 +32,10 @@ def main():
     if int(os.environ.get("WORLD_SIZE", "1")) != 2:
         raise RuntimeError("launch with torchrun --nproc-per-node=2")
     rank = int(os.environ["RANK"])
+    if args.device == "npu":
+        import torch_npu  # noqa: F401
+
+        torch.npu.set_device(int(os.environ["LOCAL_RANK"]))
 
     from sglang.srt.eplb.eplb_manager import EPLBManager
     from sglang.srt.eplb.expert_distribution import (
@@ -49,7 +54,8 @@ def main():
     class ObservedUpdater(ExpertLocationUpdater):
         def __init__(self):
             super().__init__()
-            self._first_execution = False  # CPU has no accelerator cache flush.
+            if args.device == "cpu":
+                self._first_execution = False  # CPU has no accelerator cache flush.
             self.completed_chunks = 0
 
         def update(self, *args, **kwargs):
@@ -66,7 +72,10 @@ def main():
                 self.skipped_decisions += 1
             return needed
 
-    dist.init_process_group(backend="gloo", timeout=datetime.timedelta(seconds=60))
+    dist.init_process_group(
+        backend="hccl" if args.device == "npu" else "gloo",
+        timeout=datetime.timedelta(seconds=60),
+    )
     reports = []
     try:
         # Only model metadata and the hardware selection are substituted.
@@ -77,13 +86,19 @@ def main():
                 "from_model_config",
                 return_value=ModelConfigForExpertLocation(2, 8, 1),
             ),
-            patch("sglang.srt.eplb.expert_distribution.get_device", return_value="cpu"),
+            (
+                patch(
+                    "sglang.srt.eplb.expert_distribution.get_device", return_value="cpu"
+                )
+                if args.device == "cpu"
+                else nullcontext()
+            ),
         ):
             for role in ("prefill", "decode"):
                 publish(
                     ServerArgs(
                         model_path="dummy",
-                        device="cpu",
+                        device=args.device,
                         tp_size=2,
                         ep_size=2,
                         disaggregation_mode=role,
@@ -114,6 +129,7 @@ def main():
                                     for expert in range(rank * 4, rank * 4 + 4)
                                 ],
                                 dtype=torch.float32,
+                                device=args.device,
                             ).reshape(4, 1)
                         ]
                         for layer in range(2)
@@ -125,9 +141,8 @@ def main():
                 ]
                 map_pointer = metadata.physical_to_logical_map.data_ptr()
                 recorder = ExpertDistributionRecorder.init_new(metadata, rank)
-                recorder._accumulator._first_dump = (
-                    False  # Same CPU cache-flush exclusion.
-                )
+                if args.device == "cpu":
+                    recorder._accumulator._first_dump = False
                 set_global_expert_distribution_recorder(recorder)
                 updater = ObservedUpdater()
                 weight_updater = SimpleNamespace(update_weights_from_disk=None)
@@ -157,7 +172,7 @@ def main():
                                     physical_ids = (
                                         metadata.logical_to_rank_dispatch_physical_map[
                                             layer
-                                        ][logical_ids]
+                                        ][logical_ids.to(args.device)]
                                     )
                                     recorder.on_select_experts(
                                         physical_ids.reshape(-1, 1)
@@ -168,9 +183,11 @@ def main():
                                             layer, rank * 4 : (rank + 1) * 4
                                         ]
                                     )
-                                    recorder.on_select_experts(torch.tensor([[0, 1]]))
+                                    recorder.on_select_experts(
+                                        torch.tensor([[0, 1]], device=args.device)
+                                    )
                                     recorder.on_deepep_dispatch_low_latency(
-                                        traffic[local_experts]
+                                        traffic[local_experts].to(args.device)
                                     )
                     manager.on_forward_pass_end()
 
@@ -202,7 +219,7 @@ def main():
                             new_map[layer, rank * 4 : (rank + 1) * 4].float()
                             + layer * 16
                         )
-                        torch.testing.assert_close(tensors[0].flatten(), expected)
+                        torch.testing.assert_close(tensors[0].flatten().cpu(), expected)
                         assert tensors[0].data_ptr() == pointers[layer]
                     assert metadata.physical_to_logical_map.data_ptr() == map_pointer
                     phase_reports.append(
@@ -246,7 +263,7 @@ def main():
                 json.dumps(
                     {
                         "status": "passed",
-                        "scope": "synthetic routing / real CPU EPLB loop",
+                        "scope": f"synthetic routing / real {args.device} EPLB loop",
                         "reports": reports,
                     }
                 )
