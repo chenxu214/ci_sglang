@@ -1,0 +1,82 @@
+python/sglang/srt/layers/moe/moe_runner/runner.py
+  s_871888365ea6da::t_9fedcb70646302 201-206
+  s_871888365ea6da::t_71e371c25d2e94 200
+  s_871888365ea6da::t_2f2b50052466c1 198-199
+python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
+  s_871888365ea6da::t_8c31e876e4fa35 3
+  s_871888365ea6da::t_c6c1638d2bdd5a 279
+  s_871888365ea6da::t_5880489189219f 237-239
+  s_871888365ea6da::t_3b67785b0dfb75 35
+  s_871888365ea6da::t_4eca850ba6046e 97-98
+  s_871888365ea6da::t_378780476d7c20 242,244,258-266,270-278,280-346,350-354,356-379
+  s_871888365ea6da::t_82944130c32b37 255
+  s_871888365ea6da::t_0550069139b26f 562
+  s_871888365ea6da::t_c190de3b468588 126
+  s_871888365ea6da::t_50f9c9303d5855 53-54,59-67,71-96,99-125,127-138
+  s_871888365ea6da::t_bcecad00e1fc7f 157,167-169
+  s_efa56157ea7004::t_83baf48b96c8eb 393-394,397
+  s_efa56157ea7004::t_0f6cec3ef7be07 243,245-247,254,256-257
+  s_871888365ea6da::t_d382d55d204645 34,55-58,68-70,267-269,347-349,355
+  s_871888365ea6da::t_62eb7ec90fc6c4 240-241
+  s_efa56157ea7004::t_5b727343f8a06c 248-253
+  s_efa56157ea7004::t_6809b38c45eac7 395-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "4916cb6bcb8ab259cd9babdef3511939bc262d3a",
+  "prompts": {},
+  "humans": {
+    "h_3ab581817c9a6f": {
+      "author": "chenxu214 <justin_cc2025@16.com>"
+    }
+  },
+  "sessions": {
+    "s_871888365ea6da": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6ad72cfb0dc83bdafbf5f8ac",
+        "model": "glm-5.3"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ada20cf0dc83bdafbf60d73:afterEdit:8f314e34",
+        "tool_type": "builtin",
+        "__trae_file_phase": "post",
+        "tool_use_id": "6ada20cf0dc83bdafbf60d73",
+        "runtime_client": "trae-tob-git-ai",
+        "operation_id": "6ada20cf0dc83bdafbf60d73",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "edit_kind": "file_edit",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "client_type": "ide",
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
+        "source_scene": "agent"
+      }
+    },
+    "s_efa56157ea7004": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aafd30b0dc83bdafbf5de74",
+        "model": "glm-5.3"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "client_type": "ide",
+        "tool_type": "builtin",
+        "__trae_file_phase": "post",
+        "dedupe_key": "6aafd30b0dc83bdafbf5de74:6ada1ed50dc83bdafbf60cf8:afterEdit:4b81e8d2",
+        "source_scene": "agent",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/hardware_backend/npu/moe/mega_moe.py\"]",
+        "edit_kind": "file_edit",
+        "session_id": "6aafd30b0dc83bdafbf5de74",
+        "external_session_id": "6aafd30b0dc83bdafbf5de74",
+        "tool_use_id": "6ada1ed50dc83bdafbf60cf8",
+        "operation_id": "6ada1ed50dc83bdafbf60cf8",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    }
+  }
+}
