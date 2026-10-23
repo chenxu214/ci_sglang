@@ -1,0 +1,64 @@
+python/sglang/srt/hardware_backend/npu/moe/dispatch.py
+  s_871888365ea6da::t_edb62415c50bd2 92-93
+python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
+  s_871888365ea6da::t_12c096fe052897 618
+  s_871888365ea6da::t_593c474fc9e612 68,70-74
+  s_871888365ea6da::t_b61d079f1aeb70 630
+  s_871888365ea6da::t_3bb2a6d0e0f5be 64-67,69
+  s_871888365ea6da::t_2cca8fd7e3ab19 45,693
+  s_871888365ea6da::t_8246aeac127110 43
+  s_871888365ea6da::t_cc23fdf4888770 269
+  s_871888365ea6da::t_9a4dc04cd095c0 460,637
+  s_871888365ea6da::t_3076fcf4a2b629 410-411,414,417-419
+  s_871888365ea6da::t_e6f3d711c4de8a 44,638
+  s_871888365ea6da::t_912a17962dadc8 455
+python/sglang/srt/hardware_backend/npu/moe/routing.py
+  s_871888365ea6da::t_545a133f46eec0 78,91,170
+  s_871888365ea6da::t_da24b9ca7344cd 25-26,35-44
+  s_871888365ea6da::t_c55dcb63b9a3e1 163
+  s_871888365ea6da::t_d81cb9c3aeb713 11-13
+  s_871888365ea6da::t_feaf1b5648450d 14-15
+  s_871888365ea6da::t_f099ecdd07e01a 108-109
+  s_871888365ea6da::t_abad98e25bd78f 45
+python/sglang/srt/layers/moe/moe_runner/ascend.py
+  s_871888365ea6da::t_9edd19628245b8 393
+  s_871888365ea6da::t_d5fa61024c9816 338
+  s_871888365ea6da::t_ef4467346a7134 417-418
+  s_871888365ea6da::t_d255cfaf358f43 27,363,442,491
+  s_871888365ea6da::t_9269eeb230fdd2 643-644
+  s_871888365ea6da::t_974405acaef2a6 28,589,621,660
+  s_871888365ea6da::t_7a9e9a2ac0c8f1 612
+  s_871888365ea6da::t_293f5abf3583af 478,481-482
+  s_871888365ea6da::t_dcbff64d7b2b0a 583
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a816764389bb09924a3ae01a1f585f1b83f747b3",
+  "prompts": {},
+  "sessions": {
+    "s_871888365ea6da": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6ad72cfb0dc83bdafbf5f8ac",
+        "model": "glm-5.3"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
+        "__trae_file_phase": "post",
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adb298b0dc83bdafbf61045:afterEdit:8f314e34",
+        "runtime_client": "trae-tob-git-ai",
+        "source_scene": "agent",
+        "tool_use_id": "6adb298b0dc83bdafbf61045",
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "tool_type": "builtin",
+        "client_type": "ide",
+        "edit_kind": "file_edit",
+        "operation_id": "6adb298b0dc83bdafbf61045",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac"
+      }
+    }
+  }
+}
