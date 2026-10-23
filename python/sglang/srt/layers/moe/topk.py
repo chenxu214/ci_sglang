@@ -1744,6 +1744,8 @@ def _mask_topk_ids_padded_region(
     if _is_cuda and topk_ids.dtype == torch.int32 and fill_value == -1:
         mask_topk_ids(topk_ids, num_token_non_padded)
     elif _is_npu:
+        # Ascend LL requires the gate's valid, distinct routes. EPLB masks
+        # padding in its statistics copy instead of modifying dispatch ids.
         return
     elif _can_fuse_padded_region(topk_ids):
         _fill_padded_rows(topk_ids, num_token_non_padded, fill_value)
@@ -2882,7 +2884,7 @@ def select_experts(
 
     if recorder_topk_ids is not None:
         get_global_expert_distribution_recorder().on_select_experts(
-            topk_ids=recorder_topk_ids
+            topk_ids=recorder_topk_ids, num_token_non_padded=num_token_non_padded
         )
 
     if packed_topk is not None:
