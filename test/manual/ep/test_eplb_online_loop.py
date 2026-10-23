@@ -122,8 +122,11 @@ def main():
                         disaggregation_mode=role,
                         moe_a2a_backend="deepep",
                         deepep_mode=(
-                            "auto" if args.device == "npu"
-                            else "normal" if role == "prefill" else "low_latency"
+                            "auto"
+                            if args.device == "npu"
+                            else "normal"
+                            if role == "prefill"
+                            else "low_latency"
                         ),
                         enable_eplb=True,
                         ep_dispatch_algorithm="static",

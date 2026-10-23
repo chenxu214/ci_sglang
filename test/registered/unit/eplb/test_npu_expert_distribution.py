@@ -1,4 +1,5 @@
 """Ascend sender statistics across DeepEP modes; CPU-only count oracles."""
+
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -29,11 +30,14 @@ class TestNpuExpertDistribution(unittest.TestCase):
     def configure(self, mode="auto", enabled=True):
         publish(
             ServerArgs(
-                model_path="dummy", device="cpu", moe_a2a_backend="deepep",
+                model_path="dummy",
+                device="cpu",
+                moe_a2a_backend="deepep",
                 deepep_mode=mode,
                 expert_distribution_recorder_mode="stat" if enabled else None,
                 expert_distribution_recorder_buffer_size=4,
-            ), role="test",
+            ),
+            role="test",
         )
 
     def gatherer(self):
@@ -48,7 +52,9 @@ class TestNpuExpertDistribution(unittest.TestCase):
         for mode in ("normal", "low_latency", "auto"):
             with self.subTest(mode=mode):
                 self.configure(mode)
-                self.assertIs(type(self.gatherer()), distribution._SelectExpertsSinglePassGatherer)
+                self.assertIs(
+                    type(self.gatherer()), distribution._SelectExpertsSinglePassGatherer
+                )
 
     def test_padding_and_invalid_routes_are_ignored(self):
         gatherer = self.gatherer()
@@ -64,7 +70,9 @@ class TestNpuExpertDistribution(unittest.TestCase):
         gatherer.on_deepep_dispatch_low_latency(0, torch.tensor([99, 99, 99, 99]))
         expected = torch.tensor([[1, 0, 0, 0, 2, 0, 0, 0], [0] * 8], dtype=torch.int32)
         for _ in range(2):
-            torch.testing.assert_close(gatherer.collect()["global_physical_count"], expected)
+            torch.testing.assert_close(
+                gatherer.collect()["global_physical_count"], expected
+            )
 
     def test_idle_rank_and_reset_preserve_buffer(self):
         gatherer = self.gatherer()
@@ -89,13 +97,19 @@ class TestNpuExpertDistribution(unittest.TestCase):
 
     def test_disabled_eplb_uses_noop_recorder(self):
         self.configure(enabled=False)
-        recorder = distribution.ExpertDistributionRecorder.init_new(self.metadata, rank=1)
+        recorder = distribution.ExpertDistributionRecorder.init_new(
+            self.metadata, rank=1
+        )
         self.assertIsInstance(recorder, distribution._ExpertDistributionRecorderNoop)
         self.assertFalse(recorder.recording)
-        recorder.on_select_experts(torch.tensor([[0, 1]]), num_token_non_padded=torch.tensor(1))
+        recorder.on_select_experts(
+            torch.tensor([[0, 1]]), num_token_non_padded=torch.tensor(1)
+        )
 
     def test_capture_counts_cleared_on_first_real_pass(self):
-        recorder = distribution.ExpertDistributionRecorder.init_new(self.metadata, rank=1)
+        recorder = distribution.ExpertDistributionRecorder.init_new(
+            self.metadata, rank=1
+        )
         gatherer = next(iter(recorder._single_pass_gatherers.values()))
         pointer = gatherer._data.data_ptr()
         capture = SimpleNamespace(is_current_stream_capturing=lambda: True)
@@ -113,7 +127,9 @@ class TestNpuExpertDistribution(unittest.TestCase):
         )
 
     def test_other_devices_keep_existing_factory_behavior(self):
-        with patch.object(distribution, "_use_npu_sender_statistics", return_value=False):
+        with patch.object(
+            distribution, "_use_npu_sender_statistics", return_value=False
+        ):
             for mode, cls in (
                 ("normal", distribution._SelectExpertsSinglePassGatherer),
                 ("low_latency", distribution._DeepepLowLatencySinglePassGatherer),

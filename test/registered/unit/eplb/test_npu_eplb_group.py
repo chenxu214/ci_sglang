@@ -56,17 +56,28 @@ class TestNpuEplbGroup(unittest.TestCase):
 
     def test_unwritten_runtime_tp_group_keeps_world(self):
         with (
-            patch.object(comm_utils, "get_device", return_value=SimpleNamespace(device="npu")),
+            patch.object(
+                comm_utils, "get_device", return_value=SimpleNamespace(device="npu")
+            ),
             patch.object(comm_utils.dist, "is_initialized", return_value=True),
-            patch("sglang.srt.distributed.parallel_state.get_parallel", return_value=ParallelContext()),
+            patch(
+                "sglang.srt.distributed.parallel_state.get_parallel",
+                return_value=ParallelContext(),
+            ),
         ):
             self.assertIsNone(comm_utils.get_eplb_device_group())
 
     def test_other_runtime_errors_are_not_hidden(self):
         with (
-            patch.object(comm_utils, "get_device", return_value=SimpleNamespace(device="npu")),
+            patch.object(
+                comm_utils, "get_device", return_value=SimpleNamespace(device="npu")
+            ),
             patch.object(comm_utils.dist, "is_initialized", return_value=True),
-            patch.object(comm_utils, "get_tp_group", side_effect=RuntimeError("group setup failed")),
+            patch.object(
+                comm_utils,
+                "get_tp_group",
+                side_effect=RuntimeError("group setup failed"),
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "group setup failed"):
                 comm_utils.get_eplb_device_group()
