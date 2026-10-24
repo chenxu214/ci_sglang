@@ -1,0 +1,41 @@
+python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
+  s_871888365ea6da::t_032617db2575a9 435
+  s_871888365ea6da::t_7d614911a21b73 61-66,69
+  s_871888365ea6da::t_71d6a111ae5cbd 337-342
+  s_871888365ea6da::t_1eeb6aa3793f57 242-243
+  s_871888365ea6da::t_3dee01817cb0b7 365,367-371
+  s_871888365ea6da::t_a657b96dbe0b29 455-460,463,468
+  s_871888365ea6da::t_afc32fe719a8d2 240-241
+  s_871888365ea6da::t_83f8a059b247b5 436
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "70f1e82d1f82457bf9427c58dbde0af34fa55e63",
+  "prompts": {},
+  "sessions": {
+    "s_871888365ea6da": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6ad72cfb0dc83bdafbf5f8ac",
+        "model": "glm-5.3"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "edit_kind": "file_edit",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "__trae_file_phase": "post",
+        "client_type": "ide",
+        "tool_use_id": "6adc53f80dc83bdafbf61126",
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adc53f80dc83bdafbf61126:afterEdit:8f314e34",
+        "source_scene": "agent",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_type": "builtin",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
+        "operation_id": "6adc53f80dc83bdafbf61126"
+      }
+    }
+  }
+}
