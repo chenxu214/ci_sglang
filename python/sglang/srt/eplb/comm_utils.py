@@ -1,27 +1,36 @@
-"""Communication groups for EPLB collectives and weight migration."""
+"""Communication groups for EPLB collectives and NPU weight migration."""
+
+import logging
 
 import torch.distributed as dist
 
-from sglang.srt.distributed import get_tp_group
 from sglang.srt.runtime_context import get_device
+
+logger = logging.getLogger(__name__)
+_group_world = None
+_device_group = None
 
 
 def get_eplb_device_group():
-    # Ascend lazily allocates large buffers for a new HCCL communicator.
-    # Reuse TP when it has exactly the legacy WORLD membership and ordering.
-    # Subgroup deployments keep the original WORLD communication semantics.
+    """Keep legacy WORLD membership while isolating NPU migration transport."""
+    global _group_world, _device_group
     if get_device().device != "npu" or not dist.is_initialized():
         return None
-    try:
-        tp_group = get_tp_group()
-    except AssertionError:
-        # Standalone migration tools do not initialize model-parallel groups.
-        return None
-    except RuntimeError as error:
-        # The runtime-context API raises this instead of the legacy assertion.
-        if str(error).startswith("parallel name 'tp_group' has not been written"):
-            return None
-        raise
-    if tp_group.ranks == list(range(dist.get_world_size())):
-        return tp_group.device_group
-    return None
+
+    world = dist.group.WORLD
+    if _group_world is not world:
+        import torch_npu
+
+        options = torch_npu._C._distributed_c10d.ProcessGroupHCCL.Options()
+        # Avoid sharing device-expanded graph resources with forward collectives.
+        # Explicitly bound the buffer instead of inheriting the 2600MiB MoE one.
+        options.hccl_config = {
+            "hccl_buffer_size": 32,
+            "hccl_op_expansion_mode": 1,
+        }
+        _device_group = dist.new_group(backend="hccl", pg_options=options)
+        _group_world = world
+        logger.info(
+            "[NPU EPLB host group] world=%d buffer=32MiB", dist.get_world_size()
+        )
+    return _device_group

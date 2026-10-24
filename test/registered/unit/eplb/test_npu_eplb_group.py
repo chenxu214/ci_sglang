@@ -1,86 +1,84 @@
-"""Only reuse an initialized NPU group with exactly WORLD rank ordering."""
+"""NPU EPLB uses a cached, independently configured WORLD communicator."""
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sglang.srt.eplb import comm_utils
-from sglang.srt.runtime_context import ParallelContext
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=1, suite="base-a-test-cpu")
 
 
 class TestNpuEplbGroup(unittest.TestCase):
-    def check_group(self, device, ranks, initialized=True):
-        group = object()
-        with (
+    def setUp(self):
+        self.world = object()
+        self.group = object()
+        self.options = SimpleNamespace()
+        self.options_factory = Mock(return_value=self.options)
+        self.new_group = Mock(return_value=self.group)
+        fake_npu = SimpleNamespace(
+            _C=SimpleNamespace(
+                _distributed_c10d=SimpleNamespace(
+                    ProcessGroupHCCL=SimpleNamespace(Options=self.options_factory)
+                )
+            )
+        )
+        for item in (
+            patch.dict("sys.modules", {"torch_npu": fake_npu}),
+            patch.object(comm_utils, "_group_world", None),
+            patch.object(comm_utils, "_device_group", None),
             patch.object(
-                comm_utils, "get_device", return_value=SimpleNamespace(device=device)
+                comm_utils, "get_device", return_value=SimpleNamespace(device="npu")
             ),
-            patch.object(comm_utils.dist, "is_initialized", return_value=initialized),
+            patch.object(comm_utils.dist, "is_initialized", return_value=True),
+            patch.object(comm_utils.dist, "group", SimpleNamespace(WORLD=self.world)),
             patch.object(comm_utils.dist, "get_world_size", return_value=4),
-            patch.object(
-                comm_utils,
-                "get_tp_group",
-                return_value=SimpleNamespace(ranks=ranks, device_group=group),
-            ),
+            patch.object(comm_utils.dist, "new_group", self.new_group),
         ):
-            return comm_utils.get_eplb_device_group(), group
+            item.start()
+            self.addCleanup(item.stop)
 
-    def test_npu_full_world_reuses_group(self):
-        actual, expected = self.check_group("npu", [0, 1, 2, 3])
-        self.assertIs(actual, expected)
+    def test_full_world_membership_and_host_expansion(self):
+        self.assertIs(comm_utils.get_eplb_device_group(), self.group)
+        self.assertEqual(
+            self.options.hccl_config,
+            {"hccl_buffer_size": 32, "hccl_op_expansion_mode": 1},
+        )
+        # No ranks override: new_group uses all WORLD members in WORLD order.
+        self.new_group.assert_called_once_with(backend="hccl", pg_options=self.options)
 
-    def test_subgroups_or_different_rank_order_keep_world(self):
-        for ranks in ([0, 1], [2, 3], [1, 0, 2, 3]):
-            with self.subTest(ranks=ranks):
-                self.assertIsNone(self.check_group("npu", ranks)[0])
+    def test_repeated_collectives_reuse_the_same_group(self):
+        self.assertIs(comm_utils.get_eplb_device_group(), self.group)
+        self.assertIs(comm_utils.get_eplb_device_group(), self.group)
+        self.new_group.assert_called_once()
 
-    def test_other_devices_and_uninitialized_dist_keep_world(self):
+    def test_reinitialized_world_does_not_reuse_stale_group(self):
+        comm_utils.get_eplb_device_group()
+        replacement = object()
+        self.new_group.return_value = replacement
+        with patch.object(comm_utils.dist.group, "WORLD", object()):
+            self.assertIs(comm_utils.get_eplb_device_group(), replacement)
+        self.assertEqual(self.new_group.call_count, 2)
+
+    def test_other_devices_and_uninitialized_dist_do_not_create_group(self):
         for device in ("cpu", "cuda"):
-            self.assertIsNone(self.check_group(device, [0, 1, 2, 3])[0])
-        self.assertIsNone(self.check_group("npu", [0, 1, 2, 3], initialized=False)[0])
-
-    def test_standalone_npu_tool_without_tp_keeps_world(self):
-        with (
-            patch.object(
-                comm_utils, "get_device", return_value=SimpleNamespace(device="npu")
-            ),
-            patch.object(comm_utils.dist, "is_initialized", return_value=True),
-            patch.object(
-                comm_utils, "get_tp_group", side_effect=AssertionError("no TP")
-            ),
-        ):
+            with patch.object(
+                comm_utils, "get_device", return_value=SimpleNamespace(device=device)
+            ):
+                self.assertIsNone(comm_utils.get_eplb_device_group())
+        with patch.object(comm_utils.dist, "is_initialized", return_value=False):
             self.assertIsNone(comm_utils.get_eplb_device_group())
+        self.new_group.assert_not_called()
+        self.options_factory.assert_not_called()
 
-    def test_unwritten_runtime_tp_group_keeps_world(self):
-        with (
-            patch.object(
-                comm_utils, "get_device", return_value=SimpleNamespace(device="npu")
-            ),
-            patch.object(comm_utils.dist, "is_initialized", return_value=True),
-            patch(
-                "sglang.srt.distributed.parallel_state.get_parallel",
-                return_value=ParallelContext(),
-            ),
-        ):
-            self.assertIsNone(comm_utils.get_eplb_device_group())
-
-    def test_other_runtime_errors_are_not_hidden(self):
-        with (
-            patch.object(
-                comm_utils, "get_device", return_value=SimpleNamespace(device="npu")
-            ),
-            patch.object(comm_utils.dist, "is_initialized", return_value=True),
-            patch.object(
-                comm_utils,
-                "get_tp_group",
-                side_effect=RuntimeError("group setup failed"),
-            ),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "group setup failed"):
-                comm_utils.get_eplb_device_group()
+    def test_setup_errors_propagate_without_caching_failed_world(self):
+        self.new_group.side_effect = RuntimeError("group setup failed")
+        with self.assertRaisesRegex(RuntimeError, "group setup failed"):
+            comm_utils.get_eplb_device_group()
+        self.assertIsNone(comm_utils._group_world)
+        self.new_group.side_effect = None
+        self.assertIs(comm_utils.get_eplb_device_group(), self.group)
 
 
 if __name__ == "__main__":

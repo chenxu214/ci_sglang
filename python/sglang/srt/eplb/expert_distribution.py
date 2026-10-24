@@ -40,6 +40,7 @@ import torch.distributed
 
 from sglang.srt.environ import envs
 from sglang.srt.eplb.comm_utils import get_eplb_device_group
+from sglang.srt.eplb.npu_statistics import BatchedTopKStatisticsMixin
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.observability.metrics_collector import (
     STAT_LOGGER_ROLE_EXPERT_DISPATCH,
@@ -158,6 +159,9 @@ class ExpertDistributionRecorder(ABC):
         else:
             return _ExpertDistributionRecorderNoop()
 
+    def on_graph_capture_forward_start(self):
+        pass
+
     @contextmanager
     def with_current_layer(self, layer_idx):
         yield
@@ -247,6 +251,14 @@ class _ExpertDistributionRecorderReal(ExpertDistributionRecorder):
                 f"expert_balancedness_report_mode={get_exec().moe.expert_balancedness_report_mode}"
             )
             self.start_record()
+
+    def on_graph_capture_forward_start(self):
+        if self._disable_all:
+            return
+        for gatherer in self._single_pass_gatherers.values():
+            prepare = getattr(gatherer, "on_graph_capture_forward_start", None)
+            if prepare is not None:
+                prepare()
 
     def with_current_layer(self, layer_idx):
         return self._current_layer_idx.with_value(layer_idx)
@@ -449,7 +461,14 @@ class _SinglePassGatherer(ABC):
             if _use_npu_sender_statistics():
                 # Receiver counts include graph padding on Ascend. Count the
                 # sender's valid TopK routes in every mode, then all-reduce.
-                return _SelectExpertsSinglePassGatherer(expert_location_metadata, rank)
+                gatherer = _NpuBatchedSelectExpertsSinglePassGatherer(
+                    expert_location_metadata, rank
+                )
+                logger.info(
+                    "[NPU EPLB batch statistics] capacity=%d routes/layer",
+                    gatherer._batched_routes.shape[1],
+                )
+                return gatherer
             if get_exec().moe.deepep_mode == "normal":
                 return _SelectExpertsSinglePassGatherer(expert_location_metadata, rank)
             elif get_exec().moe.deepep_mode == "low_latency":
@@ -664,6 +683,12 @@ class _SelectExpertsSinglePassGatherer(_LayerBasedGpuSinglePassGatherer):
         self._data[layer_idx, :].scatter_add_(
             dim=0, index=topk_ids.masked_fill(~mask, 0).long(), src=mask.int()
         )
+
+
+class _NpuBatchedSelectExpertsSinglePassGatherer(
+    BatchedTopKStatisticsMixin, _SelectExpertsSinglePassGatherer
+):
+    pass
 
 
 class _DeepepNormalSinglePassGatherer(_LayerBasedCpuSinglePassGatherer):

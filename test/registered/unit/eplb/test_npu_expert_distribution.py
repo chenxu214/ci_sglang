@@ -53,7 +53,8 @@ class TestNpuExpertDistribution(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.configure(mode)
                 self.assertIs(
-                    type(self.gatherer()), distribution._SelectExpertsSinglePassGatherer
+                    type(self.gatherer()),
+                    distribution._NpuBatchedSelectExpertsSinglePassGatherer,
                 )
 
     def test_padding_and_invalid_routes_are_ignored(self):
