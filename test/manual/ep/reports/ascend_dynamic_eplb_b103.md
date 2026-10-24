@@ -1,3 +1,5 @@
+> 历史版本报告（优化前 PD 对照）。后续单机优化与最终代码验证见[最新自测进度](ascend_dynamic_eplb_delivery_20261024.md)；本页旧结果和负向记录保留。
+
 # Ascend 910C 动态 EPLB：B103 自测验证报告
 
 Ascend 910C · DeepSeek-V4-Flash W8A8 · P/D 每侧 TP/EP/attn-DP=16 · 2026-10-23
