@@ -1,84 +1,84 @@
-> 历史版本报告（优化前 PD 对照）。后续单机优化与最终代码验证见[最新自测报告](ascend_dynamic_eplb_delivery_20261024.md)；本页旧结果和负向记录保留。
+> Historical report: PD comparisons before the later single-node optimization. See the [delivery self-test report](ascend_dynamic_eplb_delivery_20261024.md) for subsequent optimization and final-package verification. Historical results, including regressions, remain below.
 
-# Ascend 910C 动态 EPLB：B103 自测验证报告
+# Ascend 910C dynamic EPLB: B103 self-test report
 
-Ascend 910C · DeepSeek-V4-Flash W8A8 · P/D 每侧 TP/EP/attn-DP=16 · 2026-10-23
+Ascend 910C / DeepSeek-V4-Flash W8A8 / TP/EP/attention-DP=16 on each P/D side / 2026-10-23.
 
-B103 / CANN 9.1.0 / torch_npu 2.10.0.post6；N320 / C128 / 6 req/s；实际输入 16388、输出固定 1024 token、缓存命中率 0%。DSpark、Compact 关闭；无离线优化布局，trivial/static，P16/D0 冗余预算。
+B103 / CANN 9.1.0 / torch_npu 2.10.0.post6; N320/C128/6 req/s; actual input 16388 and fixed output 1024 tokens, cache hit 0%. DSpark and Compact disabled. No offline optimized placement; trivial/static initialization; redundant-expert budgets P16/D0.
 
-## 执行与口径
+## Execution and measurement scope
 
-两种顺序分别为 R1 OFF→ON、R2 ON→OFF。每组全新进程从 trivial 启动，执行相同两轮 PD 准备；ON 预热可能已调整布局，不声称正式起点布局相同。两侧真实 argv 仅差 `--enable-eplb`，环境、7 个功能文件和依赖入口一致。
+The orders were R1 OFF to ON and R2 ON to OFF. Every arm started in a fresh process with trivial placement and ran the same two PD preparations. ON preparation could already change placement; identical placement at the formal start is not claimed. Actual argv differed only by `--enable-eplb`; environment, 7 functional source files and dependency entry matched.
 
-基线无离线优化布局；`static` 为派发方式，动态 EPLB 会更新它使用的映射表。模型普通执行图保持一致，D 使用 1/2/4/6/8/12/16 的图批次，P 关闭图。
+The baseline used no offline optimized placement. `static` describes dispatch; dynamic EPLB updates its mapping table. Regular model graph settings matched: D used graph batch sizes 1/2/4/6/8/12/16; P graphs were disabled.
 
-## 测试场景与结果
+## Scenarios and results
 
-| 场景 | 覆盖范围 | 结果 |
+| Scenario | Coverage | Result |
 |---|---|---|
-| CPU 单元回归 | 31 个独立用例，含修复后的增量复验 | 通过；不初始化 NPU |
-| CPU/Gloo 双 rank | 真实 W8A8 后处理、共享专家、12 次整层更新 | 通过；权重/量化参数与指针检查 |
-| NPU/HCCL 双 rank | NZ/W8A8 无融合共享专家、12 次整层更新 | 修复后通过；首次失败保留 |
-| NPU 在线闭环 | 合成路由；P/D 各 113 步、6 次更新、两次热点切换 | 峰值路由计数 82→43；均匀后跳过 23 次 |
-| 真实 16 rank 通信 | P normal: T4/8192；D low_latency: T1/16 | 派发/回收、形状和零值 oracle 通过 |
-| HcPre / NPU 图 | DeepEP 提前加载；4096 hidden，1/16 token | eager / capture / replay 逐值一致 |
-| PD 两轮短测 | 每组 2×16；已验证 4 组 | 128 条通过；每轮 P 侧新增 IPC 0 |
-| PD 正式负载 | 每组 N320；已验证 4 组 | 1280 成功 / 0 失败；SOURCE 校验全通过 |
+| CPU unit regression | 31 independent cases, including incremental revalidation | PASS; no NPU initialization |
+| Two-rank CPU/Gloo | Actual W8A8 postprocessing, shared experts, 12 whole-layer updates | PASS; weights, quantization parameters and pointers checked |
+| Two-rank NPU/HCCL | NZ/W8A8 without fused shared experts, 12 whole-layer updates | PASS after fix; initial failure retained |
+| NPU online loop | Synthetic routes; 113 steps and 6 updates on each P/D side, two hotspot changes | Peak route count 82 to 43; 23 skips after balancing |
+| Actual 16-rank communication | P normal: T4/8192; D low_latency: T1/16 | Dispatch/combine, shape and zero-value oracle PASS |
+| HcPre / NPU graph | DeepEP loaded first; hidden size 4096, 1/16 tokens | Eager/capture/replay values identical |
+| Two PD preparations | 2x16 per arm; 4 arms validated | 128 requests passed; 0 new P-side IPC entries per round |
+| Formal PD workload | N320 per arm; 4 arms validated | 1280 successful / 0 failed; all SOURCE checks passed |
 
-## 全部请求区间
+## Whole-request interval
 
-| 执行顺序 | EPLB | 成功/失败 | 输出 token/s | TTFT 均值(s) | TPOT 均值(ms) | E2E 均值(s) |
+| Order | EPLB | Success/failed | Output tokens/s | Mean TTFT (s) | Mean TPOT (ms) | Mean E2E (s) |
 |---|---|---|---|---|---|---|
 | R1 | OFF | 320/0 | 1632.85 | 28.91 | 37.3 | 67.08 |
 | R1 | ON | 320/0 | 1753.57 | 20.04 | 38.6 | 59.55 |
 | R2 | ON | 320/0 | 1795.66 | 19.44 | 39.0 | 59.34 |
 | R2 | OFF | 320/0 | 1938.08 | 20.27 | 34.9 | 55.97 |
 
-| 配对 | 执行顺序 | 吞吐变化 | TTFT 变化 | TPOT 变化 | E2E 变化 | 输出文本一致 |
+| Pair | Order | Throughput change | TTFT change | TPOT change | E2E change | Identical outputs |
 |---|---|---|---|---|---|---|
-| R1 | OFF→ON | +7.39% | -30.70% | +3.49% | -11.23% | 320/320 |
-| R2 | ON→OFF | -7.35% | -4.08% | +11.75% | +6.01% | 320/320 |
+| R1 | OFF to ON | +7.39% | -30.70% | +3.49% | -11.23% | 320/320 |
+| R2 | ON to OFF | -7.35% | -4.08% | +11.75% | +6.01% | 320/320 |
 
-只比较同源同配置的 EPLB 开关；whole 含统计、规划、通信、迁移及排空。负号表示延迟减少，TPOT 正号表示退化。尚不泛化为其他数据或最大容量收益。
+The comparison isolates the EPLB switch on matching source/configuration. Whole-request timing includes statistics, planning, communication, migration and draining. Negative latency changes mean improvement; positive TPOT changes mean regression. Results do not establish benefits for other data or maximum capacity.
 
-## 原 AIS 原生稳态
+## Original AIS native steady state
 
-| 组别 | 原生稳态 N | TTFT 均值(s) | TPOT 均值(ms) | E2E 均值(s) |
+| Arm | Native steady-state N | Mean TTFT (s) | Mean TPOT (ms) | Mean E2E (s) |
 |---|---|---|---|---|
 | R1_OFF | 192 | 21.99 | 33.7 | 56.44 |
 | R1_ON | 190 | 16.48 | 38.2 | 55.61 |
 | R2_ON | 192 | 14.01 | 39.0 | 53.91 |
 | R2_OFF | 191 | 15.59 | 35.0 | 51.39 |
 
-各组稳态样本 N 为原 AIS 算法选择，完整区间主结论不以稳态替代；native 复用原产物计算，无新推理。
+Each native steady-state N was selected by the original AIS algorithm. Whole-request conclusions are not replaced by these subsets. Native statistics reused existing artifacts without new inference.
 
-## 截图
+## Screenshots
 
-以下为原始数据生成的报告 PDF 页面渲染图，不是终端原始截图。
+These images are browser-rendered English report pages derived from the archived results. They replace the earlier report-page images without changing measurements; they are not terminal screenshots.
 
-![性能场景和结果](ascend_dynamic_eplb_b103/performance.png)
+![Historical PD performance and regressions](ascend_dynamic_eplb_b103/performance.png)
 
-![功能场景和结果](ascend_dynamic_eplb_b103/scenarios.png)
+![Historical functional scenarios and results](ascend_dynamic_eplb_b103/scenarios.png)
 
-## 环境与失败记录
+## Environment and retained failures
 
-镜像标签 `cann9.1.0-a3-B103`；digest `sha256:45519e8921b54ae6424922d9934b734f9f7d126c1dc19ff0c10951f9c122dbbd`。Python 3.12.13/aarch64、PyTorch 2.10.0+cpu、torch_npu 2.10.0.post6、CANN 9.1.0。实测功能提交 `2949a9e58b31eeed591589ecf609af777552f994`，基于 `feat/dev_ep@d3c76503`。后续只格式化 3 个测试文件，AST 与功能源码字节均不变。
+Image tag `cann9.1.0-a3-B103`; digest `sha256:45519e8921b54ae6424922d9934b734f9f7d126c1dc19ff0c10951f9c122dbbd`. Python 3.12.13/aarch64, PyTorch 2.10.0+cpu, torch_npu 2.10.0.post6, CANN 9.1.0. Measured functional commit `2949a9e58b31eeed591589ecf609af777552f994`, based on `feat/dev_ep@d3c76503`. Subsequent formatting affected only 3 test files; executable ASTs and functional source bytes were unchanged.
 
-曾因 vendor OPP、角色 DeepEP 缓冲参数和加载顺序遗漏导致启动/小探针失败。补齐后，统一在 NPU 初始化前加载镜像自带 DeepEP OPP，先通过真实 HcPre 图与 16 rank 通信探针，再执行本报告的正式四组；失败记录保留。原端口/路由准入与本机 python3 入口问题单列为编排/检查问题，不算模型性能回归。
+Missing vendor OPP setup, role-specific DeepEP buffer settings and import ordering caused initial startup/small-probe failures. After correction, the image's DeepEP OPP was loaded before NPU initialization. Actual HcPre graph and 16-rank communication probes passed before the four formal arms in this report. Failure records are retained. Port/router admission and the local python3 entry problem are classified as orchestration/check failures, rather than model performance regressions.
 
-本机 pre-commit 的格式、isort、ruff、codespell 等检查通过；三个依赖 `python3` 系统入口的 hook 改用实际 Python 解释器执行同一原脚本，均 exit 0。
+Applicable local pre-commit formatting, isort, ruff and codespell checks passed. Three system hooks requiring a python3 executable were run with the actual installed Python interpreter and unchanged scripts; all exited 0.
 
-## 适用范围
+## Interpretation limits
 
-这是固定复制 SOURCE 合成负载的功能与性能测试。AIS 产物沿用 gsm8k 文件名，内容不是 GSM8K 数学准确率；未做完整准确率基准。每组 320 条非空输出均为独立 SOURCE 的精确前缀，固定 1024 token 允许截断。
+This is a functional/performance test on a fixed synthetic SOURCE-copy workload. AIS artifacts retained gsm8k filenames, but this is not GSM8K mathematical accuracy or a full accuracy benchmark. All 320 nonempty outputs per arm were exact prefixes of their independent SOURCE; fixed 1024-token output permits truncation.
 
-DSpark/Compact 关闭，本镜像投机集成和跨主机 EP 迁移未覆盖。AL、严格 draft 接受率、gamma/verify 分母为 NOT_APPLICABLE；硬件利用率和真实 token 均衡度未在主性能测试中采集，记 NOT_OBSERVED。日志能证明布局调整，不能替代设备 profiling；TPOT 的退化如实保留。
+DSpark/Compact were disabled; speculative integration in this image and cross-host EP migration were not covered. AL, measured strict draft acceptance and gamma/verify denominators are NOT_APPLICABLE. Hardware utilization and actual token balancedness were NOT_OBSERVED in the main performance run. Placement logs demonstrate updates but do not replace device profiling. TPOT regressions are retained.
 
-自测原始回包、日志、源码 SHA、whole/native、独立答案 oracle 已归档并逐文件校验。本仓库提交脱敏报告和截图，不提交内部网络地址、账号、权重目录和大体积原数据。
+Raw responses, logs, source hashes, whole/native statistics and independent output oracles are archived with per-file verification. This repository contains redacted reports and screenshots, without internal addresses, accounts, weight paths or large raw artifacts.
 
-## 分位数与结论
+## Percentiles and conclusions
 
-| 组别 | 指标 | 均值 | p50 | p99 | 最大值 |
+| Arm | Metric | Mean | p50 | p99 | Maximum |
 |---|---|---|---|---|---|
 | R1_OFF | TTFT | 28913.0 ms | 26767.7 ms | 50229.8 ms | 50793.7 ms |
 | R1_OFF | TPOT | 37.3 ms | 35.4 ms | 49.3 ms | 49.3 ms |
@@ -97,38 +97,38 @@ DSpark/Compact 关闭，本镜像投机集成和跨主机 EP 迁移未覆盖。A
 | R2_OFF | E2EL | 55974.8 ms | 53768.6 ms | 74246.8 ms | 75039.6 ms |
 | R2_OFF | ITL | 34.8 ms | 37.1 ms | 47.4 ms | 342.7 ms |
 
-原始报表不提供 p95，记 NOT_OBSERVED，不从其他分位数推算。
+The original report does not provide p95; it is NOT_OBSERVED and is not inferred from other percentiles.
 
-R1 吞吐 +7.39%，R2 吞吐 -7.35%，方向相反；当前未验证稳定净收益。ON 两轮 TPOT 均退化，R2 的 E2E 也退化，不能只报告首对正向数字。首个 OFF 比后续 OFF 慢是事实；冷编译、调度和运行状态仍是待核实的解释，不写成已确定根因。
+R1 throughput improved 7.39%, while R2 throughput regressed 7.35%. Stable net benefit was not established for this historical configuration. ON TPOT regressed in both rounds; R2 E2E also regressed. The first positive pair cannot stand alone. The first OFF was slower than the later OFF; cold compilation, scheduling and runtime state remain hypotheses, rather than established causes.
 
-正式控制器窗口中，两个 ON 均为 P 每 rank 1 次、D 每 rank 13 次完成的重平衡，16 rank 完成次数一致；rank0 布局 diff 均非零。精确全 rank map 一致性未采集；日志时间只有秒级精度，不将其当作设备迁移成本。OFF 两侧均无周期重平衡。
+In the formal controller window, both ON arms completed P1/D13 rebalances per rank, consistently across 16 ranks. Rank-0 placement diffs were nonzero. Exact all-rank map equality was not collected. Second-resolution log timestamps are not device migration costs. OFF had no periodic rebalances on either side.
 
-## 手工小测试复现
+## Bounded manual reproduction
 
-在相同 B103 NPU 运行环境、仓库根目录执行；不启动完整模型：
+Run at the repository root in the same B103 NPU environment. These commands do not load the full model:
 
 ```bash
 export PYTHONPATH=python:${PYTHONPATH}
-python -m torch.distributed.run --standalone --nproc-per-node=2  test/manual/ep/test_eplb_weight_migration.py --device npu --weight-format nz  --w8a8-postprocess --no-fused-shared --all-layers-per-update
-python -m torch.distributed.run --standalone --nproc-per-node=2  test/manual/ep/test_eplb_online_loop.py --device npu  --reuse-tp-group --rebalance-threshold 0.9
+python -m torch.distributed.run --standalone --nproc-per-node=2 test/manual/ep/test_eplb_weight_migration.py --device npu --weight-format nz --w8a8-postprocess --no-fused-shared --all-layers-per-update
+python -m torch.distributed.run --standalone --nproc-per-node=2 test/manual/ep/test_eplb_online_loop.py --device npu --reuse-tp-group --rebalance-threshold 0.9
 ```
 
-## 服务关键配置
+## Key service configuration
 
-| 参数 | P | D |
+| Parameter | P | D |
 |---|---|---|
-| TP / EP / attention-DP / 独立 replica | 16 / 16 / 16 / 1 | 16 / 16 / 16 / 1 |
-| DeepEP / 初始布局 / 派发 | normal / trivial / static | low_latency / trivial / static |
-| 冗余专家 / 静态显存比例 | 16 / 0.62 | 0 / 0.71 |
-| EPLB 周期 / 统计窗口 | 48 / 48 | 320 / 320 |
-| 每 chunk 重平衡层数 / 利用率阈值 | 64 / 1.0 | 64 / 1.0 |
-| chunked prefill CLI / 实际每 rank | 131072 / 8192 | 默认 8192 / 512 |
-| prefill max requests / 普通图 | 2 / disabled | 默认 / full，bs=1,2,4,6,8,12,16 |
+| TP / EP / attention-DP / independent replicas | 16 / 16 / 16 / 1 | 16 / 16 / 16 / 1 |
+| DeepEP / initial placement / dispatch | normal / trivial / static | low_latency / trivial / static |
+| Redundant experts / static memory fraction | 16 / 0.62 | 0 / 0.71 |
+| EPLB interval / statistics window | 48 / 48 | 320 / 320 |
+| Layers per rebalance chunk / utilization threshold | 64 / 1.0 | 64 / 1.0 |
+| Chunked-prefill CLI / actual per rank | 131072 / 8192 | default 8192 / 512 |
+| Prefill max requests / regular graphs | 2 / disabled | default / full, bs=1,2,4,6,8,12,16 |
 | HCCL_BUFFSIZE / DEEPEP_HCCL_BUFFSIZE (MB) | 200 / 2600 | 200 / 1200 |
-| DeepEP 每轮 token / long seq rounds | 8192 / 1 | 2048 / 8 |
-| max dispatch tokens per rank | 128 | 128 |
-| expert balancedness report / 布局日志 | off / 开启 | off / 开启 |
-| 量化 / KV dtype / page size | modelslim W8A8 / bfloat16 / 128 | modelslim W8A8 / bfloat16 / 128 |
+| DeepEP tokens per round / long-sequence rounds | 8192 / 1 | 2048 / 8 |
+| Max dispatch tokens per rank | 128 | 128 |
+| Expert-balancedness reporting / placement logs | off / enabled | off / enabled |
+| Quantization / KV dtype / page size | modelslim W8A8 / bfloat16 / 128 | modelslim W8A8 / bfloat16 / 128 |
 | use_index_cache / index_topk_freq | true / 2 | true / 2 |
 
-布局日志为两组共同固定的环境设置，ON 实际产生的日志成本也在完整区间内。CANN customize/custom_transformer vendor 环境及 DeepEP 自带 OPP 均需在对应算子首次初始化前准备好。测试入口只提前导入 DeepEP 后执行原 SGLang 启动模块，不注入旧 WOA/Compact/PD helper。
+Placement logging was fixed in both arms; actual ON logging cost is included in the whole-request interval. CANN customize/custom_transformer vendor setup and the bundled DeepEP OPP must be ready before their first operator initialization. The entry only imports DeepEP early and executes the original SGLang launcher; it does not inject the old WOA/Compact/PD helpers.
