@@ -1,0 +1,34 @@
+{
+  "status": "BROWSER_RENDERED_DOM_QA_PASSED",
+  "language": "en",
+  "images": [
+    {
+      "file": "ascend_dynamic_eplb_b103/performance.png",
+      "width": 1440,
+      "height": 1100,
+      "rows": 6,
+      "language": "en"
+    },
+    {
+      "file": "ascend_dynamic_eplb_b103/scenarios.png",
+      "width": 1440,
+      "height": 1100,
+      "rows": 8,
+      "language": "en"
+    },
+    {
+      "file": "ascend_dynamic_eplb_delivery_20261024/delivery_checks.png",
+      "width": 1440,
+      "height": 1100,
+      "rows": 10,
+      "language": "en"
+    },
+    {
+      "file": "ascend_dynamic_eplb_delivery_20261024/performance.png",
+      "width": 1440,
+      "height": 1257,
+      "rows": 9,
+      "language": "en"
+    }
+  ]
+}

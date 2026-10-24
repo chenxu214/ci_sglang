@@ -314,9 +314,7 @@ def _routing_layer(runner_config: MoeRunnerConfig):
     """
     layer = getattr(runner_config, "layer", None)
     if layer is None:
-        raise RuntimeError(
-            "Ascend MoE routing requires runner_config.layer to be set."
-        )
+        raise RuntimeError("Ascend MoE routing requires runner_config.layer to be set.")
     return layer
 
 

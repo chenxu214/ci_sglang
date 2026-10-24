@@ -303,7 +303,7 @@ class HashTopK(nn.Module):
         if recorder_topk_ids is None:
             recorder_topk_ids = topk_ids
         get_global_expert_distribution_recorder().on_select_experts(
-            topk_ids=recorder_topk_ids
+            topk_ids=recorder_topk_ids, num_token_non_padded=num_token_non_padded
         )
         topk_output = StandardTopKOutput(
             topk_weights=topk_weights, topk_ids=topk_ids, router_logits=router_logits

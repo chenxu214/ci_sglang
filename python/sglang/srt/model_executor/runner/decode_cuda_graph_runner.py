@@ -105,7 +105,13 @@ from sglang.srt.model_executor.runner_utils.pool import (
 )
 from sglang.srt.model_executor.runner_utils.shared_read_event import make_external_event
 from sglang.srt.multiplex.pdmux_context import get_current_stream_idx, get_stream_groups
-from sglang.srt.runtime_context import get_exec, get_flags, get_parallel, get_spec
+from sglang.srt.runtime_context import (
+    get_device,
+    get_exec,
+    get_flags,
+    get_parallel,
+    get_spec,
+)
 from sglang.srt.speculative.ragged_verify import resolve_ragged_verify_layout
 from sglang.srt.utils import (
     empty_context,
@@ -1258,6 +1264,13 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             attn_backend.init_forward_metadata_out_graph(forward_batch, in_capture=True)
 
             def run_once():
+                if get_device().device == "npu":
+                    from sglang.srt.eplb.expert_distribution import (
+                        get_global_expert_distribution_recorder,
+                    )
+
+                    recorder = get_global_expert_distribution_recorder()
+                    recorder.on_graph_capture_forward_start()
                 # Backends may gather live pool mappings into their static
                 # metadata here; these nodes run before any model KV reads.
                 attn_backend.init_forward_metadata_in_graph(forward_batch)

@@ -1,0 +1,41 @@
+{
+  "status": "ENGLISH_REPORT_SCREENSHOTS_VISUALLY_INSPECTED",
+  "language": "en",
+  "table_numeric_values_preserved": true,
+  "table_clipping": false,
+  "scope": "Browser-rendered report screenshots from preserved results; not terminal screenshots",
+  "images": [
+    {
+      "file": "ascend_dynamic_eplb_b103/performance.png",
+      "width": 1440,
+      "height": 1100,
+      "rows": 6,
+      "language": "en",
+      "sha256": "3ea81184241e152ffba354ed5b2697db5ef82d8610c02ad1fe92b95d092bf866"
+    },
+    {
+      "file": "ascend_dynamic_eplb_b103/scenarios.png",
+      "width": 1440,
+      "height": 1100,
+      "rows": 8,
+      "language": "en",
+      "sha256": "8c229f79b14303ee6c356a7cad04b036b69a04fb10bb1b435d579c9334e9eeb7"
+    },
+    {
+      "file": "ascend_dynamic_eplb_delivery_20261024/delivery_checks.png",
+      "width": 1440,
+      "height": 1100,
+      "rows": 10,
+      "language": "en",
+      "sha256": "2608ac568b1730cc63246b7128820e6103faddb043afbf1722d23d41df3bf725"
+    },
+    {
+      "file": "ascend_dynamic_eplb_delivery_20261024/performance.png",
+      "width": 1440,
+      "height": 1257,
+      "rows": 9,
+      "language": "en",
+      "sha256": "363417125fb5bea4562739a17927784e478726b0246a016604548f744027c144"
+    }
+  ]
+}

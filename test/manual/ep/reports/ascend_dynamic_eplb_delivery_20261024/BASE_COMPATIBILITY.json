@@ -1,0 +1,12 @@
+{
+  "status": "MERGE_PREVIEW_CPU_PASSED",
+  "target_base": "8e69805c56faafadbab0207ac1125c55358d5d4d",
+  "feature_commit": "b41d2188fddf674d51bca2cd5be2ae0292e85a1e",
+  "merge_tree": "46bbdb8621ee018f4d47647e06acedcf491a2b28",
+  "CPU_tests_passed": 39,
+  "NPU_initialized": false,
+  "model_requests_sent": 0,
+  "live_model_changed": false,
+  "merged_tree_hardware_validation": "NOT_RUN",
+  "hardware_results_scope": "Original tested feature commit and fixed source binding; not inherited as hardware verification of later target changes"
+}

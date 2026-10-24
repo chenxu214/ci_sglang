@@ -25,15 +25,15 @@ import torch
 import torch.distributed as dist
 
 from sglang.srt.environ import envs
-from sglang.srt.layers.dp_attention import (
-    get_dp_global_num_tokens,
-    get_is_extend_in_batch,
-)
 from sglang.srt.hardware_backend.npu.moe.finalize_routing import NPUFinalizeRouting
 from sglang.srt.hardware_backend.npu.moe.init_routing import (
     MXFP8_QUANT_MODE,
     NPUMoEInitRouting_v2,
     _normalize_mxfp_scale,
+)
+from sglang.srt.layers.dp_attention import (
+    get_dp_global_num_tokens,
+    get_is_extend_in_batch,
 )
 from sglang.srt.layers.moe.moe_runner.base import MoeRunnerConfig
 from sglang.srt.layers.moe.token_dispatcher.base import (
@@ -489,9 +489,7 @@ class AscendOpsDispatcher(BaseDispatcher):
         row_sizes = []
         for rows in sizes:
             base, extra = divmod(rows, self.attn_tp_size)
-            row_sizes.extend(
-                base + (rank < extra) for rank in range(self.attn_tp_size)
-            )
+            row_sizes.extend(base + (rank < extra) for rank in range(self.attn_tp_size))
         if (
             len(row_sizes) != world_size
             or row_sizes[dist.get_rank(group)] != hidden_states.shape[0]
@@ -610,9 +608,10 @@ class AscendOpsDispatcher(BaseDispatcher):
         expert_output[: hidden_states.shape[0]].copy_(hidden_states)
         # Keep the valid count on device. Zero unused capacity before finalize:
         # dropped routes must not read NaN even when their weight is zero.
-        unused_rows = torch.arange(
-            expert_output.shape[0], device=expert_output.device
-        ) >= dispatched.expert_tokens.sum()
+        unused_rows = (
+            torch.arange(expert_output.shape[0], device=expert_output.device)
+            >= dispatched.expert_tokens.sum()
+        )
         expert_output.masked_fill_(unused_rows[:, None], 0)
         # Keep weighted expert sums in FP32 across ranks. Rounding each
         # rank's partial output to BF16 before ReduceScatter loses precision.

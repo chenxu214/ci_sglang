@@ -1,0 +1,70 @@
+{
+  "community_baseline": "611a70306197239593959cb47a9fa92a9913dd18",
+  "image_digest": "sha256:45519e8921b54ae6424922d9934b734f9f7d126c1dc19ff0c10951f9c122dbbd",
+  "production_files": [
+    {
+      "path": "python/sglang/srt/eplb/comm_utils.py",
+      "runtime_sha256": "9973d3a94a6a7ae25b19f321340e8233f573543184e53f6ee8021c1b71b0f910",
+      "branch_sha256": "9973d3a94a6a7ae25b19f321340e8233f573543184e53f6ee8021c1b71b0f910",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "runtime_sha256": "1d5bfb2126dd3a90d50f028c8831205f837f644b257097810db9c90362c73c4d",
+      "branch_sha256": "1d5bfb2126dd3a90d50f028c8831205f837f644b257097810db9c90362c73c4d",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_location_updater.py",
+      "runtime_sha256": "e751a58061ccf9d1eabf98575cc47c653691ca3d623ad4d5b1d192920faf422e",
+      "branch_sha256": "e751a58061ccf9d1eabf98575cc47c653691ca3d623ad4d5b1d192920faf422e",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/hardware_backend/npu/moe/topk.py",
+      "runtime_sha256": "5a15b519b793f875a25d251591d60e3dab2604f1a561f0f2dcceca43fd8fbd7b",
+      "branch_sha256": "5a15b519b793f875a25d251591d60e3dab2604f1a561f0f2dcceca43fd8fbd7b",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/layers/moe/hash_topk.py",
+      "runtime_sha256": "474e8aeddff8fc262c720b6219bb64d38bfff013d0d5041e053ce8af597e5c27",
+      "branch_sha256": "474e8aeddff8fc262c720b6219bb64d38bfff013d0d5041e053ce8af597e5c27",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/layers/moe/topk.py",
+      "runtime_sha256": "887ec01bc3693d3b765d4ee1e4bc3e276b79160087c1332ad1c5b5a26b3085ab",
+      "branch_sha256": "887ec01bc3693d3b765d4ee1e4bc3e276b79160087c1332ad1c5b5a26b3085ab",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/model_executor/model_runner.py",
+      "runtime_sha256": "0f9106eef770b99436e9e9056343e474d45849f2d1c76927556443de893c69c4",
+      "branch_sha256": "0f9106eef770b99436e9e9056343e474d45849f2d1c76927556443de893c69c4",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/eplb/eplb_manager.py",
+      "runtime_sha256": "cbae4546be1ec78b6fb2f3ff5f966f916d79fb8ab1898cebf5e9c5601e21ef63",
+      "branch_sha256": "32a9d818efff09fab5885260750fc60871e5749309f2c8ccf70fb732e8e35720",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py",
+      "runtime_sha256": "10dec81b92298d8d3fc0094a6b801a8796c74acc4e91a4d8aa6dd3b06404cc70",
+      "branch_sha256": "10dec81b92298d8d3fc0094a6b801a8796c74acc4e91a4d8aa6dd3b06404cc70",
+      "executable_AST_equal": true
+    },
+    {
+      "path": "python/sglang/srt/eplb/npu_statistics.py",
+      "runtime_sha256": "cf5a36408cea45f0e39d2ec04bd0d961e420b327e8155e01dba44d06e76fd609",
+      "branch_sha256": "9ba2bae75f9b5307822cac1da8ac73a6e0e985cd37c2392a1d8ba1caecd6b712",
+      "executable_AST_equal": true
+    }
+  ],
+  "single_functional_archive_sha256": "b60e3f30693f2b66e0f308c7d5668954afadbe030f1803022df1e2527e05f051",
+  "scope": "Production executable AST equivalence to sealed final-package single-node validation; not a new performance measurement",
+  "final_production_commit": "3683421a24e3917332923ddbab37490f849e7f49",
+  "branch_base": "feat/dev_ep@d3c76503bac83bc60ab4d2271f8de698ae322019"
+}

@@ -1,0 +1,138 @@
+{
+  "status": "FINAL_PD_ACCEPTANCE_PASSED",
+  "cases": [
+    {
+      "arm": "OFF",
+      "input_tokens_range": [
+        689,
+        708
+      ],
+      "output_tokens": [
+        128
+      ],
+      "duration_preparation_plus_functional_s": 31.867228031158447,
+      "success": 64,
+      "failed": 0,
+      "SOURCE": 64,
+      "roles": {
+        "P": {
+          "rebalances_per_rank": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0,
+            "8": 0,
+            "9": 0,
+            "10": 0,
+            "11": 0,
+            "12": 0,
+            "13": 0,
+            "14": 0,
+            "15": 0
+          },
+          "positive_layout_change_records": 0,
+          "request_window_errors": [],
+          "all_log_error_lines": [],
+          "archive_sha256": "2f6cef263a90ce30b272b373abde8d98575a1854200df408e6d2bcdb1045498a"
+        },
+        "D": {
+          "rebalances_per_rank": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0,
+            "8": 0,
+            "9": 0,
+            "10": 0,
+            "11": 0,
+            "12": 0,
+            "13": 0,
+            "14": 0,
+            "15": 0
+          },
+          "positive_layout_change_records": 0,
+          "request_window_errors": [],
+          "all_log_error_lines": [],
+          "archive_sha256": "495f00ac130a6d01207587967f2788ee2f51ee60d827fc2d8d68f9d6f2a00df8"
+        }
+      }
+    },
+    {
+      "arm": "ON",
+      "input_tokens_range": [
+        689,
+        708
+      ],
+      "output_tokens": [
+        128
+      ],
+      "duration_preparation_plus_functional_s": 36.62301731109619,
+      "success": 64,
+      "failed": 0,
+      "SOURCE": 64,
+      "roles": {
+        "P": {
+          "rebalances_per_rank": {
+            "0": 4,
+            "1": 4,
+            "2": 4,
+            "3": 4,
+            "4": 4,
+            "5": 4,
+            "6": 4,
+            "7": 4,
+            "8": 4,
+            "9": 4,
+            "10": 4,
+            "11": 4,
+            "12": 4,
+            "13": 4,
+            "14": 4,
+            "15": 4
+          },
+          "positive_layout_change_records": 4,
+          "request_window_errors": [],
+          "all_log_error_lines": [],
+          "archive_sha256": "cc6a55550d57eabba930f782152ab9317f5434e34e95b196ee3806ae04370ad2"
+        },
+        "D": {
+          "rebalances_per_rank": {
+            "0": 10,
+            "1": 10,
+            "2": 10,
+            "3": 10,
+            "4": 10,
+            "5": 10,
+            "6": 10,
+            "7": 10,
+            "8": 10,
+            "9": 10,
+            "10": 10,
+            "11": 10,
+            "12": 10,
+            "13": 10,
+            "14": 10,
+            "15": 10
+          },
+          "positive_layout_change_records": 10,
+          "request_window_errors": [],
+          "all_log_error_lines": [],
+          "archive_sha256": "1e89a3cc3266818fd11a9749d3e9dee36273085ac28e4ece8ac3122014b190ae"
+        }
+      }
+    }
+  ],
+  "formal_request_and_output_pairs_equal": 64,
+  "CPU_tests_passed": 39,
+  "final_single_success": 16,
+  "performance_measurement": false,
+  "log_parser_correction": "One progress-dot-prefixed rank line per ON log missed by initial anchored parser; direct timestamp/rank extraction from the same sealed raw logs gives exact P4 and D10 per rank. No new requests or archive replacement."
+}
