@@ -1,11 +1,11 @@
 {
-  "status": "VISUALLY_INSPECTED",
+  "status": "FINAL_SCREENSHOT_VISUALLY_INSPECTED",
   "file": "delivery_checks.png",
   "width": 1440,
   "height": 1080,
-  "all_8_scenarios_visible": true,
+  "all_10_scenarios_visible": true,
   "table_clipping": false,
-  "PD_PENDING_visible": true,
+  "PD_PASS_visible": true,
   "scope": "Local browser-rendered report screenshot; not terminal screenshot",
   "reused_performance_screenshot": "Original20261023 screenshot preserved and previously visually verified"
 }
