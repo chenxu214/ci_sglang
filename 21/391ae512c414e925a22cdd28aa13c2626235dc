@@ -1,0 +1,80 @@
+python/sglang/srt/hardware_backend/npu/moe/routing.py
+  s_871888365ea6da::t_6a8af46ff0d0a0 1-10,18,20-21,27-31,33,47-48,50-69,76-77,80-82,85-90,92-107,111-116,118-128,130-131,133-138,141-162,164-169,171-174,176-183,185-194
+  s_871888365ea6da::t_545a133f46eec0 78,91,170
+  s_871888365ea6da::t_da24b9ca7344cd 25-26,35-44
+  s_871888365ea6da::t_c55dcb63b9a3e1 163
+  s_871888365ea6da::t_d81cb9c3aeb713 11-13
+  s_871888365ea6da::t_feaf1b5648450d 14-15
+  s_871888365ea6da::t_f099ecdd07e01a 108-109
+  s_871888365ea6da::t_abad98e25bd78f 45
+python/sglang/srt/layers/moe/moe_runner/ascend.py
+  s_871888365ea6da::t_7dd9509f177f26 10
+  s_871888365ea6da::t_3fc91a2dd93143 25-26,29-30,37
+  s_871888365ea6da::t_e681ab4deab5b7 394-416,419-441,443-477,479-480,483-490,492-511,513-515
+  s_871888365ea6da::t_ad696ce694a5fc 591,595-600,617-620,622-632,636-642,645-659,661-665
+  s_871888365ea6da::t_22498a5d8fbb83 361,367-368,372,375,379-381
+  s_871888365ea6da::t_84fe83aebcad56 666-667
+  s_871888365ea6da::t_9edd19628245b8 393
+  s_871888365ea6da::t_d5fa61024c9816 338
+  s_871888365ea6da::t_ef4467346a7134 417-418
+  s_871888365ea6da::t_d255cfaf358f43 27,363,442,491
+  s_871888365ea6da::t_9269eeb230fdd2 643-644
+  s_871888365ea6da::t_974405acaef2a6 28,589,621,660
+  s_871888365ea6da::t_7a9e9a2ac0c8f1 612
+  s_871888365ea6da::t_293f5abf3583af 478,481-482
+  s_871888365ea6da::t_dcbff64d7b2b0a 583
+python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
+  s_871888365ea6da::t_aa52d054b7fe99 33-34,39,52-54,55,86-104,108-110,112-114,203,205-206,208,221-222,225-234,347,441-450,452-454,480,532,547-551,553-554,558-559,658,661-662,669-670,672,679,683-687,689-691,695-696,698-701,715
+  s_871888365ea6da::t_0bf4957ddd444f 82
+  s_871888365ea6da::t_cd59cee5c743ee 83
+  s_871888365ea6da::t_12c096fe052897 637
+  s_871888365ea6da::t_593c474fc9e612 61,63-67
+  s_871888365ea6da::t_b61d079f1aeb70 649
+  s_871888365ea6da::t_3bb2a6d0e0f5be 57-60,62
+  s_871888365ea6da::t_2cca8fd7e3ab19 38,712
+  s_871888365ea6da::t_8246aeac127110 36
+  s_871888365ea6da::t_cc23fdf4888770 276
+  s_871888365ea6da::t_9a4dc04cd095c0 479,656
+  s_871888365ea6da::t_3076fcf4a2b629 429-430,433,436-438
+  s_871888365ea6da::t_e6f3d711c4de8a 37,657
+  s_871888365ea6da::t_912a17962dadc8 474
+python/sglang/srt/hardware_backend/npu/moe/dispatch.py
+  s_871888365ea6da::t_bd82e9e95e1ff3 1,7-8,10,19-20,27-28,37-39,42,79,89-90,101-103
+  s_871888365ea6da::t_edb62415c50bd2 92-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "21391ae512c414e925a22cdd28aa13c2626235dc",
+  "prompts": {},
+  "humans": {
+    "h_3ab581817c9a6f": {
+      "author": "chenxu214 <justin_cc2025@16.com>"
+    }
+  },
+  "sessions": {
+    "s_871888365ea6da": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6ad72cfb0dc83bdafbf5f8ac",
+        "model": "glm-5.3"
+      },
+      "human_author": "chenxu214 <justin_cc2025@16.com>",
+      "custom_attributes": {
+        "source_scene": "agent",
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adb1bf10dc83bdafbf60eb9:afterEdit:8f314e34",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_use_id": "6adb1bf10dc83bdafbf60eb9",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
+        "client_type": "ide",
+        "edit_kind": "file_edit",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "operation_id": "6adb1bf10dc83bdafbf60eb9",
+        "tool_type": "builtin",
+        "__trae_file_phase": "post",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac"
+      }
+    }
+  }
+}
