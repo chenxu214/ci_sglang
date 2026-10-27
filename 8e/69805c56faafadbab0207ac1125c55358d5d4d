@@ -3,30 +3,5 @@
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "8e69805c56faafadbab0207ac1125c55358d5d4d",
-  "prompts": {},
-  "sessions": {
-    "s_871888365ea6da": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6ad72cfb0dc83bdafbf5f8ac",
-        "model": "glm-5.3"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
-        "runtime_client": "trae-tob-git-ai",
-        "tool_use_id": "6adc20890dc83bdafbf6109e",
-        "__trae_file_phase": "post",
-        "edit_kind": "file_edit",
-        "tool_id": "icube:applyChatSnapshotPatch",
-        "tool_type": "builtin",
-        "client_type": "ide",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adc20890dc83bdafbf6109e:afterEdit:8f314e34",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "source_scene": "agent",
-        "operation_id": "6adc20890dc83bdafbf6109e"
-      }
-    }
-  }
+  "prompts": {}
 }

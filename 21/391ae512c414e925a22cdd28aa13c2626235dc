@@ -61,19 +61,19 @@ python/sglang/srt/hardware_backend/npu/moe/dispatch.py
       },
       "human_author": "chenxu214 <justin_cc2025@16.com>",
       "custom_attributes": {
-        "source_scene": "agent",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adb1bf10dc83bdafbf60eb9:afterEdit:8f314e34",
         "runtime_client": "trae-tob-git-ai",
-        "tool_use_id": "6adb1bf10dc83bdafbf60eb9",
-        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
-        "client_type": "ide",
         "edit_kind": "file_edit",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adb1bf10dc83bdafbf60eb9:afterEdit:8f314e34",
         "operation_id": "6adb1bf10dc83bdafbf60eb9",
-        "tool_type": "builtin",
+        "source_scene": "agent",
         "__trae_file_phase": "post",
         "tool_id": "icube:applyChatSnapshotPatch",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac"
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "tool_type": "builtin",
+        "client_type": "ide",
+        "tool_use_id": "6adb1bf10dc83bdafbf60eb9"
       }
     }
   }
