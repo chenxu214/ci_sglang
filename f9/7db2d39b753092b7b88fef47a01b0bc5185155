@@ -1,37 +1,7 @@
-python/sglang/srt/layers/moe/moe_runner/ascend.py
-  s_871888365ea6da::t_d1c2213b14e91e 223,230-242,246,258-259
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "f97db2d39b753092b7b88fef47a01b0bc5185155",
-  "prompts": {},
-  "humans": {
-    "h_3ab581817c9a6f": {
-      "author": "chenxu214 <justin_cc2025@16.com>"
-    }
-  },
-  "sessions": {
-    "s_871888365ea6da": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6ad72cfb0dc83bdafbf5f8ac",
-        "model": "DeepSeek-V4-Pro-Official"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "tool_id": "icube:applyChatSnapshotPatch",
-        "edit_kind": "file_edit",
-        "operation_id": "6ad819270dc83bdafbf5fb7d",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "runtime_client": "trae-tob-git-ai",
-        "tool_use_id": "6ad819270dc83bdafbf5fb7d",
-        "source_scene": "agent",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "client_type": "ide",
-        "tool_type": "builtin",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ad819270dc83bdafbf5fb7d:afterEdit:8927e2b4"
-      }
-    }
-  }
+  "prompts": {}
 }
