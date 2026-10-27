@@ -1,37 +1,7 @@
-python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
-  s_871888365ea6da::t_ff82da634cd395 386-390
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "2e85a4c6d0a913854fb447d5e2588ef0cbffbf71",
-  "prompts": {},
-  "humans": {
-    "h_3ab581817c9a6f": {
-      "author": "chenxu214 <justin_cc2025@16.com>"
-    }
-  },
-  "sessions": {
-    "s_871888365ea6da": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6ad72cfb0dc83bdafbf5f8ac",
-        "model": "DeepSeek-V4-Pro-Official"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "operation_id": "6ad812020dc83bdafbf5fb53",
-        "runtime_client": "trae-tob-git-ai",
-        "tool_type": "builtin",
-        "tool_id": "icube:applyChatSnapshotPatch",
-        "source_scene": "agent",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "edit_kind": "file_edit",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "client_type": "ide",
-        "tool_use_id": "6ad812020dc83bdafbf5fb53",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ad812020dc83bdafbf5fb53:afterEdit:8f314e34"
-      }
-    }
-  }
+  "prompts": {}
 }
