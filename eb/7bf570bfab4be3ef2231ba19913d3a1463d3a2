@@ -1,51 +1,7 @@
-python/sglang/srt/hardware_backend/npu/moe/init_routing.py
-  s_871888365ea6da::t_431fe9d7595ee8 109-116
-python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
-  s_871888365ea6da::t_10ca50ba92bcdc 336-341
-  s_871888365ea6da::t_ff82da634cd395 390-394
-  s_871888365ea6da::t_6c23df897a1da1 258-262
-  s_871888365ea6da::t_5699976574d5de 447
-  s_871888365ea6da::t_8a63903121ee90 294,312-317
-  s_871888365ea6da::t_c0aed8a7384cf5 293
-  s_871888365ea6da::t_86c9b8cf040f69 318-319
-python/sglang/srt/models/deepseek_v2.py
-  s_871888365ea6da::t_933bd16304295d 923
-  s_871888365ea6da::t_662c5378847ea3 825
-  s_871888365ea6da::t_12e0237749c0f0 947
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "eb7bf570bfab4be3ef2231ba19913d3a1463d3a2",
-  "prompts": {},
-  "humans": {
-    "h_3ab581817c9a6f": {
-      "author": "chenxu214 <justin_cc2025@16.com>"
-    }
-  },
-  "sessions": {
-    "s_871888365ea6da": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6ad72cfb0dc83bdafbf5f8ac",
-        "model": "kimi-k3"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
-        "runtime_client": "trae-tob-git-ai",
-        "tool_use_id": "6ad883670dc83bdafbf5fea4",
-        "tool_id": "icube:applyChatSnapshotPatch",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "source_scene": "agent",
-        "__trae_file_phase": "post",
-        "edit_kind": "file_edit",
-        "client_type": "ide",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ad883670dc83bdafbf5fea4:afterEdit:8f314e34",
-        "operation_id": "6ad883670dc83bdafbf5fea4",
-        "tool_type": "builtin",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac"
-      }
-    }
-  }
+  "prompts": {}
 }
