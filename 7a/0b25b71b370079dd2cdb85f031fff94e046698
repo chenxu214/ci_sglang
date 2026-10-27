@@ -1,52 +1,7 @@
-python/sglang/srt/hardware_backend/npu/moe/routing.py
-  s_871888365ea6da::t_6a8af46ff0d0a0 1-15,18,20-21,25-29,31,34-35,37-56,63-65,67-69,72-99,101-106,108-118,120-121,123-128,131-164,166-173,175-184
-python/sglang/srt/layers/moe/moe_runner/ascend.py
-  s_871888365ea6da::t_7dd9509f177f26 10
-  s_871888365ea6da::t_3fc91a2dd93143 25-30,37
-  s_871888365ea6da::t_e681ab4deab5b7 404-533,535-537
-  s_871888365ea6da::t_ad696ce694a5fc 617,619,623-628,640-647,652-667,671-702
-  s_871888365ea6da::t_22498a5d8fbb83 372,374,378-379,383,386,390-392
-  s_871888365ea6da::t_84fe83aebcad56 703-704
-python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
-  s_871888365ea6da::t_aa52d054b7fe99 3-7,10-14,22,40-41,43-46,59-64,75-81,86-104,108-110,112-114,203-204,206-207,209-210,223-224,227-236,337,429-438,440-442,462-466,472,524,539-543,545-546,550-551,579-583,585-587,640-642,654-660,668-669,672-673,680-681,683,690,694-698,700-702,706-707,709-712,723,726
-  s_871888365ea6da::t_0bf4957ddd444f 82
-  s_871888365ea6da::t_cd59cee5c743ee 83
-python/sglang/srt/hardware_backend/npu/moe/dispatch.py
-  s_871888365ea6da::t_bd82e9e95e1ff3 1,7-8,10,19-20,27-28,37-39,42,51,80,90-91,93-96,104-106
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "7a0b25b71b370079dd2cdb85f031fff94e046698",
-  "prompts": {},
-  "humans": {
-    "h_3ab581817c9a6f": {
-      "author": "chenxu214 <justin_cc2025@16.com>"
-    }
-  },
-  "sessions": {
-    "s_871888365ea6da": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6ad72cfb0dc83bdafbf5f8ac",
-        "model": "glm-5.3"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "runtime_client": "trae-tob-git-ai",
-        "edit_kind": "file_edit",
-        "operation_id": "6adb1bf10dc83bdafbf60eb9",
-        "source_scene": "agent",
-        "tool_type": "builtin",
-        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adb1bf10dc83bdafbf60eb9:afterEdit:8f314e34",
-        "client_type": "ide",
-        "__trae_file_phase": "post",
-        "tool_id": "icube:applyChatSnapshotPatch",
-        "tool_use_id": "6adb1bf10dc83bdafbf60eb9",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac"
-      }
-    }
-  }
+  "prompts": {}
 }
