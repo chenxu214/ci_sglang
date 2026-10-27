@@ -1,120 +1,89 @@
-python/sglang/srt/hardware_backend/npu/moe/routing.py
-  s_871888365ea6da::t_d81cb9c3aeb713 11-13
-  s_871888365ea6da::t_f099ecdd07e01a 111-112
-  s_871888365ea6da::t_abad98e25bd78f 48
-  s_871888365ea6da::t_da24b9ca7344cd 25-26,42-47
-  s_871888365ea6da::t_545a133f46eec0 81,94,176
-  s_871888365ea6da::t_6a8af46ff0d0a0 1-10,18-21,27-29,50-80,83-93,95-110,113-168,170-175,177-200
-  s_871888365ea6da::t_feaf1b5648450d 14-15
-  s_871888365ea6da::t_c55dcb63b9a3e1 169
-  s_871888365ea6da::t_01bb65927d61e4 30-32,39-41
-  s_871888365ea6da::t_49df07eba56c0e 49
 python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
-  s_871888365ea6da::t_71d6a111ae5cbd 165,168,183,274-279,517
-  s_871888365ea6da::t_593c474fc9e612 48
-  s_871888365ea6da::t_0bf4957ddd444f 51,63
   s_871888365ea6da::t_12c096fe052897 577
   s_871888365ea6da::t_2cca8fd7e3ab19 644
-  s_871888365ea6da::t_cc23fdf4888770 237
-  s_871888365ea6da::t_3076fcf4a2b629 375-376,388-389
-  s_871888365ea6da::t_032617db2575a9 218,260,357
-  s_871888365ea6da::t_83f8a059b247b5 358
+  s_871888365ea6da::t_593c474fc9e612 48
   s_871888365ea6da::t_cd59cee5c743ee 64
-  s_871888365ea6da::t_8246aeac127110 19
-  s_871888365ea6da::t_7d614911a21b73 42-47,50
-  s_871888365ea6da::t_afc32fe719a8d2 187
   s_871888365ea6da::t_e6f3d711c4de8a 596
-  s_c2910d9abe43f2::t_44274172b554dd 119
-  s_c2910d9abe43f2::t_71f6f7fcc1c131 2-12,23-35,65-70,74,79-95
-  s_871888365ea6da::t_912a17962dadc8 430
-  s_871888365ea6da::t_aa52d054b7fe99 16-17,20,36-39,71-73,75-78,267,307,393-400,433-498,597-630
-  s_871888365ea6da::t_3dee01817cb0b7 298-302
   s_871888365ea6da::t_9a4dc04cd095c0 432,595
-  s_871888365ea6da::t_a657b96dbe0b29 186,195,211,216,243,283,329,377-385,390,533,535,538,541
+  s_871888365ea6da::t_3076fcf4a2b629 375-389
+  s_871888365ea6da::t_912a17962dadc8 430
+  s_871888365ea6da::t_0bf4957ddd444f 46,51,63
   s_871888365ea6da::t_3bb2a6d0e0f5be 49
-  s_c2910d9abe43f2::t_1fcacac95fd389 1
-  s_c2910d9abe43f2::t_418c7da7e0896f 13
-  s_871888365ea6da::t_a6854811738732 15
-  s_871888365ea6da::t_639e99b10b1c79 40-41
-  s_871888365ea6da::t_838017babd3c0a 60-62
-  s_c2910d9abe43f2::t_3e8be80125fa8e 96-98,116-118
-  s_c2910d9abe43f2::t_3084852123e59d 120-122
-  s_871888365ea6da::t_beee4c50072a49 162-164
-  s_871888365ea6da::t_152931f2ab0dd7 166-167
-  s_871888365ea6da::t_b44c0eddb976e0 180-182
-  s_871888365ea6da::t_0254cf7b2cb3b7 184-185
-  s_871888365ea6da::t_c2c2a109f64f93 188-190,192-194
-  s_871888365ea6da::t_1356e966d3a0db 196-198,208-210
-  s_871888365ea6da::t_1771facfbebe16 212-215
-  s_871888365ea6da::t_cace6165dcc5ba 217
-  s_871888365ea6da::t_4ab1eb92f91bba 219-221
-  s_871888365ea6da::t_d9abcec7246fae 236
-  s_871888365ea6da::t_7e6c3cd5296930 238-242
-  s_871888365ea6da::t_8694d099c96d8c 244-246
-  s_871888365ea6da::t_8efb084890cfc1 257-259
-  s_871888365ea6da::t_9bc9fd66d92d57 266
-  s_871888365ea6da::t_91e1ba214e8df1 268-270
-  s_871888365ea6da::t_7fa5d9bc475a0a 280-282
-  s_871888365ea6da::t_8562664e7f529d 284-286,295-297
-  s_871888365ea6da::t_1ed330a15303ea 305-306
-  s_871888365ea6da::t_cecc2f921f30f7 308-310,326-328
-  s_871888365ea6da::t_86bc686ed053bc 330-332,354-356
-  s_871888365ea6da::t_6dd5eb330fabc3 359-361,372-374
-  s_871888365ea6da::t_4abe082fef60fb 386-387
-  s_871888365ea6da::t_f17e6943bfc16c 391-392
-  s_871888365ea6da::t_0dc720550fc240 401-403,427-429
-  s_871888365ea6da::t_37b9a417889c00 431
-  s_871888365ea6da::t_ccb7109108c486 499-501,514-516
-  s_871888365ea6da::t_2397738bbe86d5 518-520
-  s_871888365ea6da::t_e798627feb3bde 530-532
-  s_871888365ea6da::t_c0c3334b7503df 534
-  s_871888365ea6da::t_41a6817c18d92d 536-537
-  s_871888365ea6da::t_ff9f555addf637 539-540
-  s_871888365ea6da::t_9b72f7fc3a8093 542-544,574-576
-  s_871888365ea6da::t_2c258b10a2aa89 578-580,592-594
-  s_871888365ea6da::t_6dbf792fe1d683 631-633,641-643
-  s_871888365ea6da::t_3ec18254b66a11 645-647
+  s_871888365ea6da::t_8246aeac127110 19
+  s_871888365ea6da::t_cc23fdf4888770 237
+  s_871888365ea6da::t_aa52d054b7fe99 16-17,20-39,71-78,267,307,393-400,433-498,597-630
+  s_871888365ea6da::t_8237b7a5291c9f 15
+  s_871888365ea6da::t_e8a4cf257fd0fe 40-45
+  s_871888365ea6da::t_586eeaecb4fa29 47
+  s_871888365ea6da::t_8b5ac51eb64185 50
+  s_871888365ea6da::t_830a1c2ae89d27 60-62
+  s_871888365ea6da::t_b805b6b6d16f56 65-67
+  s_871888365ea6da::t_709e1df17189da 236
+  s_871888365ea6da::t_fb43050720ed57 238-240
+  s_871888365ea6da::t_be35bb1755f809 266
+  s_871888365ea6da::t_6758c8acd7ef51 268-270
+  s_871888365ea6da::t_e5f0ad2457f859 305-306
+  s_871888365ea6da::t_df19f6973edb4c 308-310,372-374
+  s_871888365ea6da::t_00da34e9f66fe7 390-392
+  s_871888365ea6da::t_09fe72d786dd39 401-403,427-429
+  s_871888365ea6da::t_12bbff3ec04137 431
+  s_871888365ea6da::t_436be1b4c4af81 499-501
+  s_871888365ea6da::t_3c1476457a9c34 574-576
+  s_871888365ea6da::t_e02376a873ff2a 578-580,592-594
+  s_871888365ea6da::t_ec80922d694bcf 631-633,641-643
+  s_871888365ea6da::t_a4d0afe53fb719 645-647
 python/sglang/srt/layers/moe/moe_runner/ascend.py
-  s_871888365ea6da::t_d255cfaf358f43 374,454,505
   s_871888365ea6da::t_7a9e9a2ac0c8f1 628
-  s_871888365ea6da::t_ef4467346a7134 431-432
-  s_871888365ea6da::t_974405acaef2a6 27,605,644,690
-  s_871888365ea6da::t_3fc91a2dd93143 25-26,29-30,37
-  s_871888365ea6da::t_ad696ce694a5fc 72,75,92,335,346,360,365,394,594,596,602,607-616,633,642-643,646-656,658-664,667-689,691-695
-  s_871888365ea6da::t_22498a5d8fbb83 372,378-392
-  s_871888365ea6da::t_e681ab4deab5b7 347-348,399,405-430,433-453,455-491,493-494,497-504,506-527,529-531,597
   s_871888365ea6da::t_7dd9509f177f26 10
-  s_871888365ea6da::t_9edd19628245b8 404
-  s_871888365ea6da::t_d5fa61024c9816 349
-  s_871888365ea6da::t_9269eeb230fdd2 665-666
   s_871888365ea6da::t_293f5abf3583af 492,495-496
+  s_871888365ea6da::t_ad696ce694a5fc 72,75,92,335,346,360,365,394,594,596,602,607-616,633,642-643,646-656,658-664,667-689,691-695
+  s_871888365ea6da::t_974405acaef2a6 27,605,644,690
   s_871888365ea6da::t_dcbff64d7b2b0a 599
-  s_871888365ea6da::t_dd65a5c0bf1b60 28
-  s_871888365ea6da::t_823958e45643fd 69-71
-  s_871888365ea6da::t_a29b03e9dc5108 73-74
-  s_871888365ea6da::t_24d7c2f8759289 76-77
-  s_871888365ea6da::t_a0213c6814748a 89-91
-  s_871888365ea6da::t_f0e5f09871e111 93-95
-  s_871888365ea6da::t_d3a2412fd9e9a3 332-334
-  s_871888365ea6da::t_7c8bcee98279fb 336-338,343-345
-  s_871888365ea6da::t_29788d318a5c7a 350-352,357-359
-  s_871888365ea6da::t_26212c8533fe13 361-364
-  s_871888365ea6da::t_5feb4237c5591b 366-371
-  s_871888365ea6da::t_efed1c9900a99e 373
-  s_871888365ea6da::t_ccbafb27ea05d0 375-377
-  s_871888365ea6da::t_44163a8fa9fb8e 393
-  s_871888365ea6da::t_b829defe6dd6fc 395-398
-  s_871888365ea6da::t_5d88044388a22b 592-593
-  s_871888365ea6da::t_5fdd2a34e5d79e 595
-  s_871888365ea6da::t_d539373ec781af 598
-  s_871888365ea6da::t_bb07708b4c82bb 600-601
-  s_871888365ea6da::t_0e7e81cbdb9bc7 603-604
-  s_871888365ea6da::t_8db8ce863157c5 606
-  s_871888365ea6da::t_3fd2c9a89beee3 617-619
-  s_871888365ea6da::t_67417ff244fecf 627
-  s_871888365ea6da::t_a0f4dfec86fc5b 629-632
-  s_871888365ea6da::t_eba8cf51739009 634-636,639-641
-  s_871888365ea6da::t_4c953c91c72358 645
+  s_871888365ea6da::t_d255cfaf358f43 374,454,505
+  s_871888365ea6da::t_9269eeb230fdd2 665-666
+  s_871888365ea6da::t_3fc91a2dd93143 25-26,29-30,37
+  s_871888365ea6da::t_ef4467346a7134 431-432
+  s_871888365ea6da::t_d5fa61024c9816 349
+  s_871888365ea6da::t_e681ab4deab5b7 347-348,399,405-430,433-453,455-491,493-494,497-504,506-527,529-531,597
+  s_871888365ea6da::t_22498a5d8fbb83 372,378-392
+  s_871888365ea6da::t_9edd19628245b8 404
+  s_871888365ea6da::t_e2b68059b4c82f 28
+  s_871888365ea6da::t_d7dd1d2b57089f 69-71
+  s_871888365ea6da::t_32af5eca68201d 73-74
+  s_871888365ea6da::t_80ae19da8c0eb2 76-77
+  s_871888365ea6da::t_c9010217b2802d 89-91
+  s_871888365ea6da::t_a6553eda40df7a 93-95
+  s_871888365ea6da::t_163ac7064c22c4 332-334
+  s_871888365ea6da::t_8f22ff495dde26 336-338,343-345
+  s_871888365ea6da::t_1bc23d8f61f9e5 350-352,357-359
+  s_871888365ea6da::t_2e0055acecd43c 361-364
+  s_871888365ea6da::t_55df29c1a2eac4 366-371
+  s_871888365ea6da::t_5b3c2a0f38fcd3 373
+  s_871888365ea6da::t_1f0e7840ed5fc4 375-377
+  s_871888365ea6da::t_5e991c92b4943a 393
+  s_871888365ea6da::t_b931346e942aa1 395-398
+  s_871888365ea6da::t_f19608a38ce0d3 592-593
+  s_871888365ea6da::t_be8042b1039ba8 595
+  s_871888365ea6da::t_bf0154e6fa0408 598
+  s_871888365ea6da::t_c477019984684b 600-601
+  s_871888365ea6da::t_2ea4501ad9f281 603-604
+  s_871888365ea6da::t_878773a6de2420 606
+  s_871888365ea6da::t_991f533192350c 617-619
+  s_871888365ea6da::t_d2d791ca2a9e26 627
+  s_871888365ea6da::t_d8674d8a67fe45 629-632
+  s_871888365ea6da::t_5f329b2c653069 634-636,639-641
+  s_871888365ea6da::t_c5247413d60505 645
+python/sglang/srt/hardware_backend/npu/moe/routing.py
+  s_871888365ea6da::t_f099ecdd07e01a 111-112
+  s_871888365ea6da::t_6a8af46ff0d0a0 1-10,18-21,27-29,50-80,83-93,95-110,113-168,170-175,177-200
+  s_871888365ea6da::t_feaf1b5648450d 14-15
+  s_871888365ea6da::t_d81cb9c3aeb713 11-13
+  s_871888365ea6da::t_545a133f46eec0 81,94,176
+  s_871888365ea6da::t_c55dcb63b9a3e1 169
+  s_871888365ea6da::t_abad98e25bd78f 48
+  s_871888365ea6da::t_da24b9ca7344cd 25-26,42-47
+  s_871888365ea6da::t_2e9824c3b9ac7c 30-32,39-41
+  s_871888365ea6da::t_102eef2e903b05 49
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -135,40 +104,19 @@ python/sglang/srt/layers/moe/moe_runner/ascend.py
       },
       "human_author": "chenxu214 <justin_cc2025@16.com>",
       "custom_attributes": {
-        "runtime_client": "trae-tob-git-ai",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "tool_use_id": "6adb1bf10dc83bdafbf60eb9",
+        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]",
+        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adb1bf10dc83bdafbf60eb9:afterEdit:8f314e34",
         "__trae_file_phase": "post",
         "edit_kind": "file_edit",
-        "source_scene": "agent",
-        "client_type": "ide",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6adc20890dc83bdafbf6109e:afterEdit:8f314e34",
         "tool_type": "builtin",
         "tool_id": "icube:applyChatSnapshotPatch",
-        "operation_id": "6adc20890dc83bdafbf6109e",
-        "tool_use_id": "6adc20890dc83bdafbf6109e",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py\"]"
-      }
-    },
-    "s_c2910d9abe43f2": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6a0e6508666b2919c6161375",
-        "model": "DeepSeek-V4-Pro-Official"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "session_id": "6a0e6508666b2919c6161375",
-        "dedupe_key": "6a0e6508666b2919c6161375:6ad5c0d90dc83bdafbf5f879:afterEdit:d3aae80d",
-        "external_session_id": "6a0e6508666b2919c6161375",
-        "edit_kind": "file_edit",
-        "source_scene": "agent",
-        "operation_id": "6ad5c0d90dc83bdafbf5f879",
-        "client_type": "ide",
         "runtime_client": "trae-tob-git-ai",
-        "tool_type": "builtin",
-        "tool_use_id": "6ad5c0d90dc83bdafbf5f879",
-        "tool_id": "icube:applyChatSnapshotPatch"
+        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
+        "operation_id": "6adb1bf10dc83bdafbf60eb9",
+        "source_scene": "agent",
+        "client_type": "ide"
       }
     }
   }
