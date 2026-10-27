@@ -1,55 +1,7 @@
-python/sglang/srt/layers/moe/moe_runner/ascend.py
-  s_efa56157ea7004::t_c90e576ea8565c 221,223-227
-  s_efa56157ea7004::t_f51d5ea0b7b591 343
-  s_efa56157ea7004::t_1d18078f869102 99-102
-python/sglang/srt/hardware_backend/npu/quantization/moe_methods.py
-  s_efa56157ea7004::t_15ba91fb688370 647-675
-  s_efa56157ea7004::t_d7e199876f690d 711-714
-python/sglang/srt/hardware_backend/npu/moe/mega_moe.py
-  s_efa56157ea7004::t_66666a24e589bc 19-24,53-55,61-63,122-126,146-153,156-157,201-202
-  s_efa56157ea7004::t_29c33a62bb0fc7 3-18,29,38-39,48,67,95-96,98-107,110-112,129-130,159,162,171
-  s_efa56157ea7004::t_e89a243909edf9 1-2,25-28,30-37,40-47,49-52,56-60,64-66,68-94,97,108-109,113-121,127-128,131-145,154-155,158,160-161,163-170,172-200,203
-python/sglang/srt/environ.py
-  s_efa56157ea7004::t_2b4b3796762f47 1073-1076
-python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
-  s_efa56157ea7004::t_83baf48b96c8eb 186-190
-  s_efa56157ea7004::t_0f6cec3ef7be07 147-155,158-159,161-172
-  s_efa56157ea7004::t_f1bfed9b743f38 160
-  s_efa56157ea7004::t_b4936f119368ea 67-69
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "a0525c355dcb3323e6be6beb5ce2099503f9e7fa",
-  "prompts": {},
-  "humans": {
-    "h_3ab581817c9a6f": {
-      "author": "chenxu214 <justin_cc2025@16.com>"
-    }
-  },
-  "sessions": {
-    "s_efa56157ea7004": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6aafd30b0dc83bdafbf5de74",
-        "model": "glm-5.3"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "session_id": "6aafd30b0dc83bdafbf5de74",
-        "tool_id": "icube:applyChatSnapshotPatch",
-        "tool_type": "builtin",
-        "source_scene": "agent",
-        "client_type": "ide",
-        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/moe_runner/ascend.py\"]",
-        "dedupe_key": "6aafd30b0dc83bdafbf5de74:6ad9bb2b0dc83bdafbf60ab9:afterEdit:8927e2b4",
-        "tool_use_id": "6ad9bb2b0dc83bdafbf60ab9",
-        "runtime_client": "trae-tob-git-ai",
-        "operation_id": "6ad9bb2b0dc83bdafbf60ab9",
-        "external_session_id": "6aafd30b0dc83bdafbf5de74",
-        "edit_kind": "file_edit",
-        "__trae_file_phase": "post"
-      }
-    }
-  }
+  "prompts": {}
 }
