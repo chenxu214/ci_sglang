@@ -1,47 +1,7 @@
-python/sglang/srt/layers/moe/token_dispatcher/deepep.py
-  s_871888365ea6da::t_9c692c61989860 81-85
-  s_871888365ea6da::t_5fa3a46f7b69f9 720-729
-python/sglang/srt/layers/moe/moe_runner/ascend.py
-  s_871888365ea6da::t_0aca2310e00c05 310-315
-  s_871888365ea6da::t_43a1696a68bea0 122-126
-  s_871888365ea6da::t_a041bc9c11a127 232-248
-python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
-  s_871888365ea6da::t_0032b2a34ddbf5 453-462
-  s_871888365ea6da::t_2fd5840215ea83 31-35
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "b0c6bf0cb1b18a4e0efa63645543668c96a3f5d1",
-  "prompts": {},
-  "humans": {
-    "h_3ab581817c9a6f": {
-      "author": "chenxu214 <justin_cc2025@16.com>"
-    }
-  },
-  "sessions": {
-    "s_871888365ea6da": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6ad72cfb0dc83bdafbf5f8ac",
-        "model": "DeepSeek-V4-Pro-Official"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "__trae_snapshot_paths": "[\"/Users/justin/Documents/Work/sglang/python/sglang/srt/layers/moe/token_dispatcher/deepep.py\"]",
-        "edit_kind": "file_edit",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "runtime_client": "trae-tob-git-ai",
-        "operation_id": "6ad833130dc83bdafbf5fc97",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ad833130dc83bdafbf5fc97:afterEdit:d835394a",
-        "tool_use_id": "6ad833130dc83bdafbf5fc97",
-        "__trae_file_phase": "post",
-        "tool_type": "builtin",
-        "source_scene": "agent",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "tool_id": "icube:applyChatSnapshotPatch",
-        "client_type": "ide"
-      }
-    }
-  }
+  "prompts": {}
 }
