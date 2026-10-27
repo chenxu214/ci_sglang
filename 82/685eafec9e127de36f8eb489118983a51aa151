@@ -1,32 +1,7 @@
-python/sglang/srt/layers/moe/token_dispatcher/ascend_ops.py
-  s_871888365ea6da::t_91a68ca7159383 372,381
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.2",
   "base_commit_sha": "82685eafec9e127de36f8eb489118983a51aa151",
-  "prompts": {},
-  "sessions": {
-    "s_871888365ea6da": {
-      "agent_id": {
-        "tool": "trae",
-        "id": "6ad72cfb0dc83bdafbf5f8ac",
-        "model": "DeepSeek-V4-Pro-Official"
-      },
-      "human_author": "chenxu214 <justin_cc2025@16.com>",
-      "custom_attributes": {
-        "source_scene": "agent",
-        "edit_kind": "file_edit",
-        "external_session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "session_id": "6ad72cfb0dc83bdafbf5f8ac",
-        "tool_use_id": "6ad7351c0dc83bdafbf5f957",
-        "operation_id": "6ad7351c0dc83bdafbf5f957",
-        "tool_type": "builtin",
-        "client_type": "ide",
-        "dedupe_key": "6ad72cfb0dc83bdafbf5f8ac:6ad7351c0dc83bdafbf5f957:afterEdit:8f314e34",
-        "runtime_client": "trae-tob-git-ai",
-        "tool_id": "icube:applyChatSnapshotPatch"
-      }
-    }
-  }
+  "prompts": {}
 }
