@@ -1,0 +1,12 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a03d85eab47c9121ff2a7eb9f7892bc1b4e78b06",
+  "prompts": {},
+  "humans": {
+    "h_3ab581817c9a6f": {
+      "author": "chenxu214 <justin_cc2025@16.com>"
+    }
+  }
+}
