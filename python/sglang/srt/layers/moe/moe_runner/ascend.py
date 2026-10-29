@@ -242,6 +242,31 @@ class AscendRunnerCore(MoeRunnerCore):
         Execute the MoE layer using NPU‑specific grouped matmul ops.
         """
         x = runner_input.hidden_states
+        mega_moe_state = running_state.get("ascend_ops_forward_state")
+        if mega_moe_state is not None:
+            from sglang.srt.layers.moe.token_dispatcher.ascend_ops import (
+                _MegaMoEState,
+            )
+
+            # MegaMoE is a runner execution mode. It consumes the same
+            # forward-state handoff as the communication paths and returns a
+            # normal AscendRunnerOutput for the post-permute hook.
+            if isinstance(mega_moe_state, _MegaMoEState):
+                from sglang.srt.hardware_backend.npu.moe.mega_moe import (
+                    run_mega_moe,
+                )
+
+                output = run_mega_moe(
+                    self.config,
+                    mega_moe_state.quant_config,
+                    x,
+                    mega_moe_state.topk_weights,
+                    mega_moe_state.topk_ids,
+                    mega_moe_state.dtype_mode,
+                )
+                if mega_moe_state.num_valid_rows is not None:
+                    output = output[: mega_moe_state.num_valid_rows]
+                return AscendRunnerOutput(hidden_states=output)
         original_dtype = torch.float16 if x.dtype == torch.float16 else torch.bfloat16
         expert_tokens = runner_input.expert_tokens
         group_list_type = runner_input.group_list_type
@@ -418,6 +443,20 @@ def pre_permute_ascend_ops_to_ascend(
             hidden_states=dispatch_output.hidden_states,
             hidden_states_scale=dispatch_output.hidden_states_scale,
             expert_tokens=dispatch_output.expert_tokens.to(torch.int64),
+            group_list_type=dispatch_output.group_list_type,
+        )
+    if mode == "fused_op":
+        from sglang.srt.layers.moe.token_dispatcher.ascend_ops import _MegaMoEState
+
+        if not isinstance(dispatch_output.forward_state, _MegaMoEState):
+            raise RuntimeError("MegaMoE dispatch output is missing forward state")
+        running_state["ascend_ops_forward_state"] = dispatch_output.forward_state
+        return AscendRunnerInput(
+            hidden_states=dispatch_output.hidden_states,
+            hidden_states_scale=None,
+            expert_tokens=torch.empty(
+                0, dtype=torch.int64, device=dispatch_output.hidden_states.device
+            ),
             group_list_type=dispatch_output.group_list_type,
         )
     raise NotImplementedError(f"unknown ascend_ops exec mode {mode!r}")
@@ -632,6 +671,7 @@ def post_permute_ascend_to_ascend_ops(
         AscendOpsCombineInput,
         _AllGatherState,
         _AllToAllVState,
+        _MegaMoEState,
     )
 
     state = running_state.pop("ascend_ops_forward_state", None)
@@ -648,6 +688,8 @@ def post_permute_ascend_to_ascend_ops(
             )
     elif isinstance(state, _AllGatherState):
         hidden_states = _allgather_weighted_sum(runner_output, runner_config, state)
+    elif isinstance(state, _MegaMoEState):
+        hidden_states = runner_output.hidden_states
     else:
         # MC2 / decode: the combine op applies the top-k weights itself.
         hidden_states = runner_output.hidden_states

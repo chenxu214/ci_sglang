@@ -1,7 +1,7 @@
 """Ascend Ops MoE communication dispatcher.
 
 Expert regrouping is handled by the Ascend runner hooks. This module owns the
-AllGather, AllToAllV, and MC2 communication paths.
+AllGather, AllToAllV, MC2, and MegaMoE dispatch boundaries.
 """
 
 from __future__ import annotations
@@ -21,7 +21,11 @@ from sglang.srt.hardware_backend.npu.moe.routing import (
     npu_moe_finalize_routing,
     npu_moe_init_routing,
 )
-from sglang.srt.layers.dp_attention import get_is_extend_in_batch
+from sglang.srt.layers.dp_attention import (
+    get_dp_global_num_tokens,
+    get_is_extend_in_batch,
+    is_dp_attention_enabled,
+)
 from sglang.srt.layers.moe.moe_runner.base import MoeRunnerConfig
 from sglang.srt.layers.moe.token_dispatcher.base import (
     BaseDispatcher,
@@ -64,7 +68,7 @@ _TORCH_DTYPE_TO_ATEN = {
 
 
 class AscendOpsDispatchOutput(NamedTuple):
-    """Dispatcher output shared by the three Ascend execution paths."""
+    """Dispatcher output shared by the Ascend execution paths."""
 
     hidden_states: torch.Tensor
     hidden_states_scale: Optional[torch.Tensor]
@@ -73,7 +77,7 @@ class AscendOpsDispatchOutput(NamedTuple):
     expert_tokens: Optional[torch.Tensor]
     group_list_type: int
     exec_mode: str
-    forward_state: AscendOpsForwardState
+    forward_state: Optional[AscendOpsForwardState]
     quant_mode: int = -1
     recv_counts: Optional[torch.Tensor] = None
 
@@ -86,7 +90,7 @@ class AscendOpsCombineInput(NamedTuple):
     """Expert output consumed by the matching Ascend Ops combine path."""
 
     hidden_states: torch.Tensor
-    forward_state: AscendOpsForwardState
+    forward_state: Optional[AscendOpsForwardState] = None
 
     @property
     def format(self) -> CombineInputFormat:
@@ -127,10 +131,22 @@ class _AllToAllVState:
     topk_ids: torch.Tensor
     expanded_row_idx: torch.Tensor
     hidden_shape: torch.Size
+    padded_hidden_shape: torch.Size
     local_expanded_row_idx: Optional[torch.Tensor] = None
 
 
-AscendOpsForwardState = _MC2State | _AllGatherState | _AllToAllVState
+@dataclass
+class _MegaMoEState:
+    """Per-forward metadata required by the fused MegaMoE runner path."""
+
+    topk_weights: torch.Tensor
+    topk_ids: torch.Tensor
+    quant_config: Optional[dict] = None
+    num_valid_rows: Optional[int] = None
+    dtype_mode: Optional[str] = None
+
+
+AscendOpsForwardState = _MC2State | _AllGatherState | _AllToAllVState | _MegaMoEState
 
 
 class AscendOpsDispatcher(BaseDispatcher):
@@ -177,6 +193,10 @@ class AscendOpsDispatcher(BaseDispatcher):
     ) -> DispatchOutput:
         topk_weights, topk_ids, _ = topk_output
         if get_is_extend_in_batch():
+            if self.moe_ascend_ops_config.prefill == "fused_op":
+                return self._dispatch_fused_op(
+                    hidden_states, topk_weights, topk_ids
+                )
             if self.moe_ascend_ops_config.prefill == "allgather":
                 return self._dispatch_allgather(
                     hidden_states, topk_weights, topk_ids, self.tp_group
@@ -185,7 +205,56 @@ class AscendOpsDispatcher(BaseDispatcher):
                 hidden_states, topk_weights, topk_ids, self.tp_group
             )
 
+        if self.moe_ascend_ops_config.decode == "fused_op":
+            return self._dispatch_fused_op(
+                hidden_states, topk_weights, topk_ids
+            )
         return self._dispatch_low_latency(hidden_states, topk_weights, topk_ids)
+
+    def _dispatch_fused_op(self, hidden_states, topk_weights, topk_ids):
+        num_valid_rows = hidden_states.shape[0]
+        if is_dp_attention_enabled():
+            global_rows = get_dp_global_num_tokens()
+            dp_rank = get_parallel().attn_dp_rank
+            num_valid_rows = min(global_rows[dp_rank], hidden_states.shape[0])
+            target_rows = max(max(global_rows), hidden_states.shape[0])
+            if hidden_states.shape[0] < target_rows:
+                hidden_states = torch.nn.functional.pad(
+                    hidden_states, (0, 0, 0, target_rows - hidden_states.shape[0])
+                )
+                topk_ids = torch.nn.functional.pad(
+                    topk_ids, (0, 0, 0, target_rows - topk_ids.shape[0]), value=0
+                )
+                topk_weights = torch.nn.functional.pad(
+                    topk_weights,
+                    (0, 0, 0, target_rows - topk_weights.shape[0]),
+                )
+            if num_valid_rows < hidden_states.shape[0]:
+                topk_weights = topk_weights.clone()
+                topk_weights[num_valid_rows:].zero_()
+
+        # MegaMoE consumes FP32 routing coefficients. Keep the original
+        # precision used by the alltoallv combine path through forward state.
+        topk_weights = topk_weights.to(torch.float32).contiguous()
+        topk_ids = topk_ids.to(torch.int32).contiguous()
+        return AscendOpsDispatchOutput(
+            hidden_states=hidden_states,
+            hidden_states_scale=None,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            expert_tokens=None,
+            group_list_type=1,
+            exec_mode="fused_op",
+            forward_state=_MegaMoEState(
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                quant_config=(
+                    dict(self.quant_config) if self.quant_config is not None else None
+                ),
+                num_valid_rows=num_valid_rows,
+                dtype_mode=("normal" if get_is_extend_in_batch() else "low_latency"),
+            ),
+        )
 
     def combine(self, combine_input: CombineInput) -> torch.Tensor:
         if combine_input.format != CombineInputFormat.ASCEND_OPS:
@@ -193,6 +262,8 @@ class AscendOpsDispatcher(BaseDispatcher):
                 "AscendOpsDispatcher.combine expects an AscendOpsCombineInput, "
                 f"got {combine_input.format.value}"
             )
+        if combine_input.forward_state is None:
+            return combine_input.hidden_states
         state = combine_input.forward_state
         if isinstance(state, _AllGatherState):
             return self._combine_allgather(combine_input.hidden_states, state)
@@ -200,6 +271,8 @@ class AscendOpsDispatcher(BaseDispatcher):
             return self._combine_alltoallv(combine_input.hidden_states, state)
         if isinstance(state, _MC2State):
             return self._combine_mc2(combine_input.hidden_states, state)
+        if isinstance(state, _MegaMoEState):
+            return self._combine_megamoe(combine_input.hidden_states, state)
         raise TypeError(f"unknown Ascend Ops forward state: {type(state)!r}")
 
     # Decode (MC2 low latency)
@@ -221,6 +294,13 @@ class AscendOpsDispatcher(BaseDispatcher):
             padded_bs=pad_bs or num_tokens,
             dtype_mode="low_latency",
         )
+
+    def _combine_megamoe(
+        self, hidden_states: torch.Tensor, state: _MegaMoEState
+    ) -> torch.Tensor:
+        """Return the output already combined by the MegaMoE operator."""
+
+        return hidden_states
 
     def _dispatch_mc2(
         self,
@@ -540,23 +620,38 @@ class AscendOpsDispatcher(BaseDispatcher):
                 f"num_experts / ep_size ({self.num_local_experts} != {local_experts})"
             )
 
-        local_counts = torch.histc(
-            topk_ids.reshape(-1).to(torch.float32),
-            bins=self.num_experts,
-            min=0,
-            max=self.num_experts,
-        ).to(torch.int64)
-        gathered_counts = torch.empty(
-            ep_size * self.num_experts,
-            dtype=local_counts.dtype,
-            device=local_counts.device,
-        )
-        if ep_size == 1:
-            gathered_counts.copy_(local_counts)
+        if topk_ids.numel() == 0:
+            local_counts = torch.zeros(
+                self.num_experts, dtype=torch.int64, device=topk_ids.device
+            )
         else:
-            dist.all_gather_into_tensor(gathered_counts, local_counts, group=group)
-        gathered_counts = gathered_counts.view(ep_size, self.num_experts)
+            flat_topk_ids = topk_ids.reshape(-1)
+            valid_topk_ids = flat_topk_ids[
+                (flat_topk_ids >= 0) & (flat_topk_ids < self.num_experts)
+            ]
+            if valid_topk_ids.numel() == 0:
+                local_counts = torch.zeros(
+                    self.num_experts, dtype=torch.int64, device=topk_ids.device
+                )
+            else:
+                local_counts = torch.histc(
+                    valid_topk_ids.to(torch.float32),
+                    bins=self.num_experts,
+                    min=0,
+                    max=self.num_experts,
+                ).to(torch.int64)
         rank = dist.get_rank(group=group)
+        if ep_size == 1:
+            gathered_counts = local_counts.unsqueeze(0)
+        else:
+
+            gathered_flat = torch.empty(
+                ep_size * self.num_experts,
+                dtype=torch.int64,
+                device=local_counts.device,
+            )
+            dist.all_gather_into_tensor(gathered_flat, local_counts, group=group)
+            gathered_counts = gathered_flat.view(ep_size, self.num_experts)
         local_start = rank * local_experts
         local_end = local_start + local_experts
         recv_counts = gathered_counts[:, local_start:local_end]
@@ -573,8 +668,47 @@ class AscendOpsDispatcher(BaseDispatcher):
         input_splits: list[int],
         group,
     ) -> torch.Tensor:
+        rank = dist.get_rank(group=group)
+        ep_size = dist.get_world_size(group=group)
+        total_output = int(sum(output_splits))
+        total_input = int(sum(input_splits))
+        if hidden_states.shape[0] != total_input:
+            raise RuntimeError(
+                "Ascend AllToAllV input split mismatch: "
+                f"tensor has {hidden_states.shape[0]} rows, "
+                f"but input_splits sum to {total_input}"
+            )
+
+        # HCCL all_to_all_single can hang or no-op when either side of a rank
+        # has a zero-size split.  This can still happen in the reverse
+        # combine exchange when a rank owns no routed expert rows, even after
+        # the dispatch input was padded before routing.  Add a self-loop
+        # dummy element and remove exactly that received row afterwards.
+        padded = False
+        dummy_output_pos = 0
+        if ep_size > 1 and (total_input == 0 or total_output == 0):
+            padded = True
+            orig_input_splits = list(input_splits)
+            orig_output_splits = list(output_splits)
+            output_splits = list(output_splits)
+            input_splits = list(input_splits)
+            output_splits[rank] += 1
+            input_splits[rank] += 1
+            total_output += 1
+            # Insert the self-loop row at the beginning of this rank's send
+            # segment so all pre-existing split boundaries remain intact.
+            insert_pos = sum(orig_input_splits[:rank])
+            dummy_output_pos = sum(orig_output_splits[:rank])
+            dummy = hidden_states.new_zeros(
+                (1,) + tuple(hidden_states.shape[1:])
+            )
+            hidden_states = torch.cat(
+                [hidden_states[:insert_pos], dummy, hidden_states[insert_pos:]],
+                dim=0,
+            )
+
         output = hidden_states.new_empty(
-            (sum(output_splits),) + tuple(hidden_states.shape[1:])
+            (max(total_output, 0),) + tuple(hidden_states.shape[1:])
         )
         dist.all_to_all_single(
             output,
@@ -583,15 +717,42 @@ class AscendOpsDispatcher(BaseDispatcher):
             input_split_sizes=input_splits,
             group=group,
         )
+
+        if padded:
+            output = torch.cat(
+                [
+                    output[:dummy_output_pos],
+                    output[dummy_output_pos + 1 :],
+                ],
+                dim=0,
+            )
+
         return output
 
     def _dispatch_alltoallv(self, hidden_states, topk_weights, topk_ids, group):
         """Send each token to its expert-owning rank."""
+        original_hidden_shape = hidden_states.shape
+        original_rows = hidden_states.shape[0]
         topk_ids = topk_ids.to(torch.int32)
+        # Keep empty DP/TP shards out of the Ascend routing kernels.  In
+        # particular, npu_moe_init_routing_v2 and the following grouped
+        # matmul paths are not valid with a zero-row input.  vLLM-Ascend
+        # applies the same rule before token permutation: every shard gets at
+        # least one route, and the padded row is removed after combine.
+        if original_rows == 0:
+            hidden_states = hidden_states.new_zeros(
+                (1,) + tuple(hidden_states.shape[1:])
+            )
+            topk_ids = topk_ids.new_zeros(
+                (1,) + tuple(topk_ids.shape[1:])
+            )
+            if topk_weights is not None:
+                topk_weights = topk_weights.new_zeros(
+                    (1,) + tuple(topk_weights.shape[1:])
+                )
         input_splits, output_splits, recv_counts = self._alltoall_counts(
             topk_ids, group
         )
-
         quant_mode = self._quant_mode("routing")
         routed = npu_moe_init_routing(
             hidden_states, topk_ids, self.num_experts, quant_mode=quant_mode
@@ -608,7 +769,6 @@ class AscendOpsDispatcher(BaseDispatcher):
         received = self._alltoall_single(
             routed.hidden_states, output_splits, input_splits, group
         )
-
         state = _AllToAllVState(
             group=group,
             input_splits=input_splits,
@@ -616,7 +776,8 @@ class AscendOpsDispatcher(BaseDispatcher):
             topk_weights=topk_weights,
             topk_ids=topk_ids,
             expanded_row_idx=routed.expanded_row_idx.clone(),
-            hidden_shape=hidden_states.shape,
+            hidden_shape=original_hidden_shape,
+            padded_hidden_shape=hidden_states.shape,
         )
         return AscendOpsDispatchOutput(
             hidden_states=received,
@@ -641,9 +802,18 @@ class AscendOpsDispatcher(BaseDispatcher):
             state.output_splits,
             state.group,
         )
-        output = npu_moe_finalize_routing(
-            source_order,
-            state.expanded_row_idx,
-            topk_weights=state.topk_weights,
-        ).view(state.hidden_shape)
+        if source_order.shape[0] == 0:
+            if state.hidden_shape[0] != 0:
+                raise RuntimeError(
+                    "Ascend AllToAllV combine returned no rows for a non-empty "
+                    f"source batch of {state.hidden_shape[0]} rows"
+                )
+            output = source_order.new_empty(state.hidden_shape)
+        else:
+            output = npu_moe_finalize_routing(
+                source_order,
+                state.expanded_row_idx,
+                topk_weights=state.topk_weights,
+            ).view(state.padded_hidden_shape)
+            output = output[: state.hidden_shape[0]]
         return output
