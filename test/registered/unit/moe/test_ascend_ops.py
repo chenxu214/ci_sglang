@@ -60,10 +60,10 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
             }
         )
         self.assertEqual(
-            dispatcher._quant_mode("mc2", "low_latency"),
+            dispatcher._resolve_quant_mode("mc2", "low_latency"),
             4,
         )
-        self.assertEqual(dispatcher._quant_mode("routing"), -1)
+        self.assertEqual(dispatcher._resolve_quant_mode("routing"), -1)
 
     # Protects MC2 from receiving a routing-only dispatcher dtype it cannot
     # encode in its own quantization enum.
@@ -72,7 +72,7 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
             {"dispatcher_output_dtype": DispatcherOutputDtype.FP8.value}
         )
         with self.assertRaisesRegex(NotImplementedError, "mc2.*fp8"):
-            dispatcher._quant_mode("mc2")
+            dispatcher._resolve_quant_mode("mc2")
 
     # Protects the MegaMoE interface from using the MC2 quant enum for routing.
     def test_mega_moe_quant_args_follow_dispatch_dtype(self):
@@ -236,7 +236,7 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         self.assertEqual(output.forward_state.dtype_mode, "low_latency")
 
     # Protects AllGather row metadata when attention CP/DP creates uneven shards.
-    def test_allgather_row_sizes_use_actual_rank_local_rows(self):
+    def test_all_gather_row_sizes_use_actual_rank_local_rows(self):
         def fake_all_gather(outputs, local_rows, group):
             outputs[0].copy_(local_rows)
             outputs[1].fill_(3)
@@ -251,11 +251,158 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
                 side_effect=fake_all_gather,
             ),
         ):
-            row_sizes = AscendOpsDispatcher._allgather_row_sizes(
+            row_sizes = AscendOpsDispatcher._all_gather_row_sizes(
                 2, group=None, device=torch.device("cpu")
             )
 
         self.assertEqual(row_sizes, [2, 3])
+
+    # Protects the DP+attention-TP all-gather fast path from adding a device
+    # row-count collective when scheduler metadata already determines rows.
+    def test_all_gather_row_sizes_use_dp_metadata_without_collective(self):
+        dispatcher = AscendOpsDispatcher.__new__(AscendOpsDispatcher)
+        parallel = SimpleNamespace(attn_dp_size=2, attn_cp_size=1, attn_tp_size=2)
+        with (
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.get_parallel",
+                return_value=parallel,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops."
+                "get_dp_global_num_tokens",
+                return_value=[8, 4],
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_world_size",
+                return_value=4,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_rank",
+                return_value=0,
+            ),
+        ):
+            layout = AscendOpsDispatcher._resolve_row_layout(
+                dispatcher, 4, group=None, device=torch.device("cpu"), allow_cp=True
+            )
+
+        self.assertEqual(layout.row_sizes, (4, 4, 2, 2))
+
+    # Protects the metadata fast path from silently falling back to a device
+    # collective when the upstream attention layout is inconsistent.
+    def test_allgather_metadata_row_mismatch_is_rejected(self):
+        parallel = SimpleNamespace(attn_dp_size=2, attn_cp_size=1, attn_tp_size=2)
+        with (
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.get_parallel",
+                return_value=parallel,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops."
+                "get_dp_global_num_tokens",
+                return_value=[8, 4],
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_world_size",
+                return_value=4,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_rank",
+                return_value=0,
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "local rows disagree"):
+                AscendOpsDispatcher._resolve_row_layout(
+                    AscendOpsDispatcher.__new__(AscendOpsDispatcher),
+                    3,
+                    group=None,
+                    device=torch.device("cpu"),
+                    allow_cp=True,
+                )
+
+    # Protects MegaMoE capacity from using the unsplit DP token count when
+    # attention TP has already divided the local MoE rows.
+    def test_fused_op_pads_to_attention_tp_local_capacity(self):
+        dispatcher = self._dispatcher_for_quant_mode()
+        hidden_states = torch.zeros((2, 4))
+        topk_weights = torch.ones((2, 1))
+        topk_ids = torch.zeros((2, 1), dtype=torch.int64)
+        parallel = SimpleNamespace(
+            attn_dp_rank=1,
+            attn_dp_size=2,
+            attn_tp_rank=1,
+            attn_tp_size=2,
+            attn_cp_size=1,
+        )
+        with (
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops."
+                "is_dp_attention_enabled",
+                return_value=True,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops."
+                "get_dp_global_num_tokens",
+                return_value=[8, 4],
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.get_parallel",
+                return_value=parallel,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_world_size",
+                return_value=4,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_rank",
+                return_value=2,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops."
+                "get_is_extend_in_batch",
+                return_value=True,
+            ),
+        ):
+            output = dispatcher._dispatch_fused_op(
+                hidden_states, topk_weights, topk_ids
+            )
+
+        self.assertEqual(output.hidden_states.shape[0], 4)
+        self.assertEqual(output.forward_state.num_valid_rows, 2)
+
+    # Protects alltoallv count exchange from all-gathering the full global
+    # histogram when each rank only needs its local-expert slice.
+    def test_alltoallv_counts_exchange_local_expert_slices(self):
+        dispatcher = self._dispatcher_for_quant_mode()
+        dispatcher.num_experts = 4
+        dispatcher.num_local_experts = 2
+        topk_ids = torch.tensor([[0, 3], [1, 2]], dtype=torch.int32)
+
+        def fake_all_to_all(output, input, **kwargs):
+            output.copy_(input)
+
+        with (
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_world_size",
+                return_value=2,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist.get_rank",
+                return_value=0,
+            ),
+            patch(
+                "sglang.srt.layers.moe.token_dispatcher.ascend_ops.dist."
+                "all_to_all_single",
+                side_effect=fake_all_to_all,
+            ) as all_to_all,
+        ):
+            input_splits, output_splits, recv_counts = dispatcher._resolve_all_to_all_counts(
+                topk_ids, group=None
+            )
+
+        self.assertEqual(input_splits, [2, 2])
+        self.assertEqual(output_splits, [2, 2])
+        self.assertEqual(tuple(recv_counts.shape), (2, 2))
+        all_to_all.assert_called_once()
 
     # Protects the forward-state handoff: combine must work without a cached
     # dispatch result stored on the dispatcher instance.
