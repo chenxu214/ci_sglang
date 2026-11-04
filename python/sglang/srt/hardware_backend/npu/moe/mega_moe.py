@@ -178,8 +178,24 @@ def mega_moe_mxfp_weights(layer):
     weights, scales = [], []
     for prefix in ("w13", "w2"):
         weight = getattr(layer, f"{prefix}_weight")
-        scale = getattr(layer, f"{prefix}_weight_scale")
-        if weight.ndim != 3 or scale.ndim != 4:
+        # Online/ModelSlim MXFP8 uses weight_scale; the NPU FP4
+        # checkpoint paths retain weight_scale_inv after converting to the
+        # same paired E8M0 layout. The suffix does not change its meaning.
+        scale = getattr(layer, f"{prefix}_weight_scale", None)
+        if scale is None:
+            scale = getattr(layer, f"{prefix}_weight_scale_inv", None)
+        if scale is None:
+            raise ValueError(
+                f"A5 MegaMoE requires {prefix}_weight_scale or "
+                f"{prefix}_weight_scale_inv after MXFP weight processing"
+            )
+        if scale.dtype not in (torch.uint8, scale_dtype):
+            raise ValueError(
+                f"A5 MegaMoE requires processed E8M0 scales for {prefix}, "
+                f"got {scale.dtype}; ordinary FP8 block scales must be "
+                "converted by the quantization method before execution"
+            )
+        if weight.ndim != 3 or scale.ndim != 4 or scale.shape[-1] != 2:
             raise ValueError(
                 "A5 MegaMoE requires stacked MXFP weights and paired scales"
             )
@@ -228,7 +244,7 @@ def get_mega_moe_sym_buffer(
     """Get a shared SymmBuffer for one Ascend runner configuration."""
 
     if mxfp:
-        from npu_ops_transformer.ops import get_symm_buffer_for_mega_moe
+        from cann_ops_transformer.ops import get_symm_buffer_for_mega_moe
     else:
         from sgl_kernel_npu.modules.moe import get_symm_buffer_for_mega_moe
 
@@ -318,7 +334,7 @@ def run_mega_moe(
         raise RuntimeError("MegaMoE fused-op requires the owning MoE layer")
     mxfp = check_mega_moe_kernel(layer)
     if mxfp:
-        from npu_ops_transformer.ops import mega_moe
+        from cann_ops_transformer.ops import mega_moe
     else:
         from sgl_kernel_npu.modules.moe import mega_moe
 

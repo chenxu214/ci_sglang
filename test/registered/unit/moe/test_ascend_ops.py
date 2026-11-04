@@ -231,10 +231,29 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         s13[0, 0, 0, 0] = 129
         self.assertEqual(scales1[0].view(torch.uint8)[0, 0, 0, 0].item(), 129)
 
+    def test_mxfp_views_accept_processed_scale_inv(self):
+        """FP4 checkpoint processing keeps paired E8M0 under scale_inv."""
+        weight = torch.zeros((2, 64, 128), dtype=torch.float8_e4m3fn)
+        scale = torch.full((2, 128, 1, 2), 127, dtype=torch.uint8)
+        layer = SimpleNamespace(
+            w13_weight=weight, w2_weight=weight,
+            w13_weight_scale_inv=scale.transpose(1, 2),
+            w2_weight_scale_inv=scale.transpose(1, 2),
+        )
+        _, _, s1, s2 = mega_moe_mxfp_weights(layer)
+        for result in (s1, s2):
+            self.assertEqual(result[0].data_ptr(), scale.data_ptr())
+            self.assertEqual(result[0].dtype, torch.float8_e8m0fnu)
+            torch.testing.assert_close(result[0].view(torch.uint8), scale)
+        # A raw FP32 FP8 block scale is not an E8M0 byte representation.
+        layer.w13_weight_scale_inv = scale.transpose(1, 2).float()
+        with self.assertRaisesRegex(ValueError, "processed E8M0"):
+            mega_moe_mxfp_weights(layer)
+
     def test_a5_buffer_uses_type_code_abi_and_reuses_across_batch_sizes(self):
         """PR #9569's receive capacity must not depend on local token count."""
         module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
-        provider = ModuleType("npu_ops_transformer.ops")
+        provider = ModuleType("cann_ops_transformer.ops")
         buffers = []
 
         def create_buffer(
@@ -301,7 +320,7 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
     def test_a5_buffer_accepts_dtype_abi(self):
         """New ops-transformer releases name the dtype argument differently."""
         module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
-        provider = ModuleType("npu_ops_transformer.ops")
+        provider = ModuleType("cann_ops_transformer.ops")
         buffer = object()
 
         def create_buffer(
@@ -353,7 +372,7 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
 
     def test_a5_mxfp_forward_matches_expert_reference(self):
         """The fused boundary must preserve expert axes and decode E8M0 bytes."""
-        provider = ModuleType("npu_ops_transformer.ops")
+        provider = ModuleType("cann_ops_transformer.ops")
 
         def mega_moe(x, ids, probs, l1, l2, buffer, **kwargs):
             # CPU stand-in for the external operator's documented stacked ABI.
