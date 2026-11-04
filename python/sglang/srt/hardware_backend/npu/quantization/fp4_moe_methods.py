@@ -155,16 +155,23 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
                 "not match w2_weight_scale_inv."
             )
 
+        from sglang.srt.hardware_backend.npu.moe.mega_moe import (
+            use_mega_moe_nd_weights,
+        )
+
+        keep_nd = use_mega_moe_nd_weights(layer)
         nz_format = NPUACLFormat.ACL_FORMAT_FRACTAL_NZ
         layer.w13_weight.data, w13_scale = prepare_w4a8_mxfp_weight(
             layer.w13_weight.data.view(torch.uint8),
             layer.w13_weight_scale_inv.data,
             npu_format=nz_format,
+            keep_nd=keep_nd,
         )
         layer.w2_weight.data, w2_scale = prepare_w4a8_mxfp_weight(
             layer.w2_weight.data.view(torch.uint8),
             layer.w2_weight_scale_inv.data,
             npu_format=nz_format,
+            keep_nd=keep_nd,
         )
         layer.w13_weight_scale_inv = torch.nn.Parameter(w13_scale, requires_grad=False)
         layer.w2_weight_scale_inv = torch.nn.Parameter(w2_scale, requires_grad=False)

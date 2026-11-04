@@ -85,16 +85,18 @@ def prepare_w4a8_mxfp_weight(
     weight_scale: torch.Tensor,
     *,
     npu_format=None,
+    keep_nd: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Convert W4A8 MXFP weights and scales to the shared A5 GMM layout."""
+    """Prepare A5 MXFP views, retaining packed ND storage for MegaMoE."""
     cast_args = {
         "customize_dtype": torch.float8_e4m3fn,
         "input_dtype": _get_float4_e2m1fn_x2_dtype(),
     }
-    if npu_format is None:
-        weight = npu_format_cast(weight, **cast_args)
-    else:
-        weight = npu_format_cast(weight, npu_format, **cast_args)
+    if not keep_nd:
+        if npu_format is None:
+            weight = npu_format_cast(weight, **cast_args)
+        else:
+            weight = npu_format_cast(weight, npu_format, **cast_args)
     return weight.transpose(-1, -2), reshape_w4a8_mxfp_weight_scale_for_npu(
         weight_scale
     )
@@ -324,8 +326,12 @@ class NPUW4A8MXFP4MoEMethod(_NPUMoEMethodBase):
 
         weight = getattr(layer, f"{weight_prefix}_weight")
         weight_scale = getattr(layer, f"{weight_prefix}_weight_scale")
+        from sglang.srt.hardware_backend.npu.moe.mega_moe import (
+            use_mega_moe_nd_weights,
+        )
+
         weight.data, weight_scale.data = prepare_w4a8_mxfp_weight(
-            weight.data, weight_scale.data
+            weight.data, weight_scale.data, keep_nd=use_mega_moe_nd_weights(layer)
         )
 
         if weight_prefix == "w13" and hasattr(layer, "dispatcher"):
@@ -1153,7 +1159,14 @@ class NPUMXFP8MoEMethod(_NPUMoEMethodBase):
         # llm/probe_mxfp8_moe_nz.py): +1.4% decode, +3.8% prefill against a 0.2-
         # 0.3% noise floor, bit-identical outputs. Set
         # SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT to fall back to plain ND.
-        weight = npu_format_cast(weight)
+        from sglang.srt.hardware_backend.npu.moe.mega_moe import (
+            use_mega_moe_nd_weights,
+        )
+
+        # MegaMoE consumes ND weights. Preserve the source storage here;
+        # transposes below are logical views and do not convert ND to NZ.
+        if not use_mega_moe_nd_weights(layer):
+            weight = npu_format_cast(weight)
 
         # Both paths hand the grouped matmul weight [E, K, N] and scale
         # [E, K//64, N, 2] as strided transpose views — DO NOT call

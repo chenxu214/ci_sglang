@@ -163,6 +163,14 @@ def mega_moe_scale_list(layer, name: str, expected_len: int):
     ]
 
 
+def use_mega_moe_nd_weights(layer) -> bool:
+    """Keep MX weights in ND when either phase uses the MegaMoE provider."""
+    config = getattr(getattr(layer, "dispatcher", None), "moe_ascend_ops_config", None)
+    return config is not None and (
+        config.prefill == "fused_op" or config.decode == "fused_op"
+    )
+
+
 def mega_moe_mxfp_weights(layer):
     """Expose A5 stacked weights without changing the standard GMM views.
 

@@ -231,6 +231,35 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         s13[0, 0, 0, 0] = 129
         self.assertEqual(scales1[0].view(torch.uint8)[0, 0, 0, 0].item(), 129)
 
+    def test_mxfp_megamoe_initialization_keeps_nd_storage(self):
+        """MegaMoE initialization must not retile packed MX weights to NZ."""
+        from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
+            NPUMXFP8MoEMethod,
+            prepare_w4a8_mxfp_weight,
+        )
+
+        module = "sglang.srt.hardware_backend.npu.quantization.moe_methods"
+        for prefill, decode in (("fused_op", "low_latency"), ("alltoallv", "fused_op")):
+            config = SimpleNamespace(prefill=prefill, decode=decode)
+            layer = torch.nn.Module()
+            layer.dispatcher = SimpleNamespace(moe_ascend_ops_config=config)
+            weight = torch.zeros((2, 128, 64), dtype=torch.float8_e4m3fn)
+            scales = torch.full((2, 128, 2), 127, dtype=torch.uint8)
+            layer.w2_weight = torch.nn.Parameter(weight, requires_grad=False)
+            layer.w2_weight_scale = torch.nn.Parameter(scales, requires_grad=False)
+            kernel = NPUMXFP8MoEMethod.__new__(NPUMXFP8MoEMethod)
+            with patch(f"{module}.npu_format_cast", side_effect=AssertionError("NZ cast")):
+                kernel.process_weights_after_loading(layer, "w2")
+                self.assertEqual(layer.w2_weight.data_ptr(), weight.data_ptr())
+                self.assertEqual(layer.w2_weight.shape, (2, 64, 128))
+                packed = torch.zeros((2, 128, 32), dtype=torch.uint8)
+                prepared, prepared_scales = prepare_w4a8_mxfp_weight(
+                    packed, scales, keep_nd=True,
+                )
+                self.assertEqual(prepared.data_ptr(), packed.data_ptr())
+                self.assertEqual(prepared.shape, (2, 32, 128))
+                self.assertEqual(prepared_scales.shape, (2, 1, 128, 2))
+
     def test_mxfp_views_accept_processed_scale_inv(self):
         """FP4 checkpoint processing keeps paired E8M0 under scale_inv."""
         weight = torch.zeros((2, 64, 128), dtype=torch.float8_e4m3fn)

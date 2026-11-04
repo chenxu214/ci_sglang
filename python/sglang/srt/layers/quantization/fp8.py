@@ -3041,8 +3041,9 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         """Convert HF MXFP4 experts to the NPU W4A8 kernel layout.
 
         HF stores packed FP4 weights as int8 and block scales as float32; the
-        NPU kernel expects the weight in FRACTAL_NZ (transposed) and the scale
-        as e8m0 (uint8) reshaped to [E, K//64, N, 2].
+        The ordinary NPU kernel uses FRACTAL_NZ; MegaMoE keeps packed ND
+        weights. Both retain transposed views and E8M0 (uint8) scales
+        reshaped to [E, K//64, N, 2].
         """
         from sglang.srt.hardware_backend.npu.quantization.linear_method_npu import (
             _get_float4_e2m1fn_x2_dtype,
@@ -3053,13 +3054,21 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         if fp4_dtype is None:
             raise RuntimeError("NPU W4A8 MXFP MoE requires float4 support.")
 
+        from sglang.srt.hardware_backend.npu.moe.mega_moe import (
+            use_mega_moe_nd_weights,
+        )
+
+        keep_nd = use_mega_moe_nd_weights(layer)
         for prefix in ("w13", "w2"):
             weight = getattr(layer, f"{prefix}_weight")
-            weight.data = npu_format_cast(
-                weight.data.view(torch.uint8),
-                customize_dtype=torch.float8_e4m3fn,
-                input_dtype=fp4_dtype,
-            ).transpose(-1, -2)
+            packed = weight.data.view(torch.uint8)
+            if not keep_nd:
+                packed = npu_format_cast(
+                    packed,
+                    customize_dtype=torch.float8_e4m3fn,
+                    input_dtype=fp4_dtype,
+                )
+            weight.data = packed.transpose(-1, -2)
 
             # Two e8m0 storage conventions in the fp32 scales: (a) the value
             # IS the e8m0 byte (int in 0..255, MiMo-V2.5-Pro); (b) the value
