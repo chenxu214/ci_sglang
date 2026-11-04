@@ -14,6 +14,7 @@ import torch
 from sglang.srt.hardware_backend.npu.moe.mega_moe import (
     get_mega_moe_sym_buffer,
     mega_moe_activation_args,
+    mega_moe_mxfp_weights,
     mega_moe_quant_args,
     mega_moe_weight_list,
     run_mega_moe,
@@ -203,6 +204,213 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
             (0, None),
         )
 
+    def test_mxfp_views_preserve_expert_axes_and_scale_bits(self):
+        """A5 must see stacked expert scales as E8M0, not flattened UINT64."""
+        w13 = torch.arange(2 * 8 * 64).reshape(2, 8, 64).to(torch.float8_e4m3fn)
+        w2 = torch.ones((2, 64, 64), dtype=torch.float8_e4m3fn)
+        s13 = torch.arange(2 * 8 * 2, dtype=torch.uint8).reshape(2, 8, 1, 2)
+        s2 = torch.full((2, 64, 1, 2), 127, dtype=torch.uint8)
+        layer = SimpleNamespace(
+            w13_weight=w13.transpose(1, 2),
+            w2_weight=w2.transpose(1, 2),
+            w13_weight_scale=s13.transpose(1, 2),
+            w2_weight_scale=s2.transpose(1, 2),
+        )
+        weights1, weights2, scales1, scales2 = mega_moe_mxfp_weights(layer)
+        for result, expected in ((weights1, w13), (weights2, w2)):
+            self.assertEqual(len(result), 1)
+            torch.testing.assert_close(result[0].float(), expected.float())
+            self.assertEqual(result[0].data_ptr(), expected.data_ptr())
+        for result, expected in ((scales1, s13), (scales2, s2)):
+            self.assertEqual(result[0].dtype, torch.float8_e8m0fnu)
+            self.assertEqual(result[0].data_ptr(), expected.data_ptr())
+            torch.testing.assert_close(result[0].view(torch.uint8), expected)
+        # Source parameters must still serve standard prefill GMMs.
+        self.assertEqual(layer.w13_weight.shape, (2, 64, 8))
+        self.assertEqual(layer.w13_weight_scale.dtype, torch.uint8)
+        s13[0, 0, 0, 0] = 129
+        self.assertEqual(scales1[0].view(torch.uint8)[0, 0, 0, 0].item(), 129)
+
+    def test_a5_buffer_uses_type_code_abi_and_reuses_across_batch_sizes(self):
+        """PR #9569's receive capacity must not depend on local token count."""
+        module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
+        provider = ModuleType("npu_ops_transformer.ops")
+        buffers = []
+
+        def create_buffer(
+            group,
+            *,
+            num_experts,
+            num_max_tokens_per_rank,
+            num_topk,
+            hidden,
+            intermediate_hidden,
+            max_recv_token_num,
+            dispatch_quant_mode,
+            dispatch_quant_out_type,
+        ):
+            self.assertEqual(num_max_tokens_per_rank, 0)
+            self.assertEqual(intermediate_hidden, 4096)
+            self.assertEqual(max_recv_token_num, 196608)
+            self.assertEqual(dispatch_quant_mode, 4)
+            self.assertEqual(dispatch_quant_out_type, 24)
+            buffers.append(object())
+            return buffers[-1]
+
+        provider.get_symm_buffer_for_mega_moe = create_buffer
+        backend = Mock()
+        backend.get_hccl_comm_name.return_value = "ep_comm"
+        group = Mock()
+        group._get_backend.return_value = backend
+        config = SimpleNamespace(
+            num_experts=256,
+            top_k=8,
+            hidden_size=6144,
+            intermediate_size_per_partition=2048,
+        )
+        with (
+            patch.dict("sys.modules", {provider.__name__: provider}),
+            patch(f"{module}._SYMM_BUFFER_CACHE", {}),
+            patch(
+                f"{module}.torch.npu",
+                SimpleNamespace(current_device=lambda: 0),
+                create=True,
+            ),
+            patch(f"{module}.torch.device", return_value=torch.device("cpu")),
+            patch(f"{module}.torch.distributed.get_rank", return_value=0),
+        ):
+            first = get_mega_moe_sym_buffer(
+                config,
+                {"normal_dispatcher_output_dtype": "bf16"},
+                group,
+                1,
+                "normal",
+                mxfp=True,
+            )
+            second = get_mega_moe_sym_buffer(
+                config,
+                {"low_latency_dispatcher_output_dtype": "mxfp8"},
+                group,
+                128,
+                "low_latency",
+                mxfp=True,
+            )
+            self.assertIs(first, second)
+            self.assertEqual(len(buffers), 1)
+
+    def test_a5_buffer_accepts_dtype_abi(self):
+        """New ops-transformer releases name the dtype argument differently."""
+        module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
+        provider = ModuleType("npu_ops_transformer.ops")
+        buffer = object()
+
+        def create_buffer(
+            group,
+            *,
+            num_experts,
+            num_max_tokens_per_rank,
+            num_topk,
+            hidden,
+            intermediate_hidden,
+            max_recv_token_num,
+            dispatch_quant_mode,
+            dispatch_quant_out_dtype,
+        ):
+            self.assertEqual(num_max_tokens_per_rank, 16)
+            self.assertEqual(intermediate_hidden, 2048)
+            self.assertEqual(dispatch_quant_mode, 4)
+            self.assertEqual(dispatch_quant_out_dtype, torch.float8_e4m3fn)
+            return buffer
+
+        provider.get_symm_buffer_for_mega_moe = create_buffer
+        backend = Mock()
+        backend.get_hccl_comm_name.return_value = "ep_comm"
+        group = Mock()
+        group._get_backend.return_value = backend
+        config = SimpleNamespace(
+            num_experts=256,
+            top_k=8,
+            hidden_size=6144,
+            intermediate_size_per_partition=2048,
+        )
+        with (
+            patch.dict("sys.modules", {provider.__name__: provider}),
+            patch(f"{module}._SYMM_BUFFER_CACHE", {}),
+            patch(
+                f"{module}.torch.npu",
+                SimpleNamespace(current_device=lambda: 0),
+                create=True,
+            ),
+            patch(f"{module}.torch.device", return_value=torch.device("cpu")),
+            patch(f"{module}.torch.distributed.get_rank", return_value=0),
+        ):
+            self.assertIs(
+                get_mega_moe_sym_buffer(config, {}, group, 16, mxfp=True), buffer
+            )
+            self.assertIs(
+                get_mega_moe_sym_buffer(config, {}, group, 8, mxfp=True), buffer
+            )
+
+    def test_a5_mxfp_forward_matches_expert_reference(self):
+        """The fused boundary must preserve expert axes and decode E8M0 bytes."""
+        provider = ModuleType("npu_ops_transformer.ops")
+
+        def mega_moe(x, ids, probs, l1, l2, buffer, **kwargs):
+            # CPU stand-in for the external operator's documented stacked ABI.
+            w1, w2 = l1[0].float(), l2[0].float()
+            s1 = kwargs["l1_weights_sf"][0].float().flatten(-2)
+            s2 = kwargs["l2_weights_sf"][0].float().flatten(-2)
+            w1 = w1 * s1.repeat_interleave(32, dim=-1)
+            w2 = w2 * s2.repeat_interleave(32, dim=-1)
+            output = torch.zeros_like(x)
+            for token in range(x.shape[0]):
+                for k in range(ids.shape[1]):
+                    expert = ids[token, k].item()
+                    gate, up = (x[token] @ w1[expert].T).chunk(2)
+                    output[token] += (
+                        probs[token, k]
+                        * (torch.nn.functional.silu(gate) * up)
+                        @ w2[expert].T
+                    )
+            return output, None
+
+        provider.mega_moe = mega_moe
+        w1 = torch.full((2, 128, 64), 0.25, dtype=torch.float8_e4m3fn)
+        w2 = torch.full((2, 64, 64), 0.5, dtype=torch.float8_e4m3fn)
+        s1 = torch.full((2, 128, 1, 2), 127, dtype=torch.uint8)
+        s2 = torch.full((2, 64, 1, 2), 128, dtype=torch.uint8)
+        layer = SimpleNamespace(
+            w13_weight=w1.transpose(1, 2),
+            w2_weight=w2.transpose(1, 2),
+            w13_weight_scale=s1.transpose(1, 2),
+            w2_weight_scale=s2.transpose(1, 2),
+        )
+        config = SimpleNamespace(
+            layer=layer,
+            activation="silu",
+            gemm1_alpha=None,
+            gemm1_clamp_limit=None,
+            swiglu_limit=None,
+        )
+        x = torch.full((1, 64), 0.125)
+        module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
+        with (
+            patch.dict("sys.modules", {provider.__name__: provider}),
+            patch(f"{module}.check_mega_moe_kernel", return_value=True),
+            patch(f"{module}.get_mega_moe_sym_buffer", return_value=object()),
+        ):
+            result = run_mega_moe(
+                config,
+                {},
+                x,
+                torch.tensor([[0.25, 0.75]]),
+                torch.tensor([[1, 0]]),
+                object(),
+            )
+        gate = torch.full((1, 64), 2.0)
+        expected = (torch.nn.functional.silu(gate) * gate) @ torch.ones((64, 64))
+        torch.testing.assert_close(result, expected)
+
     # Protects model activation settings from being silently changed by fused dispatch.
     def test_mega_moe_activation_args_preserve_silu_clamp(self):
         config = type(
@@ -264,22 +472,28 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         topk_ids = torch.zeros((1, 2), dtype=torch.int32)
         group = object()
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "sgl_kernel_npu": fake_root,
-                "sgl_kernel_npu.modules": fake_parent,
-                "sgl_kernel_npu.modules.moe": fake_moe_module,
-            },
-        ), patch(
-            "sglang.srt.layers.dp_attention.is_dp_attention_enabled",
-            return_value=False,
-        ), patch(
-            "sglang.srt.hardware_backend.npu.moe.mega_moe.check_mega_moe_kernel",
-        ), patch(
-            "sglang.srt.hardware_backend.npu.moe.mega_moe.get_mega_moe_sym_buffer",
-            return_value="sym_buffer",
-        ) as get_buffer:
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "sgl_kernel_npu": fake_root,
+                    "sgl_kernel_npu.modules": fake_parent,
+                    "sgl_kernel_npu.modules.moe": fake_moe_module,
+                },
+            ),
+            patch(
+                "sglang.srt.layers.dp_attention.is_dp_attention_enabled",
+                return_value=False,
+            ),
+            patch(
+                "sglang.srt.hardware_backend.npu.moe.mega_moe.check_mega_moe_kernel",
+                return_value=False,
+            ),
+            patch(
+                "sglang.srt.hardware_backend.npu.moe.mega_moe.get_mega_moe_sym_buffer",
+                return_value="sym_buffer",
+            ) as get_buffer,
+        ):
             result = run_mega_moe(
                 runner_config,
                 {"dispatcher_output_dtype": "bf16"},

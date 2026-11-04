@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Dict, Optional, Tuple
 
 import torch
-
 
 _SYMM_BUFFER_CACHE: dict[tuple, tuple[int, object]] = {}
 
@@ -40,6 +40,8 @@ def mega_moe_quant_args(
         return 2, torch.int8
     if dtype in ("mxfp8", "mx_fp8_e4m3", "float8_e4m3fn"):
         return 4, torch.float8_e4m3fn
+    if dtype in ("float8_e5m2", "mx_fp8_e5m2"):
+        return 4, torch.float8_e5m2
     if dtype in ("mxfp4", "mx_fp4_e2m1"):
         try:
             import torch_npu
@@ -161,8 +163,33 @@ def mega_moe_scale_list(layer, name: str, expected_len: int):
     ]
 
 
-def check_mega_moe_kernel(layer) -> None:
-    """Reject quantization methods that the operator interface cannot serve."""
+def mega_moe_mxfp_weights(layer):
+    """Expose A5 stacked weights without changing the standard GMM views.
+
+    The loading path stores [E, K, N] weights and [E, K/64, N, 2]
+    scales as transpose views. MegaMoE needs their original [E, N, K]
+    and [E, N, K/64, 2] layouts, with the scale bytes typed as E8M0.
+    These are storage-sharing views, so mixed prefill/decode paths and
+    weight updates continue to use the same parameters.
+    """
+    scale_dtype = getattr(torch, "float8_e8m0fnu", None)
+    if scale_dtype is None:
+        raise RuntimeError("A5 MegaMoE requires torch.float8_e8m0fnu")
+    weights, scales = [], []
+    for prefix in ("w13", "w2"):
+        weight = getattr(layer, f"{prefix}_weight")
+        scale = getattr(layer, f"{prefix}_weight_scale")
+        if weight.ndim != 3 or scale.ndim != 4:
+            raise ValueError(
+                "A5 MegaMoE requires stacked MXFP weights and paired scales"
+            )
+        weights.append([weight.transpose(1, 2)])
+        scales.append([scale.transpose(1, 2).view(scale_dtype)])
+    return weights[0], weights[1], scales[0], scales[1]
+
+
+def check_mega_moe_kernel(layer) -> bool:
+    """Validate the quantizer and identify the A5 MXFP operator path."""
 
     from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
         NPUMXFP8MoEMethod,
@@ -186,6 +213,8 @@ def check_mega_moe_kernel(layer) -> None:
             f"{_MEGA_MOE_SUPPORTED_KERNELS_MSG}"
         )
 
+    return isinstance(kernel, (NPUMXFP8MoEMethod, NPUW4A8MXFP4MoEMethod))
+
 
 def get_mega_moe_sym_buffer(
     runner_config,
@@ -193,12 +222,28 @@ def get_mega_moe_sym_buffer(
     group,
     num_tokens: int,
     dtype_mode: Optional[str] = None,
+    *,
+    mxfp: bool = False,
 ):
-    """Get a capacity-stable SymmBuffer for one Ascend runner configuration."""
+    """Get a shared SymmBuffer for one Ascend runner configuration."""
 
-    from sgl_kernel_npu.modules.moe import get_symm_buffer_for_mega_moe
+    if mxfp:
+        from npu_ops_transformer.ops import get_symm_buffer_for_mega_moe
+    else:
+        from sgl_kernel_npu.modules.moe import get_symm_buffer_for_mega_moe
 
     quant_mode, quant_dtype = mega_moe_quant_args(quant_config, dtype_mode)
+    if mxfp:
+        # Normal dispatch may use BF16 for standard prefill GMMs. MegaMoE
+        # quantizes internally and must still use MXFP8 for MXFP weights.
+        quant_mode = 4
+        if quant_dtype is None:
+            quant_dtype = torch.float8_e4m3fn
+    legacy_mxfp = (
+        mxfp
+        and "dispatch_quant_out_type"
+        in inspect.signature(get_symm_buffer_for_mega_moe).parameters
+    )
     key = (
         id(group),
         int(runner_config.num_experts),
@@ -207,9 +252,12 @@ def get_mega_moe_sym_buffer(
         int(runner_config.intermediate_size_per_partition),
         quant_mode,
         quant_dtype,
+        mxfp,
     )
     state = _SYMM_BUFFER_CACHE.get(key)
-    max_tokens = max(num_tokens, state[0] if state is not None else 1)
+    # PR #9569's A5 ABI sizes the buffer by max_recv_token_num, independent
+    # of the local batch size. Do not rebuild it as decode batches grow.
+    max_tokens = 0 if legacy_mxfp else max(num_tokens, state[0] if state else 1)
     if state is not None and state[0] == max_tokens:
         return state[1]
     if state is None:
@@ -223,18 +271,27 @@ def get_mega_moe_sym_buffer(
         else:
             comm_name = group.get_hccl_comm_name(ep_rank, init_comm=True)
         if not comm_name:
-            raise RuntimeError("MegaMoE EP HCCL comm name is empty after initialization")
+            raise RuntimeError(
+                "MegaMoE EP HCCL comm name is empty after initialization"
+            )
     if state is not None and hasattr(state[1], "destroy"):
         state[1].destroy()
+    quant_kwargs = {"dispatch_quant_out_dtype": quant_dtype}
+    if legacy_mxfp:
+        dtype_codes = {torch.float8_e5m2: 23, torch.float8_e4m3fn: 24}
+        if quant_dtype not in dtype_codes:
+            raise ValueError("The A5 MegaMoE type-code ABI requires MXFP8 activations")
+        quant_kwargs = {"dispatch_quant_out_type": dtype_codes[quant_dtype]}
     buffer = get_symm_buffer_for_mega_moe(
         group,
         num_experts=key[1],
         num_max_tokens_per_rank=max_tokens,
         num_topk=key[2],
         hidden=key[3],
-        intermediate_hidden=key[4],
+        intermediate_hidden=key[4] * (2 if legacy_mxfp else 1),
+        **({"max_recv_token_num": 65536 * 3} if mxfp else {}),
         dispatch_quant_mode=quant_mode,
-        dispatch_quant_out_dtype=quant_dtype,
+        **quant_kwargs,
     )
     _SYMM_BUFFER_CACHE[key] = (max_tokens, buffer)
     return buffer
@@ -259,30 +316,36 @@ def run_mega_moe(
     layer = runner_config.layer
     if layer is None:
         raise RuntimeError("MegaMoE fused-op requires the owning MoE layer")
-    check_mega_moe_kernel(layer)
+    mxfp = check_mega_moe_kernel(layer)
+    if mxfp:
+        from npu_ops_transformer.ops import mega_moe
+    else:
+        from sgl_kernel_npu.modules.moe import mega_moe
 
-    from sgl_kernel_npu.modules.moe import mega_moe
-
-    w13_weights = mega_moe_weight_list(layer.w13_weight)
-    w2_weights = mega_moe_weight_list(layer.w2_weight, len(w13_weights))
-    if len(w2_weights) != len(w13_weights):
+    if mxfp:
+        w13_weights, w2_weights, w13_scales, w2_scales = mega_moe_mxfp_weights(layer)
+        num_w13_experts = w13_weights[0].shape[0]
+        num_w2_experts = w2_weights[0].shape[0]
+    else:
+        w13_weights = mega_moe_weight_list(layer.w13_weight)
+        w2_weights = mega_moe_weight_list(layer.w2_weight, len(w13_weights))
+        num_w13_experts, num_w2_experts = len(w13_weights), len(w2_weights)
+        w13_scales = mega_moe_scale_list(layer, "w13_weight_scale", num_w13_experts)
+        w2_scales = mega_moe_scale_list(layer, "w2_weight_scale", num_w2_experts)
+    if num_w13_experts != num_w2_experts:
         raise ValueError(
             "MegaMoE requires w13_weight and w2_weight to have the same "
-            f"expert count, got {len(w13_weights)} and {len(w2_weights)}"
+            f"expert count, got {num_w13_experts} and {num_w2_experts}"
         )
 
     activation, activation_clamp, activation_params = mega_moe_activation_args(
         runner_config
     )
     mega_moe_kwargs = dict(
-        l1_weights_sf=mega_moe_scale_list(
-            layer, "w13_weight_scale", len(w13_weights)
-        ),
-        l2_weights_sf=mega_moe_scale_list(
-            layer, "w2_weight_scale", len(w13_weights)
-        ),
-        l1_bias=mega_moe_bias_list(layer, "w13", len(w13_weights)),
-        l2_bias=mega_moe_bias_list(layer, "w2", len(w13_weights)),
+        l1_weights_sf=w13_scales,
+        l2_weights_sf=w2_scales,
+        l1_bias=mega_moe_bias_list(layer, "w13", num_w13_experts),
+        l2_bias=mega_moe_bias_list(layer, "w2", num_w2_experts),
         activation=activation,
         activation_clamp=activation_clamp,
     )
@@ -298,6 +361,14 @@ def run_mega_moe(
     if activation_params is not None:
         mega_moe_kwargs["activation_params"] = activation_params
 
+    if mxfp and layer.w2_weight.dtype != torch.float8_e4m3fn:
+        # Packed MXFP4 weights use a byte carrier. The newer CANN ABI needs
+        # the logical weight type explicitly rather than inferring INT8.
+        import torch_npu
+
+        weight_type = torch_npu.float4_e2m1fn_x2
+        mega_moe_kwargs.update(weight1_type=weight_type, weight2_type=weight_type)
+
     output, _ = mega_moe(
         hidden_states,
         topk_ids,
@@ -310,6 +381,7 @@ def run_mega_moe(
             group,
             hidden_states.shape[0],
             dtype_mode,
+            **({"mxfp": True} if mxfp else {}),
         ),
         **mega_moe_kwargs,
     )
