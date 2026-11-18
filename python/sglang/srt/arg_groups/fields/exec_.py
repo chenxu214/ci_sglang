@@ -930,6 +930,7 @@ class ExecMoe(msgspec.Struct):
             "ascend_ops",
             "pplx",
             "flashinfer_megamoe",
+            "zbal_fuseep",
         ],
         Arg(
             help="Choose the backend for MoE A2A. 'flashinfer_nvlink_one_sided' is "
@@ -948,6 +949,7 @@ class ExecMoe(msgspec.Struct):
                 "pplx",
                 "ascend_ops",
                 "flashinfer_megamoe",
+                "zbal_fuseep",
             ],
             resolvable=True,
         ),

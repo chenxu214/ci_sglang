@@ -218,10 +218,13 @@ def create_moe_dispatcher(
         or a2a_backend.is_megamoe()
         or a2a_backend.is_flashinfer_megamoe()
         or a2a_backend.is_ascend_fuseep()
+        or a2a_backend.is_zbal_fuseep()
     ):
         # ascend_fuseep bypasses the dispatcher abstraction (see
         # forward_fuseep in hardware_backend/npu/moe/fuseep.py); a
         # StandardDispatcher is created but never invoked.
+        # zbal_fuseep does the same through zbal_fuseep.forward (dispatch + GMM +
+        # combine inside one op), so its dispatcher is likewise never invoked.
         # flashinfer_megamoe does its EP all-to-all inside the kernel, so the
         # dispatcher stays a pure noop passthrough.
         # On NPU the no-A2A path is this same dispatcher: the Ascend routing
@@ -379,6 +382,8 @@ class FusedMoE(torch.nn.Module):
     scheme = None
 
     _skip_aiter_moe_shuffle: bool = False
+
+    _use_zbal_fuseep: bool = False
 
     def __init__(
         self,
@@ -1709,6 +1714,10 @@ class FusedMoE(torch.nn.Module):
         topk_output: TopKOutput,
         pre_quant_input: Optional[Tuple] = None,
     ):
+        if self._use_zbal_fuseep:
+            from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
+
+            return zbal_fuseep.forward(self, hidden_states, topk_output)
         if self._use_ascend_fuseep:
             from sglang.srt.hardware_backend.npu.moe.fuseep import forward_fuseep
 

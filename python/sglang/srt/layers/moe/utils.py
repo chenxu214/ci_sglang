@@ -41,6 +41,7 @@ class MoeA2ABackend(Enum):
     MORI = "mori"
     ASCEND_FUSEEP = "ascend_fuseep"
     ASCEND_OPS = "ascend_ops"
+    ZBAL_FUSEEP = "zbal_fuseep"
     FLASHINFER = "flashinfer_nvlink_one_sided"
     MEGAMOE = "megamoe"
     DEEPEP_V2 = "deepep_v2"
@@ -77,6 +78,9 @@ class MoeA2ABackend(Enum):
 
     def is_ascend_ops(self):
         return self == MoeA2ABackend.ASCEND_OPS
+
+    def is_zbal_fuseep(self):
+        return self == MoeA2ABackend.ZBAL_FUSEEP
 
     def is_mori(self):
         return self == MoeA2ABackend.MORI

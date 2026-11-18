@@ -207,6 +207,10 @@ class DeepEPMoE(FusedMoE):
         hidden_states: torch.Tensor,
         topk_output: TopKOutput,
     ):
+        if self._use_zbal_fuseep:
+            from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
+
+            return zbal_fuseep.forward(self, hidden_states, topk_output)
         # DeepEP NORMAL mode is not capturable; run it as an eager node.
         if is_in_breakable_cuda_graph():
             assert TopKOutputChecker.format_is_standard(topk_output), (

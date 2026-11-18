@@ -885,6 +885,7 @@ class DeepseekV2MoE(nn.Module):
                 or get_moe_a2a_backend().is_nixl()
                 or get_moe_a2a_backend().is_mori()
                 or get_moe_a2a_backend().is_ascend_fuseep()
+                or get_moe_a2a_backend().is_zbal_fuseep()
                 or get_moe_a2a_backend().is_flashinfer()
                 or get_moe_a2a_backend().is_megamoe()
                 or get_moe_a2a_backend().is_flashinfer_megamoe()
@@ -986,6 +987,7 @@ class DeepseekV2MoE(nn.Module):
             or get_moe_a2a_backend().is_nixl()
             or get_moe_a2a_backend().is_mori()
             or get_moe_a2a_backend().is_ascend_fuseep()
+            or get_moe_a2a_backend().is_zbal_fuseep()
             or get_moe_a2a_backend().is_deepep_v2()
             or get_moe_a2a_backend().is_ascend_ops()
         ):
@@ -1009,6 +1011,7 @@ class DeepseekV2MoE(nn.Module):
             or get_moe_a2a_backend().is_nixl()
             or get_moe_a2a_backend().is_mori()
             or get_moe_a2a_backend().is_ascend_fuseep()
+            or get_moe_a2a_backend().is_zbal_fuseep()
             or get_moe_a2a_backend().is_flashinfer()
             or get_moe_a2a_backend().is_deepep_v2()
             or get_moe_a2a_backend().is_ascend_ops()

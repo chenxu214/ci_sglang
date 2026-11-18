@@ -487,6 +487,7 @@ class Glm4MoeSparseMoeBlock(nn.Module):
                 or get_moe_a2a_backend().is_nixl()
                 or get_moe_a2a_backend().is_mori()
                 or get_moe_a2a_backend().is_ascend_fuseep()
+                or get_moe_a2a_backend().is_zbal_fuseep()
                 or get_moe_a2a_backend().is_flashinfer()
                 or get_moe_a2a_backend().is_flashinfer_megamoe()
                 or should_use_flashinfer_cutlass_moe_fp4_allgather()
@@ -532,6 +533,7 @@ class Glm4MoeSparseMoeBlock(nn.Module):
             or get_moe_a2a_backend().is_nixl()
             or get_moe_a2a_backend().is_mori()
             or get_moe_a2a_backend().is_ascend_fuseep()
+            or get_moe_a2a_backend().is_zbal_fuseep()
         ):
             # TODO: we will support tp < ep in the future
             self.ep_size = get_parallel().moe_ep_size
@@ -554,6 +556,7 @@ class Glm4MoeSparseMoeBlock(nn.Module):
             or get_moe_a2a_backend().is_nixl()
             or get_moe_a2a_backend().is_mori()
             or get_moe_a2a_backend().is_ascend_fuseep()
+            or get_moe_a2a_backend().is_zbal_fuseep()
             or get_moe_a2a_backend().is_flashinfer()
         )
         self._fuse_shared_experts_inside_sbo = SboFlags.fuse_shared_experts_inside_sbo()

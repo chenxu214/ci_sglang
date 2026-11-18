@@ -1837,6 +1837,9 @@ def _a2a_fusion_adjustments(view: Any) -> dict:
     if view.moe_a2a_backend == "deepep_v2":
         # Fused shared experts are not validated with DeepEP v2.
         return {"disable_shared_experts_fusion": True}
+    if view.moe_a2a_backend == "zbal_fuseep":
+        # zbal fuseep is un-compatible with shared experts fusion
+        return {"disable_shared_experts_fusion": True}
     return {}
 
 
@@ -1855,6 +1858,7 @@ _A2A_EP_SPANNING_BACKENDS = frozenset(
         "pplx",
         "ascend_ops",
         "deepep_v2",
+        "zbal_fuseep",
     }
 )
 
@@ -1863,6 +1867,12 @@ _A2A_EP_SPANNING_BACKENDS = frozenset(
 def _a2a_backend_overrides(view: Any) -> dict:
 
     moe_a2a_backend = view.moe_a2a_backend
+    if view.enable_waterfill and moe_a2a_backend == "zbal_fuseep":
+        raise ValueError(
+            "--enable-waterfill is incompatible with --moe-a2a-backend "
+            "zbal_fuseep: FuseEP owns the expert exchange and cannot be "
+            "replaced by Waterfill's DeepEP path."
+        )
     if view.enable_waterfill and moe_a2a_backend not in ("deepep", "megamoe"):
         logger.warning(
             "moe_a2a_backend is overridden to 'deepep' because Waterfill "

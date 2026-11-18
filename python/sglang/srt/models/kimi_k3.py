@@ -515,6 +515,7 @@ def _uses_ep_a2a() -> bool:
         or _a2a_backend.is_ascend_ops()
         or _a2a_backend.is_mooncake()
         or _a2a_backend.is_ascend_fuseep()
+        or _a2a_backend.is_zbal_fuseep()
         or _a2a_backend.is_mori()
     )
 

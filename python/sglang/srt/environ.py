@@ -1316,6 +1316,8 @@ class Envs:
     DEEP_NORMAL_MODE_USE_INT8_QUANT = EnvBool(False)
     SGLANG_ZBAL_LOCAL_MEM_SIZE = EnvInt(0)
     SGLANG_ZBAL_BOOTSTRAP_URL = EnvStr("")
+    # MoE layers (MTP/nextn included) sizing the FuseEP pool (--moe-a2a-backend zbal_fuseep); 0 = fail fast.
+    SGLANG_ZBAL_DFC_MOE_LAYERS = EnvInt(0)
     # Set to 0 to allow AscendAttnBackend to set needs_cpu_seq_lens to False for dsa models.
     SGLANG_NPU_ATTN_BACKEND_NEEDS_CPU_SEQ_LENS = EnvBool(True)
 

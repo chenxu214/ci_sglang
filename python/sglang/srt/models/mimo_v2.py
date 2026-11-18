@@ -528,6 +528,7 @@ class MiMoV2MoE(nn.Module):
             is_deepep_class_backend()
             or get_moe_a2a_backend().is_ascend_ops()
             or get_moe_a2a_backend().is_ascend_fuseep()
+            or get_moe_a2a_backend().is_zbal_fuseep()
         )
         if self._enable_a2a_moe:
             # TODO: we will support tp < ep in the future

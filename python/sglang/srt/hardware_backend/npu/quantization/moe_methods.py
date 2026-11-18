@@ -617,6 +617,11 @@ class NPUW8A8Int8MoEMethod(_NPUMoEMethodBase):
     def process_weights_after_loading(
         self, layer: torch.nn.Module, weight_prefix: str
     ) -> None:
+        from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
+        if zbal_fuseep.use_zbal_fuseep():
+            zbal_fuseep.prepare_weights(layer, weight_prefix)
+            return
+
         # If the FuseEP weight layout is used, process weights via
         # maybe_apply_fuseep_weights and skip the rest of this method.
         if self.maybe_process_fuseep_weights(layer):
@@ -1097,6 +1102,11 @@ class NPUMXFP8MoEMethod(_NPUMoEMethodBase):
     def process_weights_after_loading(
         self, layer: torch.nn.Module, weight_prefix: str
     ) -> None:
+        from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
+        if zbal_fuseep.use_zbal_fuseep():
+            zbal_fuseep.prepare_weights(layer, weight_prefix)
+            return
+
         self._validate_weight_prefix(layer, weight_prefix)
 
         weight: torch.Tensor = getattr(layer, f"{weight_prefix}_weight").data

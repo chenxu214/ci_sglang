@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple, Uni
 
 import torch
 
+from sglang.srt.hardware_backend.npu.moe.zbal_fuseep import ZbalPooledWeightsMixin
 from sglang.srt.hardware_backend.npu.quantization.linear_method_npu import (
     _NPULinearMethodBase,
 )
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+_rmsnorm_fallback_logged = False
 
 
 # func refers to RMSNorm.__init__
@@ -75,16 +77,34 @@ def npu_wrapper_rmsnorm_forward(func):
         if residual is not None:
             if post_residual_addition is not None:
                 residual = residual + post_residual_addition
-            from sgl_kernel_npu.norm.add_rmsnorm_bias import add_rmsnorm_bias
+            try:
+                from sgl_kernel_npu.norm.add_rmsnorm_bias import add_rmsnorm_bias
 
-            out, residual_out = add_rmsnorm_bias(
-                x,
-                residual,
-                self.weight.data,
-                self.bias,
-                self.variance_epsilon,
-            )
-            return out.to(x.dtype), residual_out
+                out, residual_out = add_rmsnorm_bias(
+                    x,
+                    residual,
+                    self.weight.data,
+                    self.bias,
+                    self.variance_epsilon,
+                )
+                return out.to(x.dtype), residual_out
+            except (ImportError, TypeError) as exc:
+                # 部分镜像里 sgl_kernel_npu 的 Triton add_rmsnorm_bias 与本机 Triton 的
+                # kernel launcher 签名不匹配(launch expects N args, got M)，退回原生算子
+                # 组合：数学等价，只少一次融合。
+                global _rmsnorm_fallback_logged
+                if not _rmsnorm_fallback_logged:
+                    _rmsnorm_fallback_logged = True
+                    logger.warning(
+                        "add_rmsnorm_bias unavailable (%s); falling back to npu_rms_norm",
+                        exc,
+                    )
+                residual_out = x + residual
+                out = torch.ops.npu.npu_rms_norm(
+                    residual_out, self.weight.data, self.variance_epsilon
+                )[0]
+                out = out + self.bias
+                return out.to(x.dtype), residual_out
 
         out = torch.ops.npu.npu_rms_norm(x, self.weight.data, self.variance_epsilon)[0]
         out = out + self.bias
@@ -707,7 +727,7 @@ class ModelSlimLinearMethod(_NPULinearMethodBase):
         return scheme.apply_weights(layer, x, bias=bias)
 
 
-class ModelSlimFusedMoEMethod(FusedMoEMethodBase):
+class ModelSlimFusedMoEMethod(ZbalPooledWeightsMixin, FusedMoEMethodBase):
     """
     Fused MoE method for ModelSlim quantization on Ascend NPU.
 
