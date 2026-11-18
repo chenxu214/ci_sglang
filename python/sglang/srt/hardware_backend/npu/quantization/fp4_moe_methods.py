@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
+from sglang.srt.hardware_backend.npu.moe.zbal_fuseep import ZbalPooledWeightsMixin
 from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
     NPUW4A8MXFP4MoEMethod,
 )
@@ -36,12 +38,14 @@ def _wrap_mxfp4_scale_weight_loader(weight_loader):
     return load_scale
 
 
-class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
+class NPUW4A8MXFP4FusedMoEMethod(ZbalPooledWeightsMixin, FusedMoEMethodBase):
     """DeepSeek-V4 routed experts on Ascend 950: W4A8 MXFP weights.
 
     The checkpoint-specific loading remains here while execution is delegated
     to the shared Ascend MoE runner.
     """
+
+    zbal_weight_layouts = ("w4a8", "w4a8")
 
     def __init__(self, prefix: str = ""):
         self.prefix = prefix
@@ -151,6 +155,9 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         from sglang.srt.hardware_backend.npu.utils import NPUACLFormat
 
+        if getattr(layer, "_zbal_fuseep_prefixes", None) == {"w13", "w2"}:
+            return
+
         if layer.w13_weight_scale_inv.data.max() == 0:
             raise RuntimeError(
                 f"FP4 expert weight scales are all zero (never loaded) for "
@@ -163,6 +170,19 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
                 f"prefix={self.prefix!r}; the checkpoint scale names likely did "
                 "not match w2_weight_scale_inv."
             )
+
+        if zbal_fuseep.use_zbal_fuseep():
+            # Checkpoint MXFP4 payloads already have the FuseEP ND layout.
+            # Keep their pooled storage and expose E8M0 scales under the ABI names
+            # before packing; the native NZ conversion below would replace it.
+            for prefix in ("w13", "w2"):
+                scale_name = f"{prefix}_weight_scale_inv"
+                layer.register_parameter(
+                    f"{prefix}_weight_scale", getattr(layer, scale_name)
+                )
+                zbal_fuseep.prepare_weights(layer, prefix)
+                layer.register_parameter(scale_name, None)
+            return
 
         nz_format = NPUACLFormat.ACL_FORMAT_FRACTAL_NZ
         process_npu_fp4_expert_weights(layer, npu_format=nz_format)
