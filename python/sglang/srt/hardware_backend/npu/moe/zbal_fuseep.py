@@ -45,7 +45,10 @@ _SCHEME_LAYOUTS = {
 
 
 def _scheme_layouts(layer: FusedMoE) -> tuple:
-    """(w13, w2) ABI of one layer, read from its two ModelSlim schemes."""
+    """(w13, w2) ABI declared by the quant method or its ModelSlim schemes."""
+    layouts = getattr(layer.quant_method, "zbal_weight_layouts", None)
+    if layouts is not None:
+        return layouts
     layouts = []
     for attr in ("w13_scheme", "w2_scheme"):
         scheme = getattr(layer, attr, None)
@@ -300,7 +303,7 @@ def pool_scope(layer: FusedMoE):
     """Symmetric-pool scope for expert weight allocation, opened by the quant method itself.
 
     ``FusedMoE.create_weights`` is on the GPU/NPU shared path, so it must stay unaware of zbal:
-    the caller is ``ZbalPooledWeightsMixin`` around ``ModelSlimFusedMoEMethod.create_weights``.
+    the caller is ``ZbalPooledWeightsMixin`` around the quant method's ``create_weights``.
     When the backend is not ``zbal_fuseep`` this returns ``nullcontext()``, so the shared path
     only pays one cached branch and a no-op context.
 

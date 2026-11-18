@@ -6,7 +6,9 @@ import torch
 
 from sglang.kernels.ops.gemm import npu_w8a8_block_fp8_grouped_matmul
 from sglang.srt.environ import envs
+from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
 from sglang.srt.hardware_backend.npu.moe.standard_dispatch import set_dispatch_dtype
+from sglang.srt.hardware_backend.npu.moe.zbal_fuseep import ZbalPooledWeightsMixin
 from sglang.srt.hardware_backend.npu.quantization.linear_utils import (
     process_npu_arch35_mxfp8_linear_weights,
 )
@@ -47,8 +49,10 @@ class _NPUBlockFp8MoEKernel:
         )
 
 
-class NPUBlockFp8MoEMethod(Fp8MoEMethod):
+class NPUBlockFp8MoEMethod(ZbalPooledWeightsMixin, Fp8MoEMethod):
     """Reuse checkpoint loading and select the Ascend execution format."""
+
+    zbal_weight_layouts = ("fp8", "fp8")
 
     DISPATCHER_QUANT_CONFIG = {
         "dispatcher_output_dtype": "mxfp8",  # Ascend Ops prefill / transport fallback
@@ -71,6 +75,11 @@ class NPUBlockFp8MoEMethod(Fp8MoEMethod):
             )
         super().__init__(quant_config)
         self.requant_block_fp8 = envs.SGLANG_NPU_ARCH35_REQUANT_BLOCK_FP8.get()
+        if zbal_fuseep.use_zbal_fuseep() and not self.requant_block_fp8:
+            raise ValueError(
+                "ZBAL FuseEP block FP8 requires "
+                "SGLANG_NPU_ARCH35_REQUANT_BLOCK_FP8=1"
+            )
         self._weights_prepared = False
         self._force_bf16_dispatch = (
             dispatcher_dtype == "bf16" or envs.SGLANG_DEEPEP_BF16_DISPATCH.get()
@@ -149,8 +158,18 @@ class NPUBlockFp8MoEMethod(Fp8MoEMethod):
                 mx_scale[expert].copy_(
                     expert_layer.weight_scale_inv.transpose(0, 1).view(torch.uint8)
                 )
-            weight_param.data = npu_format_cast(quantized).transpose(1, 2)
-            scale_param.data = mx_scale.transpose(1, 2)
+            if zbal_fuseep.use_zbal_fuseep():
+                # Preserve the pool-resident checkpoint allocation and ND layout.
+                weight_param.data.copy_(quantized)
+                layer.register_parameter(
+                    f"{prefix}_weight_scale",
+                    torch.nn.Parameter(mx_scale, requires_grad=False),
+                )
+                zbal_fuseep.prepare_weights(layer, prefix)
+                layer.register_parameter(f"{prefix}_weight_scale_inv", None)
+            else:
+                weight_param.data = npu_format_cast(quantized).transpose(1, 2)
+                scale_param.data = mx_scale.transpose(1, 2)
         self._weights_prepared = True
 
         layer.dispatcher.set_quant_config(dict(self.DISPATCHER_QUANT_CONFIG))
