@@ -43,12 +43,35 @@ _SCHEME_LAYOUTS = {
     "ModelSlimW4A4MXFP4MoE": "w4a8",
 }
 
+# Quant methods without ModelSlim schemes (e.g. the A5 MXFP4 and block-FP8 MoE methods) declare
+# their ABI directly as ``zbal_weight_layouts = (w13, w2)`` on the method class.
+_KNOWN_LAYOUTS = frozenset(_SCHEME_LAYOUTS.values())
+
+
+def _declared_layouts(layer: FusedMoE) -> tuple | None:
+    """(w13, w2) ABI declared by the layer's quant method, or None when it declares none."""
+    method = getattr(layer, "quant_method", None)
+    layouts = getattr(method, "zbal_weight_layouts", None)
+    if layouts is None:
+        return None
+    layouts = tuple(layouts)
+    if len(layouts) != 2 or any(layout not in _KNOWN_LAYOUTS for layout in layouts):
+        logger.error(
+            "ZBAL FuseEP: layer_id=%s %s.zbal_weight_layouts=%s must be a (w13, w2) pair of %s",
+            getattr(layer, "layer_id", "?"),
+            type(method).__name__,
+            layouts,
+            ", ".join(sorted(_KNOWN_LAYOUTS)),
+        )
+        raise ValueError("ZBAL FuseEP: invalid zbal_weight_layouts declaration on the quant method")
+    return layouts
+
 
 def _scheme_layouts(layer: FusedMoE) -> tuple:
-    """(w13, w2) ABI declared by the quant method or its ModelSlim schemes."""
-    layouts = getattr(layer.quant_method, "zbal_weight_layouts", None)
-    if layouts is not None:
-        return layouts
+    """(w13, w2) ABI of one layer: the quant method's declaration, else its two ModelSlim schemes."""
+    declared = _declared_layouts(layer)
+    if declared is not None:
+        return declared
     layouts = []
     for attr in ("w13_scheme", "w2_scheme"):
         scheme = getattr(layer, attr, None)
@@ -129,7 +152,7 @@ class ZbalFuseEpState:
         init_pool(layer, layouts)
         self.pool_inited = True
         self.pool_layouts = layouts
-        self.buffer = _create_buffer(layer)
+        self.buffer = _create_buffer(layer, layouts)
 
 
 def use_zbal_fuseep() -> bool:
@@ -211,9 +234,10 @@ def _pool_bytes(layer: FusedMoE, layouts: tuple) -> int:
     weights = per_layer * moe_layers
     # int8 repacks into a new zN payload while the checkpoint-format source is still resident, so
     # the budget carries one extra layer of that flavor; MX payloads keep their layout and are
-    # used in place (no second buffer).
+    # used in place (no second buffer). w4a8 still holds one layer's source e8m0 scale while the
+    # padded scale is built, but that is ~1/16 of the payload and stays inside ``slack``.
     transient = per_layer if "int8" in layouts else 0
-    workspace = _workspace_bytes(layer)
+    workspace = _workspace_bytes(layer, layouts)
     slack = max(_POOL_SLACK_MIN, (weights + workspace) // 100)
     total = weights + transient + workspace + slack
     pool = (total + _POOL_ALIGN - 1) // _POOL_ALIGN * _POOL_ALIGN
@@ -303,9 +327,10 @@ def pool_scope(layer: FusedMoE):
     """Symmetric-pool scope for expert weight allocation, opened by the quant method itself.
 
     ``FusedMoE.create_weights`` is on the GPU/NPU shared path, so it must stay unaware of zbal:
-    the caller is ``ZbalPooledWeightsMixin`` around the quant method's ``create_weights``.
-    When the backend is not ``zbal_fuseep`` this returns ``nullcontext()``, so the shared path
-    only pays one cached branch and a no-op context.
+    the caller is ``ZbalPooledWeightsMixin`` around the quant method's ``create_weights``
+    (``ModelSlimFusedMoEMethod`` and the A5 MXFP4 method). When the backend is not
+    ``zbal_fuseep`` this returns ``nullcontext()``, so the shared path only pays one cached
+    branch and a no-op context.
 
     The checkpoint-format weights have to be pool-resident from the start for the MX ABIs: their
     layout already is the ABI payload, so repacking reuses them in place and the pool never holds
@@ -348,9 +373,41 @@ def _layer_tag(layer: FusedMoE) -> object:
     return getattr(layer, "layer_id", id(layer))
 
 
-def prepare_weights(layer: FusedMoE, prefix: str) -> None:
+def _resolve_scale_attr(layer: FusedMoE, prefix: str, scale_attr: str | None) -> str:
+    """Name of the checkpoint scale parameter feeding the ABI.
+
+    The ABI writes ``{prefix}_weight_scale``; the A5 MXFP4 method registers the checkpoint's
+    ``{prefix}_weight_scale_inv`` instead, so accept both rather than teaching every call site.
+    """
+    if scale_attr is not None:
+        return scale_attr
+    candidates = (f"{prefix}_weight_scale", f"{prefix}_weight_scale_inv")
+    for candidate in candidates:
+        if getattr(layer, candidate, None) is not None:
+            return candidate
+    logger.error(
+        "ZBAL FuseEP: layer_id=%s %s scale missing (looked for %s)",
+        getattr(layer, "layer_id", "?"),
+        prefix,
+        " / ".join(candidates),
+    )
+    raise ValueError(f"ZBAL FuseEP: {prefix} weight scale not found")
+
+
+def prepare_weights(
+    layer: FusedMoE,
+    prefix: str,
+    *,
+    layout: str | None = None,
+    scale_attr: str | None = None,
+) -> None:
     """Lay expert weights out for the FuseEP ABI (fp8: ND payload + padded e8m0 scale; int8: zN
-    payload + per-channel int64 scale)."""
+    payload + per-channel int64 scale; w4a8: packed e2m1 payload + padded e8m0 scale).
+
+    ``layout`` overrides the ABI when a packed-uint8 payload cannot reveal it by dtype; it must
+    agree with the pool reservation. ``scale_attr`` names the checkpoint scale parameter when the
+    method does not use the ABI's ``{prefix}_weight_scale``.
+    """
     if prefix not in _FUSE_EP_PREFIXES:
         logger.error(
             "ZBAL FuseEP: layer_id=%s unsupported weight prefix %r (the ABI expects %s)",
@@ -359,6 +416,16 @@ def prepare_weights(layer: FusedMoE, prefix: str) -> None:
             ", ".join(sorted(_FUSE_EP_PREFIXES)),
         )
         raise ValueError(f"ZBAL FuseEP: unsupported weight prefix {prefix!r}")
+
+    # Quant methods may run process_weights_after_loading more than once (prefixed sub-methods and
+    # the MXFP4/block-FP8 hooks both do); the ABI tensors are already in place after the first pass.
+    if prefix in getattr(layer, "_zbal_fuseep_prefixes", set()):
+        logger.info(
+            "ZBAL FuseEP: layer_id=%s %s already prepared, skipping",
+            getattr(layer, "layer_id", "?"),
+            prefix,
+        )
+        return
 
     # The pool is sized from one expert shape; heterogeneous layers (e.g. an MTP layer with a
     # different expert set) are not supported, so refuse them instead of mis-sizing the pool.
@@ -406,7 +473,7 @@ def prepare_weights(layer: FusedMoE, prefix: str) -> None:
             )
             raise ValueError("ZBAL FuseEP requires moe_ep_size == world_size")
 
-    scale_attr = f"{prefix}_weight_scale"
+    scale_attr = _resolve_scale_attr(layer, prefix, scale_attr)
     weight = getattr(layer, f"{prefix}_weight", None)
     scale = getattr(layer, scale_attr, None)
     if weight is None or scale is None:
@@ -424,11 +491,19 @@ def prepare_weights(layer: FusedMoE, prefix: str) -> None:
     # the pool reservation and puts the final ABI tensors in the pool scope.
     from zbal import zbal_moe_repack
 
-    layout = zbal_moe_repack.infer_layout(weight)
     state = ZbalFuseEpState.instance()
     if not state.pool_inited:
         state.ensure_pool(layer, _scheme_layouts(layer))
     expected = state.pool_layouts[0 if prefix == "w13" else 1]
+    if layout is None:
+        try:
+            layout = zbal_moe_repack.infer_layout(weight)
+        except ValueError:
+            # A packed e2m1 payload carried as uint8 has an fp8 payload's itemsize, so the dtype
+            # cannot pick the ABI; only a declared w4a8 reservation may take over here.
+            if expected != zbal_moe_repack.LAYOUT_W4A8 or weight.dtype is not torch.uint8:
+                raise
+            layout = expected
     if layout != expected:
         logger.error(
             "ZBAL FuseEP: layer_id=%s %s weight dtype gives layout %s but the pool was sized for "
@@ -439,6 +514,19 @@ def prepare_weights(layer: FusedMoE, prefix: str) -> None:
             expected,
         )
         raise ValueError("ZBAL FuseEP: weight flavor drifted from the pool reservation")
+    # The w4a8 route hands the kernel a float4_e2m1fn_x2 tensor (the runtime dtype map has no uint8),
+    # so give the ABI an fp4 view of the checkpoint bytes; the storage stays the same.
+    if layout == zbal_moe_repack.LAYOUT_W4A8 and weight.dtype is torch.uint8:
+        fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
+        if fp4_dtype is None:
+            logger.error(
+                "ZBAL FuseEP: layer_id=%s %s uses the w4a8 ABI but this torch has no "
+                "float4_e2m1fn_x2 dtype",
+                getattr(layer, "layer_id", "?"),
+                prefix,
+            )
+            raise ValueError("ZBAL FuseEP: w4a8 requires the packed float4 dtype")
+        weight = weight.view(fp4_dtype)
     tag = f"layer_id={getattr(layer, 'layer_id', '?')} {prefix}"
     payload_shape, scale_shape = zbal_moe_repack.repacked_shapes(weight, scale, layout=layout)
     payload_dtype, scale_dtype = zbal_moe_repack.repacked_dtypes(weight, layout=layout)
@@ -481,6 +569,13 @@ def prepare_weights(layer: FusedMoE, prefix: str) -> None:
         f"{prefix}_weight_scale",
         torch.nn.Parameter(packed_scale, requires_grad=False),
     )
+    if scale_attr != f"{prefix}_weight_scale":
+        # The checkpoint-name parameter must not keep the source scale alive inside the pool.
+        setattr(
+            layer,
+            scale_attr,
+            torch.nn.Parameter(packed_scale, requires_grad=False),
+        )
     processed = getattr(layer, "_zbal_fuseep_prefixes", set())
     layer._zbal_fuseep_prefixes = processed | {prefix}
     # From here on forward() has to go through dispatch_ffn_combine: the weights are in the FuseEP
@@ -514,7 +609,12 @@ def _workspace_shape(layer: FusedMoE) -> tuple[int, ...]:
     )
 
 
-def _workspace_bytes(layer: FusedMoE) -> int:
+def _quant_mode_of(layout: str) -> int:
+    """DFC quant mode: the route only splits packed-4-bit (w4a8) weights from the 8-bit ones."""
+    return 6 if layout == "w4a8" else 1
+
+
+def _workspace_bytes(layer: FusedMoE, layouts: tuple) -> int:
     """Resident workspace bytes sized from the prefill budget, which also bounds every decode
     launch (decode reserves its own, smaller, row count at launch)."""
     from zbal import Buffer
@@ -529,16 +629,18 @@ def _workspace_bytes(layer: FusedMoE) -> int:
         topk,
         max_output_size=max_output_size,
         mode="prefill",
+        # w4a8 rows carry 4-bit weights, so their row/slot buffers differ from the 8-bit routes.
+        quant_mode=_quant_mode_of(layouts[0]),
     )
 
 
-def _create_buffer(layer: FusedMoE):
+def _create_buffer(layer: FusedMoE, layouts: tuple):
     """Create the FuseEP Buffer and allocate the resident workspace (called once by ``ensure_pool``)."""
     from zbal import Buffer
 
     group = get_parallel().moe_ep_group.device_group
     buf = Buffer(group, num_nvl_bytes=0, num_rdma_bytes=0, low_latency_mode=False)
-    ws_bytes = _workspace_bytes(layer)
+    ws_bytes = _workspace_bytes(layer, layouts)
     buf.malloc_dfc_workspace(ws_bytes)
     return buf
 
@@ -624,7 +726,18 @@ def forward(layer: FusedMoE, hidden_states: torch.Tensor, topk_output: TopKOutpu
     rows = max(tokens, 1)
     max_output_size = (bound if mode == "prefill" else rows) * layer.moe_ep_size * layer.top_k
 
-    out, _ = ZbalFuseEpState.instance().buffer.dispatch_ffn_combine(
+    state = ZbalFuseEpState.instance()
+    # The route selects the row/slot payload widths and the w4a8 tiling key, so the launch has to
+    # use the flavor the pool was sized for: w4a8 -> 6, the 8-bit routes -> 1 (fp8 keys off dtype).
+    quant_mode = _quant_mode_of(state.pool_layouts[0])
+    # The w4a8 epilogue applies the model's SwiGLU clamp (a deployment requirement for this route);
+    # the 8-bit routes keep the previous behaviour (no clamp) until they are validated the same way.
+    swiglu_limit = 0.0
+    if quant_mode == 6:
+        swiglu_limit = (
+            getattr(getattr(layer, "moe_runner_config", None), "swiglu_limit", None) or 0.0
+        )
+    out, _ = state.buffer.dispatch_ffn_combine(
         x=hidden_states.contiguous(),
         topk_idx=topk_ids.to(torch.int32).contiguous(),
         weight1=layer.w13_weight,
@@ -634,7 +747,8 @@ def forward(layer: FusedMoE, hidden_states: torch.Tensor, topk_output: TopKOutpu
         topk_weights=topk_weights.float().contiguous(),
         max_output_size=max_output_size,
         num_experts=layer.num_experts,
-        quant_mode=1,
+        quant_mode=quant_mode,
+        swiglu_limit=float(swiglu_limit),
         mode=mode,
     )
     return out[:tokens]

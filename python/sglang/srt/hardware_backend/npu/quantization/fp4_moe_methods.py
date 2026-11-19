@@ -175,12 +175,14 @@ class NPUW4A8MXFP4FusedMoEMethod(ZbalPooledWeightsMixin, FusedMoEMethodBase):
             # Checkpoint MXFP4 payloads already have the FuseEP ND layout.
             # Keep their pooled storage and expose E8M0 scales under the ABI names
             # before packing; the native NZ conversion below would replace it.
+            # The layout is passed explicitly: a packed e2m1 payload carried as uint8 has an fp8
+            # payload's itemsize, so zbal's dtype inference cannot pick the w4a8 ABI on its own.
             for prefix in ("w13", "w2"):
                 scale_name = f"{prefix}_weight_scale_inv"
                 layer.register_parameter(
                     f"{prefix}_weight_scale", getattr(layer, scale_name)
                 )
-                zbal_fuseep.prepare_weights(layer, prefix)
+                zbal_fuseep.prepare_weights(layer, prefix, layout="w4a8")
                 layer.register_parameter(scale_name, None)
             return
 
