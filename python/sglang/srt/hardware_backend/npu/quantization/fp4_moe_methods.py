@@ -75,18 +75,19 @@ class NPUW4A8MXFP4FusedMoEMethod(ZbalPooledWeightsMixin, FusedMoEMethodBase):
     ):
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoeWeightScaleSupported
 
-        # Two FP4 values per stored byte, hence the // 2 on the K dimension.
+        # Two FP4 values per stored byte, hence the // 2 on the K dimension; pooled_tensor keeps
+        # the payload inside the zbal symmetric window, which peer prefetch addresses by GVA.
         w13_weight = torch.nn.Parameter(
-            torch.empty(
+            zbal_fuseep.pooled_tensor(
                 (num_experts, 2 * intermediate_size_per_partition, hidden_size // 2),
-                dtype=torch.uint8,
+                torch.uint8,
             ),
             requires_grad=False,
         )
         w2_weight = torch.nn.Parameter(
-            torch.empty(
+            zbal_fuseep.pooled_tensor(
                 (num_experts, hidden_size, intermediate_size_per_partition // 2),
-                dtype=torch.uint8,
+                torch.uint8,
             ),
             requires_grad=False,
         )
@@ -102,24 +103,26 @@ class NPUW4A8MXFP4FusedMoEMethod(ZbalPooledWeightsMixin, FusedMoEMethodBase):
                 weight_loader
             )
         w13_weight_scale = torch.nn.Parameter(
-            torch.zeros(
+            zbal_fuseep.pooled_tensor(
                 (
                     num_experts,
                     2 * intermediate_size_per_partition,
                     hidden_size // MXFP4_BLOCK_SIZE,
                 ),
-                dtype=torch.uint8,
+                torch.uint8,
+                zero=True,
             ),
             requires_grad=False,
         )
         w2_weight_scale = torch.nn.Parameter(
-            torch.zeros(
+            zbal_fuseep.pooled_tensor(
                 (
                     num_experts,
                     hidden_size,
                     intermediate_size_per_partition // MXFP4_BLOCK_SIZE,
                 ),
-                dtype=torch.uint8,
+                torch.uint8,
+                zero=True,
             ),
             requires_grad=False,
         )

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import torch
@@ -314,44 +314,118 @@ def init_pool(layer: FusedMoE, layouts: tuple) -> None:
         raise RuntimeError("zbal_init_static_pool failed; check pool size / bootstrap url")
 
 
+# Smallest expert-weight set a real MoE layer allocates; the check only has to separate "went to
+# the pool" from "went to the native allocator", it does not price the layer exactly.
+_MIN_POOL_GROWTH = 1 << 20
+
+
+def _device_index(device) -> int | None:
+    """Index of a torch.device/int/None (None means "the current device")."""
+    if device is None:
+        return None
+    if isinstance(device, torch.device):
+        return device.index
+    return int(device)
+
+
+def pooled_tensor(shape, dtype, *, device=None, zero: bool = False):
+    """One expert-weight tensor: pool-backed under FuseEP, a plain torch tensor otherwise.
+
+    Peers prefetch expert weights through this rank's symmetric window GVA, so they have to be
+    allocated from the zbal pool. ``torch.npu.use_mem_pool`` is not used for that: with
+    ``PYTORCH_NPU_ALLOC_CONF=expandable_segments`` the native allocator ignores the scope
+    silently, the weights then sit outside the window, and the first balanced prefill rejects
+    them. ``zbal.static_pool_tensor`` maps the slice with at::from_blob instead.
+
+    The pool's per-slice granule (2 MiB) is what ``zbal_moe_repack`` already budgets, so no
+    caller needs slack of its own.
+    """
+    if not use_zbal_fuseep():
+        empty = torch.zeros if zero else torch.empty
+        # Keep the ambient default device (meta during shape-only construction, npu otherwise).
+        return empty(shape, dtype=dtype) if device is None else empty(shape, dtype=dtype, device=device)
+    import zbal  # type: ignore
+
+    current = torch.npu.current_device()
+    index = _device_index(device)
+    if index is not None and index != current:
+        logger.error(
+            "ZBAL FuseEP: pooled tensor requested on npu:%s while the pool lives on npu:%s",
+            index,
+            current,
+        )
+        raise ValueError("ZBAL FuseEP: pooled tensor device differs from the pool device")
+    return zbal.static_pool_tensor(shape, dtype, zero=zero)
+
+
+def _pool_used() -> int:
+    import zbal  # type: ignore
+
+    return int(zbal.static_pool_stats()[0])
+
+
 @contextmanager
 def _pool_scope():
-    """Torch allocations in this scope go to the symmetric pool; only wrap peer-visible tensors."""
-    import zbal # type: ignore
+    """Compatibility bridge for quant methods that still allocate with plain ``torch.empty``.
+
+    Converted methods call :func:`pooled_tensor` and ignore this scope. Note that the native
+    allocator drops the scope silently under ``PYTORCH_NPU_ALLOC_CONF=expandable_segments``,
+    which is exactly what :func:`_verify_pooled_weights` turns into a load-time error.
+    """
+    import zbal  # type: ignore
 
     with torch.npu.use_mem_pool(zbal.get_static_pool()):
         yield
 
 
-def pool_scope(layer: FusedMoE):
-    """Symmetric-pool scope for expert weight allocation, opened by the quant method itself.
+def _verify_pooled_weights(layer: FusedMoE, used_before: int) -> None:
+    """Fail fast when a quant method's ``create_weights`` bypassed the pool.
+
+    Weights outside the symmetric window are otherwise only rejected by the first balanced
+    prefill, far from the cause; the occupancy delta points straight at the offending layer.
+    """
+    growth = _pool_used() - used_before
+    if growth >= _MIN_POOL_GROWTH:
+        return
+    logger.error(
+        "ZBAL FuseEP: layer_id=%s create_weights added %s bytes to the pool; expert weights must be "
+        "pool-resident (allocate them with zbal_fuseep.pooled_tensor) - a PYTORCH_NPU_ALLOC_CONF= "
+        "expandable_segments setting makes torch's mem-pool scope silently stop routing",
+        getattr(layer, "layer_id", "?"),
+        growth,
+    )
+    raise ValueError("ZBAL FuseEP: expert weights were not allocated from the symmetric pool")
+
+
+def pool_scope(layer: FusedMoE) -> None:
+    """Build the symmetric pool before the expert weights exist (no allocation steering).
 
     ``FusedMoE.create_weights`` is on the GPU/NPU shared path, so it must stay unaware of zbal:
     the caller is ``ZbalPooledWeightsMixin`` around the quant method's ``create_weights``
-    (``ModelSlimFusedMoEMethod`` and the A5 MXFP4 method). When the backend is not
-    ``zbal_fuseep`` this returns ``nullcontext()``, so the shared path only pays one cached
-    branch and a no-op context.
+    (``ModelSlimFusedMoEMethod`` and the A5 MXFP4 method). The weight tensors themselves are
+    allocated by :func:`pooled_tensor`. When the backend is not ``zbal_fuseep`` this returns
+    immediately, so the shared path only pays one cached branch.
 
     The checkpoint-format weights have to be pool-resident from the start for the MX ABIs: their
     layout already is the ABI payload, so repacking reuses them in place and the pool never holds
     a second copy. ABI sets whose payload must be rebuilt (int8) budget one extra layer instead.
     """
     if not use_zbal_fuseep():
-        return nullcontext()
+        return
     ZbalFuseEpState.instance().ensure_pool(layer, _scheme_layouts(layer))
-    return _pool_scope()
 
 
 class ZbalPooledWeightsMixin:
-    """Run a quant method's ``create_weights`` inside the FuseEP symmetric-pool scope.
+    """Wrap a quant method's ``create_weights`` with the FuseEP pool lifecycle.
 
     Mixed in as the first base of a quant method whose ``create_weights`` allocates the expert
     weights; that keeps ``FusedMoE.create_weights`` - a GPU/NPU shared path - free of zbal code.
 
     A method defined in the subclass body shadows any mixin method of the same name, so the
     wrapping happens in ``__init_subclass__``: the subclass's own implementation is replaced by a
-    wrapper that opens the scope, which leaves the subclass body untouched. The scope is a no-op
-    (``nullcontext``) unless ``--moe-a2a-backend zbal_fuseep`` is selected.
+    wrapper that creates the pool first and verifies afterwards that the weights landed in it,
+    which leaves the subclass body untouched. Both steps are no-ops unless
+    ``--moe-a2a-backend zbal_fuseep`` is selected.
     """
 
     def __init_subclass__(cls, **kwargs) -> None:
@@ -362,8 +436,14 @@ class ZbalPooledWeightsMixin:
 
         @functools.wraps(create_weights)
         def pooled_create_weights(self, layer, *args, **kwargs):
-            with pool_scope(layer):
+            if not use_zbal_fuseep():
                 return create_weights(self, layer, *args, **kwargs)
+            pool_scope(layer)
+            used_before = _pool_used()
+            with _pool_scope():
+                result = create_weights(self, layer, *args, **kwargs)
+            _verify_pooled_weights(layer, used_before)
+            return result
 
         cls.create_weights = pooled_create_weights
 
@@ -543,11 +623,9 @@ def prepare_weights(
     else:
         # The ABI payload must live in the symmetric pool: FuseEP prefetches weights through peers'
         # GVAs, and addresses outside the pool are invisible to peers.
-        with _pool_scope():
-            payload = torch.empty(payload_shape, dtype=payload_dtype, device=weight.device)
+        payload = pooled_tensor(payload_shape, payload_dtype, device=weight.device)
     # The packed scale always replaces the checkpoint scale (k-tile padded), so it is pooled too.
-    with _pool_scope():
-        packed_scale = torch.empty(scale_shape, dtype=scale_dtype, device=weight.device)
+    packed_scale = pooled_tensor(scale_shape, scale_dtype, device=weight.device)
     zbal_moe_repack.repack_into(
         weight,
         scale,
@@ -687,6 +765,19 @@ def _check_startup_ledger() -> None:
             moe_layers,
         )
         raise ValueError("ZBAL FuseEP: built MoE layer count differs from SGLANG_ZBAL_DFC_MOE_LAYERS")
+    # The ledger's weight share is the only proof that the expert weights really sit in the pool:
+    # everything else (pool created, layers built, ABI tensors repacked) also holds when the
+    # allocations silently took the native allocator instead.
+    weights = ledger.get("weights") or 0
+    if weights and used < weights:
+        logger.error(
+            "ZBAL FuseEP: pool holds %.3f GiB but the weights alone were budgeted at %.3f GiB; the "
+            "expert weights were not allocated from the pool (check that the quant method uses "
+            "zbal_fuseep.pooled_tensor and that PYTORCH_NPU_ALLOC_CONF does not divert allocations)",
+            used / 2**30,
+            weights / 2**30,
+        )
+        raise ValueError("ZBAL FuseEP: expert weights are not pool-resident")
 
 
 def forward(layer: FusedMoE, hidden_states: torch.Tensor, topk_output: TopKOutput) -> torch.Tensor:
