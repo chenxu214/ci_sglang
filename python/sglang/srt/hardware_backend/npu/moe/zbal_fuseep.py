@@ -5,8 +5,10 @@ The zbal-side imports (zbal / Buffer / zbal_moe_repack) must stay lazy inside fu
 
 from __future__ import annotations
 
+import atexit
 import functools
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -913,6 +915,62 @@ def _check_startup_ledger() -> None:
         raise ValueError("ZBAL FuseEP: expert weights are not pool-resident")
 
 
+# Expert-token histogram probe: SGLANG_ZBAL_EXPERT_HIST=1 keeps one routing histogram per MoE layer in
+# these maps and dumps the whole set once at process exit, so nothing is printed per layer or per step.
+# Counts live on the host: the device is already torn down when the exit handler runs.
+_HIST_ON = os.environ.get("SGLANG_ZBAL_EXPERT_HIST", "0") == "1"
+_HIST_COUNTS: dict[int, torch.Tensor] = {}
+_HIST_STEPS: dict[int, int] = {}
+_HIST_MODE: dict[int, str] = {}
+_HIST_DEVICE = -1
+
+
+def _hist_note(layer: "FusedMoE", topk_ids: torch.Tensor, tokens: int, mode: str) -> None:
+    """Add this layer's routing counts; one small D2H per layer per step, diagnostic runs only."""
+    global _HIST_DEVICE
+    if not _HIST_ON or tokens == 0:
+        return
+    layer_id = int(getattr(layer, "layer_id", -1))
+    num_experts = int(layer.num_experts)
+    ids = topk_ids.reshape(-1).to(torch.int64)
+    counts = torch.zeros(num_experts, dtype=torch.int64, device=ids.device)
+    counts.scatter_add_(0, ids, torch.ones_like(ids))
+    counts = counts.cpu()
+    if _HIST_DEVICE < 0:
+        _HIST_DEVICE = int(topk_ids.device.index or 0)
+    seen = _HIST_COUNTS.get(layer_id)
+    _HIST_COUNTS[layer_id] = counts if seen is None else seen + counts
+    _HIST_STEPS[layer_id] = _HIST_STEPS.get(layer_id, 0) + 1
+    _HIST_MODE[layer_id] = mode
+
+
+def _hist_dump() -> None:
+    """One block at exit: per-layer skew, so a long run keeps a single readable summary."""
+    if not _HIST_COUNTS:
+        return
+    print(f"[ZBAL expert hist] device={_HIST_DEVICE} layers={len(_HIST_COUNTS)}", flush=True)
+    for layer_id in sorted(_HIST_COUNTS):
+        counts = _HIST_COUNTS[layer_id].to(torch.float64)
+        tokens = int(counts.sum().item())
+        mean = counts.mean().item()
+        peak = counts.max().item()
+        top = torch.topk(counts, k=min(8, counts.numel()))
+        pairs = ", ".join(
+            f"e{int(idx)}:{int(cnt)}" for cnt, idx in zip(top.values.tolist(), top.indices.tolist())
+        )
+        print(
+            f"[ZBAL expert hist] layer={layer_id} mode={_HIST_MODE[layer_id]} "
+            f"steps={_HIST_STEPS[layer_id]} experts={counts.numel()} routed={tokens} "
+            f"mean={mean:.1f} max={int(peak)} min={int(counts.min().item())} "
+            f"max_over_mean={(peak / mean) if mean else 0.0:.2f} "
+            f"idle_experts={int((counts == 0).sum().item())} top8=[{pairs}]",
+            flush=True,
+        )
+
+
+atexit.register(_hist_dump)
+
+
 def forward(layer: FusedMoE, hidden_states: torch.Tensor, topk_output: TopKOutput) -> torch.Tensor:
     """Single-layer MoE forward: dispatch + GMM1 + SwiGLU + GMM2 + combine all inside the op."""
     if getattr(layer, "_zbal_fuseep_prefixes", None) != _FUSE_EP_PREFIXES:
@@ -941,6 +999,8 @@ def forward(layer: FusedMoE, hidden_states: torch.Tensor, topk_output: TopKOutpu
             bound,
         )
         raise ValueError("ZBAL FuseEP: local token count exceeds the reserved prefill bound")
+
+    _hist_note(layer, topk_ids, tokens, mode)
 
     if tokens == 0:
         hidden_states = hidden_states.new_zeros((1, layer.hidden_size))
