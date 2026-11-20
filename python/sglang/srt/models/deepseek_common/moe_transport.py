@@ -173,9 +173,10 @@ class MoeRowTransport(ComputeTransport):
                     or moe_a2a_backend.is_megamoe()
                     or moe_a2a_backend.is_mori()
                     or moe_a2a_backend.is_ascend_ops()
+                    or moe_a2a_backend.is_zbal_fuseep()
                 ), (
                     "CP requires moe_a2a_backend in "
-                    "('deepep', 'megamoe', 'mori', 'ascend_ops'), "
+                    "('deepep', 'megamoe', 'mori', 'ascend_ops', 'zbal_fuseep'), "
                     f"got {moe_a2a_backend.value!r}."
                 )
         elif _use_tp_moe_gather:
