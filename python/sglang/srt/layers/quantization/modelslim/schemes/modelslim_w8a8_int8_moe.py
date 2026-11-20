@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 import torch
 
+from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
 from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
     NPUW8A8Int8MoEMethod,
 )
@@ -69,7 +70,7 @@ class ModelSlimW8A8Int8MoE(ModelSlimMoEScheme):
         # Create and register weight
         weight_name = f"{prefix}_weight"
         weight = torch.nn.Parameter(
-            torch.empty(num_experts, a_dim, b_dim, dtype=torch.int8),
+            zbal_fuseep.pooled_tensor((num_experts, a_dim, b_dim), torch.int8),
             requires_grad=False,
         )
         layer.register_parameter(weight_name, weight)
@@ -78,7 +79,7 @@ class ModelSlimW8A8Int8MoE(ModelSlimMoEScheme):
         # Create and register scale
         scale_name = f"{prefix}_weight_scale"
         scale = torch.nn.Parameter(
-            torch.empty(num_experts, a_dim, 1, dtype=torch.float32),
+            zbal_fuseep.pooled_tensor((num_experts, a_dim, 1), torch.float32),
             requires_grad=False,
         )
         layer.register_parameter(scale_name, scale)
@@ -87,7 +88,7 @@ class ModelSlimW8A8Int8MoE(ModelSlimMoEScheme):
         # Create and register offset
         offset_name = f"{prefix}_weight_offset"
         offset = torch.nn.Parameter(
-            torch.empty(num_experts, a_dim, 1, dtype=torch.float32),
+            zbal_fuseep.pooled_tensor((num_experts, a_dim, 1), torch.float32),
             requires_grad=False,
         )
         layer.register_parameter(offset_name, offset)

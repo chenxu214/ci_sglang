@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 import torch
 
+from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
 from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
     NPUW4A4MXFP4MoEMethod,
 )
@@ -55,11 +56,9 @@ class ModelSlimW4A4MXFP4MoE(ModelSlimMoEScheme):
             input_size = intermediate_size_per_partition
 
         weight = torch.nn.Parameter(
-            torch.empty(
-                num_experts,
-                output_size,
-                input_size // 2,
-                dtype=torch.uint8,
+            zbal_fuseep.pooled_tensor(
+                (num_experts, output_size, input_size // 2),
+                torch.uint8,
             ),
             requires_grad=False,
         )
@@ -67,11 +66,14 @@ class ModelSlimW4A4MXFP4MoE(ModelSlimMoEScheme):
         set_weight_attrs(weight, extra_weight_attrs)
 
         weight_scale = torch.nn.Parameter(
-            torch.zeros(
-                num_experts,
-                output_size,
-                (input_size + MXFP4_BLOCK_SIZE - 1) // MXFP4_BLOCK_SIZE,
-                dtype=torch.uint8,
+            zbal_fuseep.pooled_tensor(
+                (
+                    num_experts,
+                    output_size,
+                    (input_size + MXFP4_BLOCK_SIZE - 1) // MXFP4_BLOCK_SIZE,
+                ),
+                torch.uint8,
+                zero=True,
             ),
             requires_grad=False,
         )

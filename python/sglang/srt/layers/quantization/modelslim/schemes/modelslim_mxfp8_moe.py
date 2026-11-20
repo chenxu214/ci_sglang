@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 import torch
 
+from sglang.srt.hardware_backend.npu.moe import zbal_fuseep
 from sglang.srt.hardware_backend.npu.quantization.moe_methods import NPUMXFP8MoEMethod
 from sglang.srt.layers.quantization.modelslim.schemes import ModelSlimMoEScheme
 from sglang.srt.layers.utils.common import set_weight_attrs
@@ -81,7 +82,10 @@ class ModelSlimMXFP8MoEScheme(ModelSlimMoEScheme):
         # Create and register weight: [E, N, K] float8_e4m3fn
         weight_name = f"{prefix}_weight"
         weight = torch.nn.Parameter(
-            torch.empty(num_experts, a_dim, b_dim, dtype=torch.float8_e4m3fn),
+            zbal_fuseep.pooled_tensor(
+                (num_experts, a_dim, b_dim),
+                torch.float8_e4m3fn,
+            ),
             requires_grad=False,
         )
         layer.register_parameter(weight_name, weight)
@@ -90,8 +94,9 @@ class ModelSlimMXFP8MoEScheme(ModelSlimMoEScheme):
         # Create and register block scale: [E, N, K // 32] uint8 (e8m0)
         scale_name = f"{prefix}_weight_scale"
         scale = torch.nn.Parameter(
-            torch.empty(
-                num_experts, a_dim, b_dim // MXFP8_BLOCK_SIZE, dtype=torch.uint8
+            zbal_fuseep.pooled_tensor(
+                (num_experts, a_dim, b_dim // MXFP8_BLOCK_SIZE),
+                torch.uint8,
             ),
             requires_grad=False,
         )

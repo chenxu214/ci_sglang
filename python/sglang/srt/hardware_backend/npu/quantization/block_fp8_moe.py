@@ -88,6 +88,11 @@ class NPUBlockFp8MoEMethod(ZbalPooledWeightsMixin, Fp8MoEMethod):
     def create_weights(self, layer, *args, with_bias=False, **kwargs):
         if with_bias:
             raise ValueError("Ascend block FP8 MoE does not support expert bias")
+        if zbal_fuseep.use_zbal_fuseep():
+            # Peers prefetch expert weights through the symmetric window, so they have to come
+            # from the pool allocator instead of the shared path's torch.empty.
+            zbal_fuseep.create_block_fp8_weights(self, layer, *args, **kwargs)
+            return
         super().create_weights(layer, *args, with_bias=False, **kwargs)
 
     def create_moe_runner(self, layer, moe_runner_config):

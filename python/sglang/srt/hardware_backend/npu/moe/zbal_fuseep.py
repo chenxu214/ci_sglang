@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import functools
 import logging
-from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import torch
@@ -332,10 +331,10 @@ def pooled_tensor(shape, dtype, *, device=None, zero: bool = False):
     """One expert-weight tensor: pool-backed under FuseEP, a plain torch tensor otherwise.
 
     Peers prefetch expert weights through this rank's symmetric window GVA, so they have to be
-    allocated from the zbal pool. ``torch.npu.use_mem_pool`` is not used for that: with
-    ``PYTORCH_NPU_ALLOC_CONF=expandable_segments`` the native allocator ignores the scope
-    silently, the weights then sit outside the window, and the first balanced prefill rejects
-    them. ``zbal.static_pool_tensor`` maps the slice with at::from_blob instead.
+    handed out by the pool allocator itself: a weight that misses the pool is invisible to peer
+    prefetch and the first balanced prefill rejects it. ``zbal.static_pool_tensor`` maps the
+    slice with at::from_blob, which is immune to how ``PYTORCH_NPU_ALLOC_CONF`` configures the
+    native allocator.
 
     The pool's per-slice granule (2 MiB) is what ``zbal_moe_repack`` already budgets, so no
     caller needs slack of its own.
@@ -364,20 +363,6 @@ def _pool_used() -> int:
     return int(zbal.static_pool_stats()[0])
 
 
-@contextmanager
-def _pool_scope():
-    """Compatibility bridge for quant methods that still allocate with plain ``torch.empty``.
-
-    Converted methods call :func:`pooled_tensor` and ignore this scope. Note that the native
-    allocator drops the scope silently under ``PYTORCH_NPU_ALLOC_CONF=expandable_segments``,
-    which is exactly what :func:`_verify_pooled_weights` turns into a load-time error.
-    """
-    import zbal  # type: ignore
-
-    with torch.npu.use_mem_pool(zbal.get_static_pool()):
-        yield
-
-
 def _verify_pooled_weights(layer: FusedMoE, used_before: int) -> None:
     """Fail fast when a quant method's ``create_weights`` bypassed the pool.
 
@@ -389,8 +374,7 @@ def _verify_pooled_weights(layer: FusedMoE, used_before: int) -> None:
         return
     logger.error(
         "ZBAL FuseEP: layer_id=%s create_weights added %s bytes to the pool; expert weights must be "
-        "pool-resident (allocate them with zbal_fuseep.pooled_tensor) - a PYTORCH_NPU_ALLOC_CONF= "
-        "expandable_segments setting makes torch's mem-pool scope silently stop routing",
+        "pool-resident (allocate them with zbal_fuseep.pooled_tensor)",
         getattr(layer, "layer_id", "?"),
         growth,
     )
@@ -402,9 +386,9 @@ def pool_scope(layer: FusedMoE) -> None:
 
     ``FusedMoE.create_weights`` is on the GPU/NPU shared path, so it must stay unaware of zbal:
     the caller is ``ZbalPooledWeightsMixin`` around the quant method's ``create_weights``
-    (``ModelSlimFusedMoEMethod`` and the A5 MXFP4 method). The weight tensors themselves are
-    allocated by :func:`pooled_tensor`. When the backend is not ``zbal_fuseep`` this returns
-    immediately, so the shared path only pays one cached branch.
+    (``ModelSlimFusedMoEMethod`` and the A5 MXFP4 / block-FP8 methods). The weight tensors
+    themselves are allocated by :func:`pooled_tensor`. When the backend is not ``zbal_fuseep``
+    this returns immediately, so the shared path only pays one cached branch.
 
     The checkpoint-format weights have to be pool-resident from the start for the MX ABIs: their
     layout already is the ABI payload, so repacking reuses them in place and the pool never holds
@@ -413,6 +397,153 @@ def pool_scope(layer: FusedMoE) -> None:
     if not use_zbal_fuseep():
         return
     ZbalFuseEpState.instance().ensure_pool(layer, _scheme_layouts(layer))
+
+
+def create_block_fp8_weights(
+    method,
+    layer: FusedMoE,
+    num_experts: int,
+    hidden_size: int,
+    intermediate_size_per_partition: int,
+    params_dtype: torch.dtype,
+    **extra_weight_attrs,
+) -> None:
+    """Register one block-FP8 layer's expert tensors as pool-resident parameters.
+
+    ``Fp8MoEMethod.create_weights`` allocates them with ``torch.empty``
+    (``create_fp8_moe_weight_``), which the native allocator can divert out of the symmetric
+    window; this reproduces its serialized block-quant branch with the zbal pool allocator
+    instead. Ascend-only by construction: the method that calls it is the NPU block-FP8 one.
+
+    Kept in this module on purpose - it is the zbal side of the bargain, so the shared NPU quant
+    method only needs to call it. ``params_dtype`` is the model dtype and unused: fp8 experts
+    hold the checkpoint's fp8 bytes.
+    """
+    from sglang.srt.layers.moe.fused_moe_triton import FusedMoeWeightScaleSupported
+    from sglang.srt.layers.moe.utils import get_moe_weight_sizes
+    from sglang.srt.layers.utils.common import set_weight_attrs
+
+    if not (
+        method.block_quant
+        and method.quant_config.is_checkpoint_fp8_serialized
+        and not method.use_mxfp8
+        and not method.is_fp4_expert
+    ):
+        logger.error(
+            "ZBAL FuseEP: layer_id=%s %s is not a serialized block-quant fp8 method "
+            "(block_quant=%s serialized=%s mxfp8=%s fp4_expert=%s)",
+            getattr(layer, "layer_id", "?"),
+            type(method).__name__,
+            method.block_quant,
+            method.quant_config.is_checkpoint_fp8_serialized,
+            method.use_mxfp8,
+            method.is_fp4_expert,
+        )
+        raise ValueError(
+            "ZBAL FuseEP: block FP8 needs a serialized block-quant fp8 checkpoint"
+        )
+    if method.quant_config.activation_scheme != "dynamic":
+        logger.error(
+            "ZBAL FuseEP: layer_id=%s block FP8 activation_scheme=%s, expected dynamic",
+            getattr(layer, "layer_id", "?"),
+            method.quant_config.activation_scheme,
+        )
+        raise ValueError("ZBAL FuseEP: block FP8 requires a dynamic activation scheme")
+
+    # Same block grid bookkeeping as the shared path: ``process_weights_after_loading`` reads it
+    # back, and a TP shard that splits blocks would refine it (Ascend never does).
+    method.weight_block_size, method.w2_weight_block_size = method._tp_weight_block_sizes(
+        layer=layer,
+        hidden_size=hidden_size,
+        intermediate_size_per_partition=intermediate_size_per_partition,
+    )
+    weight_block_size = (
+        method.weight_block_size or method.quant_config.weight_block_size
+    )
+    w2_weight_block_size = method.w2_weight_block_size or weight_block_size
+    block_n, block_k = weight_block_size[0], w2_weight_block_size[1]
+    if intermediate_size_per_partition % block_n != 0:
+        logger.error(
+            "ZBAL FuseEP: layer_id=%s w13 output size %s is not divisible by block_n %s",
+            getattr(layer, "layer_id", "?"),
+            intermediate_size_per_partition,
+            block_n,
+        )
+        raise ValueError("ZBAL FuseEP: block FP8 w13 size is not block-aligned")
+    if layer.moe_tp_size > 1 and intermediate_size_per_partition % block_k != 0:
+        logger.error(
+            "ZBAL FuseEP: layer_id=%s w2 input size %s is not divisible by block_k %s",
+            getattr(layer, "layer_id", "?"),
+            intermediate_size_per_partition,
+            block_k,
+        )
+        raise ValueError("ZBAL FuseEP: block FP8 w2 size is not block-aligned")
+
+    is_gated = layer.moe_runner_config.is_gated
+    w13_up_dim, w2_up_dim, weight_padded = get_moe_weight_sizes(
+        intermediate_size_per_partition,
+        is_concat=is_gated,
+        is_packed=False,
+        is_aiter_moe=False,
+    )
+    # ``weight_padded`` rides on the weight attrs only; the scale attrs the shared path builds
+    # later also carry the quant method, which is what tells the loader to expand block scales.
+    weight_attrs = dict(extra_weight_attrs, weight_padded=weight_padded)
+    scale_attrs = dict(
+        weight_attrs,
+        quant_method=FusedMoeWeightScaleSupported.BLOCK.value,
+    )
+
+    w13_weight = torch.nn.Parameter(
+        pooled_tensor((num_experts, w13_up_dim, hidden_size), torch.float8_e4m3fn),
+        requires_grad=False,
+    )
+    layer.register_parameter("w13_weight", w13_weight)
+    set_weight_attrs(w13_weight, weight_attrs)
+    w2_weight = torch.nn.Parameter(
+        pooled_tensor((num_experts, hidden_size, w2_up_dim), torch.float8_e4m3fn),
+        requires_grad=False,
+    )
+    layer.register_parameter("w2_weight", w2_weight)
+    set_weight_attrs(w2_weight, weight_attrs)
+
+    # fp32 scales on the checkpoint grid; process_weights_after_loading rebuilds the packed
+    # e8m0 pair from them.
+    w13_block_n, w13_block_k = weight_block_size
+    w2_block_n, w2_block_k = w2_weight_block_size
+    w13_weight_scale = torch.nn.Parameter(
+        pooled_tensor(
+            (
+                num_experts,
+                (2 if is_gated else 1)
+                * ((intermediate_size_per_partition + w13_block_n - 1) // w13_block_n),
+                (hidden_size + w13_block_k - 1) // w13_block_k,
+            ),
+            torch.float32,
+        ).fill_(1.0),
+        requires_grad=False,
+    )
+    w2_weight_scale = torch.nn.Parameter(
+        pooled_tensor(
+            (
+                num_experts,
+                (hidden_size + w2_block_n - 1) // w2_block_n,
+                (intermediate_size_per_partition + w2_block_k - 1) // w2_block_k,
+            ),
+            torch.float32,
+        ).fill_(1.0),
+        requires_grad=False,
+    )
+    w13_weight_scale.format_ue8m0 = False
+    w2_weight_scale.format_ue8m0 = False
+    layer.register_parameter("w13_weight_scale_inv", w13_weight_scale)
+    set_weight_attrs(w13_weight_scale, scale_attrs)
+    layer.register_parameter("w2_weight_scale_inv", w2_weight_scale)
+    set_weight_attrs(w2_weight_scale, scale_attrs)
+
+    # Dynamic activation quant: no per-expert input scales.
+    layer.w13_input_scale = None
+    layer.w2_input_scale = None
 
 
 class ZbalPooledWeightsMixin:
@@ -425,7 +556,10 @@ class ZbalPooledWeightsMixin:
     wrapping happens in ``__init_subclass__``: the subclass's own implementation is replaced by a
     wrapper that creates the pool first and verifies afterwards that the weights landed in it,
     which leaves the subclass body untouched. Both steps are no-ops unless
-    ``--moe-a2a-backend zbal_fuseep`` is selected.
+    ``--moe-a2a-backend zbal_fuseep`` is selected. The allocation itself goes through
+    :func:`pooled_tensor` - inline in the method's own ``create_weights``, or through a creator
+    this module provides for methods that should not carry a copy of the shared shape logic
+    (:func:`create_block_fp8_weights`).
     """
 
     def __init_subclass__(cls, **kwargs) -> None:
@@ -440,8 +574,7 @@ class ZbalPooledWeightsMixin:
                 return create_weights(self, layer, *args, **kwargs)
             pool_scope(layer)
             used_before = _pool_used()
-            with _pool_scope():
-                result = create_weights(self, layer, *args, **kwargs)
+            result = create_weights(self, layer, *args, **kwargs)
             _verify_pooled_weights(layer, used_before)
             return result
 
